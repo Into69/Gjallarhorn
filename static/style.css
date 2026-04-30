@@ -1,0 +1,88 @@
+:root {
+  --bg: #0f1115;
+  --panel: #181c23;
+  --panel-2: #20252e;
+  --fg: #d8dee9;
+  --muted: #8b95a7;
+  --accent: #5cd1ff;
+  --warn: #ffb86b;
+  --ok: #79e08c;
+  --err: #ff6b6b;
+  --border: #2b313c;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+
+header {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+header h1 { margin: 0; font-size: 18px; letter-spacing: 1px; color: var(--accent); }
+nav { display: flex; gap: 4px; flex: 1; }
+.tab-btn {
+  background: transparent; border: 1px solid transparent; color: var(--muted);
+  padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.tab-btn:hover { color: var(--fg); }
+.tab-btn.active { color: var(--fg); background: var(--panel-2); border-color: var(--border); }
+
+#status { display: flex; gap: 8px; }
+.pill {
+  background: var(--panel-2); border: 1px solid var(--border);
+  padding: 4px 10px; border-radius: 999px; font-size: 12px; color: var(--muted);
+}
+.pill.ok { color: var(--ok); border-color: #1e3a25; }
+.pill.warn { color: var(--warn); border-color: #3a2c14; }
+.pill.err { color: var(--err); border-color: #3a1818; }
+
+main { height: calc(100vh - 53px); }
+.tab { display: none; height: 100%; padding: 12px; overflow: auto; }
+.tab.active { display: block; }
+
+#tab-map { display: none; padding: 0; }
+#tab-map.active { display: grid; grid-template-columns: 1fr 320px; }
+#map { width: 100%; height: 100%; }
+#map-side { background: var(--panel); border-left: 1px solid var(--border); padding: 12px; overflow: auto; }
+#map-side h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+#fix-detail { background: var(--panel-2); padding: 8px; border-radius: 6px;
+  white-space: pre-wrap; word-break: break-all; font-size: 12px; }
+
+.toolbar { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+.toolbar label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+
+table { width: 100%; border-collapse: collapse; background: var(--panel); }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left;
+  font-size: 12px; vertical-align: top; }
+th { background: var(--panel-2); color: var(--muted); position: sticky; top: 0; }
+tr:hover td { background: #1d222c; }
+td.mono, .mono { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
+details summary { cursor: pointer; color: var(--accent); }
+details pre { background: var(--panel-2); padding: 8px; border-radius: 6px;
+  font-size: 11px; overflow: auto; max-width: 600px; }
+
+input[type=text], input[type=number], select {
+  background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 8px; font: inherit;
+}
+button {
+  background: var(--accent); color: #00131c; border: 0; padding: 6px 14px;
+  border-radius: 6px; cursor: pointer; font-weight: 600;
+}
+button.secondary { background: var(--panel-2); color: var(--fg); border: 1px solid var(--border); }
+
+#settings-form { display: grid; gap: 12px; max-width: 720px; }
+fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--panel); }
+legend { color: var(--muted); padding: 0 6px; }
+fieldset label { display: grid; gap: 4px; margin-bottom: 8px; }
+fieldset label.check { grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
+#save-status { margin-left: 12px; color: var(--muted); }
+.muted { color: var(--muted); }
+#oui-panel { max-width: 720px; margin-top: 16px; }
+#oui-panel p { margin: 0 0 10px; }
+#oui-test-mac { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; min-width: 200px; }
+#oui-stats { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px;
+  margin: 12px 0; font-size: 12px; }
+#oui-stats dt { color: var(--muted); }
+#oui-stats dd { margin: 0; font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }

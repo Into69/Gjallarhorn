@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gjallarhorn</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Gjallarhorn</h1>
+    <nav>
+      <button class="tab-btn active" data-tab="map">Map</button>
+      <button class="tab-btn" data-tab="devices">Devices</button>
+      <button class="tab-btn" data-tab="locations">Locations</button>
+      <button class="tab-btn" data-tab="settings">Settings</button>
+    </nav>
+    <div id="status">
+      <span id="gps-status" class="pill">GPS: …</span>
+      <span id="loc-status" class="pill">Loc: —</span>
+    </div>
+  </header>
+
+  <main>
+    <section id="tab-map" class="tab active">
+      <div id="map"></div>
+      <aside id="map-side">
+        <h3>Current fix</h3>
+        <pre id="fix-detail">…</pre>
+      </aside>
+    </section>
+
+    <section id="tab-devices" class="tab">
+      <div class="toolbar">
+        <label>Location:
+          <select id="dev-location"></select>
+        </label>
+        <label>Kind:
+          <select id="dev-kind">
+            <option value="">all</option>
+            <option value="wifi">wifi</option>
+            <option value="bluetooth">bluetooth</option>
+          </select>
+        </label>
+        <button id="dev-refresh">Refresh</button>
+      </div>
+      <table id="dev-table">
+        <thead>
+          <tr>
+            <th>Kind</th><th>ID</th><th>Name/SSID</th><th>Vendor</th>
+            <th>Best RSSI</th><th>Last RSSI</th><th>Seen</th>
+            <th>First</th><th>Last</th><th>Details</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="tab-locations" class="tab">
+      <div class="toolbar">
+        <button id="loc-refresh">Refresh</button>
+        <button id="loc-new">Force new location</button>
+      </div>
+      <table id="loc-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Label</th><th>Lat</th><th>Lon</th>
+            <th>Radius (m)</th><th>Fixes</th><th>Created</th><th>Last seen</th><th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="tab-settings" class="tab">
+      <form id="settings-form">
+        <fieldset>
+          <legend>Map</legend>
+          <label>Tile provider
+            <select name="map_provider" id="set-map-provider"></select>
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Sensors</legend>
+          <label>WiFi interface
+            <select name="wifi_interface" id="set-wifi-iface"></select>
+          </label>
+          <label>Bluetooth adapter
+            <select name="bluetooth_adapter" id="set-bt-adapter"></select>
+          </label>
+          <label>WiFi scan interval (s)
+            <input type="number" name="wifi_scan_interval_s" min="3" max="600" />
+          </label>
+          <label>Bluetooth scan interval (s)
+            <input type="number" name="bluetooth_scan_interval_s" min="3" max="600" />
+          </label>
+          <label>Bluetooth scan duration (s)
+            <input type="number" name="bluetooth_scan_duration_s" min="2" max="60" />
+          </label>
+          <label>GPS poll interval (s)
+            <input type="number" step="0.1" name="gps_poll_interval_s" min="0.2" max="10" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Location clustering</legend>
+          <label>New-location distance threshold (m)
+            <input type="number" step="1" name="new_location_distance_m" min="1" max="5000" />
+          </label>
+          <label>Label template
+            <input type="text" name="location_label_template" />
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Filtering</legend>
+          <label>Minimum RSSI (dBm)
+            <input type="number" name="min_rssi" min="-110" max="-20" />
+          </label>
+          <label class="check">
+            <input type="checkbox" name="hide_random_bt_addresses" /> Hide BLE random addresses
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>gpsd</legend>
+          <label>Host <input type="text" name="gpsd_host" /></label>
+          <label>Port <input type="number" name="gpsd_port" min="1" max="65535" /></label>
+        </fieldset>
+
+        <button type="submit">Save</button>
+        <span id="save-status"></span>
+      </form>
+
+      <fieldset id="oui-panel">
+        <legend>OUI / vendor database</legend>
+        <p class="muted">Downloads IEEE registries (MA-L, MA-M, MA-S) and resolves WiFi BSSIDs and Bluetooth MACs to vendor names. A scheduled agent refreshes this monthly.</p>
+        <div class="toolbar">
+          <span id="oui-status" class="pill">…</span>
+          <button id="oui-update">Update now</button>
+        </div>
+        <dl id="oui-stats">
+          <dt>Total entries</dt><dd id="oui-total">—</dd>
+          <dt>MA-L (24-bit)</dt><dd id="oui-mal">—</dd>
+          <dt>MA-M (28-bit)</dt><dd id="oui-mam">—</dd>
+          <dt>MA-S (36-bit)</dt><dd id="oui-mas">—</dd>
+          <dt>Last updated</dt><dd id="oui-updated">—</dd>
+          <dt>DB file</dt><dd id="oui-file">—</dd>
+        </dl>
+        <div class="toolbar">
+          <input type="text" id="oui-test-mac" placeholder="aa:bb:cc:dd:ee:ff" />
+          <button id="oui-test" class="secondary">Look up</button>
+          <span id="oui-test-result" class="muted"></span>
+        </div>
+      </fieldset>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
