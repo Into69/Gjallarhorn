@@ -418,6 +418,51 @@ async def oui_counts_by_registry() -> dict[str, int]:
             return {row[0]: row[1] for row in await cur.fetchall()}
 
 
+async def list_common_devices(min_locations: int = 2, limit: int = 50) -> list[dict]:
+    """Devices seen at >= min_locations distinct locations.
+
+    For each kind/device_id, returns the location list, total observations
+    across all locations, the best RSSI ever recorded, and a representative
+    name/vendor (taken from the most-recently-seen row)."""
+    sql = """
+        WITH ranked AS (
+            SELECT kind, device_id, location_id, last_seen, best_rssi, seen_count, details_json,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY kind, device_id ORDER BY last_seen DESC
+                   ) AS rn
+            FROM devices
+        ),
+        agg AS (
+            SELECT kind, device_id,
+                   COUNT(DISTINCT location_id) AS n_locations,
+                   SUM(seen_count)             AS total_seen,
+                   MAX(best_rssi)              AS max_rssi,
+                   GROUP_CONCAT(location_id)   AS location_ids
+            FROM devices
+            GROUP BY kind, device_id
+            HAVING COUNT(DISTINCT location_id) >= ?
+        )
+        SELECT a.*, r.details_json AS latest_details
+        FROM agg a
+        JOIN ranked r ON r.kind = a.kind AND r.device_id = a.device_id AND r.rn = 1
+        ORDER BY a.n_locations DESC, a.total_seen DESC
+        LIMIT ?
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(sql, (min_locations, limit)) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    for r in rows:
+        try:
+            r["details"] = json.loads(r.pop("latest_details") or "{}")
+        except (TypeError, ValueError):
+            r["details"] = {}
+        ids = (r.get("location_ids") or "")
+        r["locations"] = sorted({int(x) for x in ids.split(",") if x})
+        r.pop("location_ids", None)
+    return rows
+
+
 async def devices_at_location(location_id: int, kind: str | None = None) -> list[dict]:
     sql = "SELECT * FROM devices WHERE location_id=?"
     args: tuple = (location_id,)

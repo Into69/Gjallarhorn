@@ -106,6 +106,7 @@
       <div class="toolbar">
         <button id="loc-refresh">Refresh</button>
         <button id="loc-new">Force new location</button>
+        <button id="loc-report" class="secondary">Generate report (PDF)</button>
         <span class="toolbar-spacer"></span>
         <button id="loc-delete-all" class="danger">Delete all</button>
       </div>
@@ -135,8 +136,8 @@
             <tbody></tbody>
           </table>
 
-          <form id="rule-form" class="rule-form">
-            <h4>New rule</h4>
+          <form id="rule-form" class="rule-form" data-editing-id="">
+            <h4 id="rule-form-title">New rule</h4>
             <label>Name <input type="text" name="name" placeholder="Watch for…" required /></label>
             <label>Kind
               <select name="kind">
@@ -164,7 +165,8 @@
             <label class="check">
               <input type="checkbox" name="notify_discord" /> Send to Discord on match
             </label>
-            <button type="submit">Add rule</button>
+            <button type="submit" id="rule-form-submit">Add rule</button>
+            <button type="button" id="rule-form-cancel" class="secondary" hidden>Cancel</button>
             <span id="rule-form-status" class="muted"></span>
           </form>
         </div>

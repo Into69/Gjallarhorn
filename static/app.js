@@ -296,6 +296,34 @@ $("#loc-new").addEventListener("click", async () => {
   try { await api("/api/locations/new", { method: "POST" }); refreshLocations(); }
   catch (e) { alert(e.message); }
 });
+
+$("#loc-report").addEventListener("click", async () => {
+  const btn = $("#loc-report");
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = "Generating…";
+  try {
+    const res = await fetch("/api/locations/report.pdf", { method: "GET" });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = cd.match(/filename="([^"]+)"/);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = m ? m[1] : "gjallarhorn-report.pdf";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) {
+    alert("Report generation failed: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+});
 $("#loc-delete-all").addEventListener("click", async () => {
   const ok = confirm(
     "Delete ALL locations?\n\n" +
@@ -465,12 +493,18 @@ const MATCH_TYPE_LABEL = {
 };
 let alertsLastSeenId = 0;
 
+// Rules cache for double-click-to-edit; populated on every refresh.
+let rulesById = {};
+
 async function refreshAlertRules() {
   const { rules } = await api("/api/alerts/rules");
+  rulesById = Object.fromEntries(rules.map(r => [String(r.id), r]));
   const tbody = $("#rules-table tbody");
   tbody.innerHTML = "";
   for (const r of rules) {
     const tr = document.createElement("tr");
+    tr.dataset.id = r.id;
+    tr.title = "Double-click to edit";
     tr.innerHTML = `
       <td><input type="checkbox" class="rule-toggle" data-id="${r.id}" ${r.enabled ? "checked" : ""}></td>
       <td>${escapeHtml(r.name)}</td>
@@ -482,6 +516,11 @@ async function refreshAlertRules() {
       <td class="mono">${formatTime(r.created_at)}</td>
       <td><button class="danger rule-delete" data-id="${r.id}">Delete</button></td>
     `;
+    tr.addEventListener("dblclick", (ev) => {
+      // Don't hijack double-clicks on inline controls
+      if (ev.target.closest("input, button")) return;
+      enterEditRuleMode(rulesById[r.id]);
+    });
     tbody.appendChild(tr);
   }
   $$(".rule-toggle").forEach(cb =>
@@ -584,9 +623,43 @@ async function refreshAlerts() {
   setBadge(0);
 }
 
+function enterEditRuleMode(rule) {
+  if (!rule) return;
+  const form = $("#rule-form");
+  form.dataset.editingId = String(rule.id);
+  form.elements["name"].value = rule.name || "";
+  form.elements["kind"].value = rule.kind || "";
+  form.elements["match_type"].value = rule.match_type || "device_id";
+  form.elements["match_value"].value = rule.match_value || "";
+  form.elements["location_id"].value = rule.location_id != null ? String(rule.location_id) : "";
+  form.elements["notify_discord"].checked = !!rule.notify_discord;
+  // Update placeholder for the new match_type without clobbering the value.
+  $("#rule-match-value").placeholder = MATCH_TYPE_PLACEHOLDERS[rule.match_type] || "";
+  $("#rule-form-title").textContent = `Edit rule #${rule.id}`;
+  $("#rule-form-submit").textContent = "Update rule";
+  $("#rule-form-cancel").hidden = false;
+  $("#rule-form-status").textContent = "";
+  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  form.elements["name"].focus();
+}
+
+function exitEditRuleMode() {
+  const form = $("#rule-form");
+  form.dataset.editingId = "";
+  form.reset();
+  applyMatchTypeUI($("#rule-match-type").value);
+  $("#rule-form-title").textContent = "New rule";
+  $("#rule-form-submit").textContent = "Add rule";
+  $("#rule-form-cancel").hidden = true;
+}
+
+$("#rule-form-cancel").addEventListener("click", exitEditRuleMode);
+
 $("#rule-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const fd = new FormData(e.target);
+  const form = e.target;
+  const editingId = form.dataset.editingId || "";
+  const fd = new FormData(form);
   const payload = {
     name: fd.get("name"),
     kind: fd.get("kind") || null,
@@ -597,10 +670,14 @@ $("#rule-form").addEventListener("submit", async (e) => {
   };
   $("#rule-form-status").textContent = "saving…";
   try {
-    await api("/api/alerts/rules", { method: "POST", body: JSON.stringify(payload) });
-    e.target.reset();
-    applyMatchTypeUI($("#rule-match-type").value);
-    $("#rule-form-status").textContent = "added";
+    if (editingId) {
+      await api(`/api/alerts/rules/${editingId}`, { method: "PATCH", body: JSON.stringify(payload) });
+      $("#rule-form-status").textContent = "updated";
+    } else {
+      await api("/api/alerts/rules", { method: "POST", body: JSON.stringify(payload) });
+      $("#rule-form-status").textContent = "added";
+    }
+    exitEditRuleMode();
     setTimeout(() => $("#rule-form-status").textContent = "", 1200);
     await refreshAlertRules();
   } catch (err) {

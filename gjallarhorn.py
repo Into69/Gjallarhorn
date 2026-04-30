@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -264,6 +265,21 @@ async def api_label_location(loc_id: int, payload: dict):
 @app.get("/api/locations/{loc_id}/devices")
 async def api_location_devices(loc_id: int, kind: Optional[str] = None):
     return {"devices": await db.devices_at_location(loc_id, kind)}
+
+
+@app.get("/api/locations/report.pdf")
+async def api_locations_report():
+    """Generate a downloadable PDF summary of all sensor locations."""
+    from fastapi.responses import Response
+    from services.report import build_report_pdf
+
+    pdf = await build_report_pdf()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="gjallarhorn-report-{stamp}.pdf"'},
+    )
 
 
 @app.delete("/api/locations")
