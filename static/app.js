@@ -447,7 +447,17 @@ async function loadSettings() {
     else el.value = v ?? "";
   }
   await applyMapProvider(s.map_provider);
+  applyLocDynamicEnabled();
 }
+
+function applyLocDynamicEnabled() {
+  const cb = $("#set-loc-dynamic");
+  const t = $("#set-loc-dynamic-t");
+  if (!cb || !t) return;
+  t.disabled = !cb.checked;
+  t.style.opacity = cb.checked ? "1" : "0.5";
+}
+$("#set-loc-dynamic")?.addEventListener("change", applyLocDynamicEnabled);
 
 $("#settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();

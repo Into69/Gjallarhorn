@@ -450,7 +450,12 @@ async def api_force_new_location():
     if gps is None or gps.fix.lat is None:
         raise HTTPException(503, "no GPS fix")
     s = await settings_store.load()
-    new_id = await db.create_location(gps.fix.lat, gps.fix.lon, s.new_location_distance_m, None)
+    from services.location_manager import effective_radius_m
+    radius = effective_radius_m(
+        s.new_location_distance_m, speed_mps=gps.fix.speed,
+        dynamic_enabled=s.new_location_dynamic, dynamic_t_s=s.new_location_dynamic_t_s,
+    )
+    new_id = await db.create_location(gps.fix.lat, gps.fix.lon, radius, None)
     label = s.location_label_template.format(id=new_id, lat=gps.fix.lat, lon=gps.fix.lon)
     await db.update_location_label(new_id, label)
     location_manager._active_id = new_id  # type: ignore[attr-defined]

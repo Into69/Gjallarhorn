@@ -97,6 +97,12 @@ class AppSettings(BaseModel):
 
     # location clustering
     new_location_distance_m: float = 25.0  # if sensor moves more than this, open a new list
+    # When enabled, radius grows with current GPS speed so a moving sensor opens
+    # bigger bubbles. Effective radius = new_location_distance_m + speed * t_s,
+    # clamped to a safety cap. With t=60s, a sensor at constant 10 m/s lands
+    # near the edge of its bubble exactly 60s after the bubble was opened.
+    new_location_dynamic: bool = False
+    new_location_dynamic_t_s: float = 60.0
     location_label_template: str = "Loc {id} @ {lat:.5f},{lon:.5f}"
 
     # filtering

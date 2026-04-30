@@ -10,6 +10,23 @@ import database as db
 
 log = logging.getLogger(__name__)
 
+# Safety cap for the dynamic radius — a sensor on a highway shouldn't
+# generate kilometres-wide bubbles even if speed × t_s implies it.
+DYNAMIC_RADIUS_MAX_M = 5000.0
+
+
+def effective_radius_m(
+    static_min_m: float, *, speed_mps: float | None,
+    dynamic_enabled: bool, dynamic_t_s: float,
+) -> float:
+    """Resolve the radius for a new bubble. With dynamic adjustment off (or
+    speed unknown / zero) we use the static minimum. When on, the radius
+    grows linearly with speed: at constant speed v, the sensor reaches the
+    bubble edge t_s seconds after the bubble opened."""
+    if not dynamic_enabled or speed_mps is None or speed_mps <= 0:
+        return static_min_m
+    return min(static_min_m + speed_mps * max(0.0, dynamic_t_s), DYNAMIC_RADIUS_MAX_M)
+
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6371000.0
@@ -35,7 +52,13 @@ class LocationManager:
     def active_id(self) -> Optional[int]:
         return self._active_id
 
-    async def update_with_fix(self, fix: GPSFix, threshold_m: float, label_template: str) -> Optional[int]:
+    async def update_with_fix(
+        self, fix: GPSFix, *,
+        static_threshold_m: float,
+        label_template: str,
+        dynamic_enabled: bool = False,
+        dynamic_t_s: float = 60.0,
+    ) -> Optional[int]:
         if fix.mode < 2 or fix.lat is None or fix.lon is None:
             return self._active_id
 
@@ -55,8 +78,13 @@ class LocationManager:
             await db.touch_location(self._active_id)
             return self._active_id
 
-        # Outside every existing radius — open a fresh location.
-        return await self._open_new_location(fix.lat, fix.lon, threshold_m, label_template)
+        # Outside every existing radius — open a fresh location, sized for the
+        # sensor's current motion if dynamic adjustment is on.
+        radius = effective_radius_m(
+            static_threshold_m, speed_mps=fix.speed,
+            dynamic_enabled=dynamic_enabled, dynamic_t_s=dynamic_t_s,
+        )
+        return await self._open_new_location(fix.lat, fix.lon, radius, label_template)
 
     async def _find_containing_location(self, lat: float, lon: float) -> Optional[dict]:
         best: Optional[dict] = None

@@ -254,6 +254,16 @@
           <label>New-location distance threshold (m)
             <input type="number" step="1" name="new_location_distance_m" min="1" max="5000" />
           </label>
+          <label class="check">
+            <input type="checkbox" name="new_location_dynamic" id="set-loc-dynamic" />
+            Dynamic adjustment (scale radius with GPS speed)
+          </label>
+          <label>Reach edge after (s) at constant speed
+            <input type="number" step="1" name="new_location_dynamic_t_s" id="set-loc-dynamic-t" min="5" max="600" />
+          </label>
+          <p class="muted" style="margin: 4px 0 0; font-size: 11px;">
+            Effective radius = static threshold + (current speed × t). At rest the static threshold applies. At 10&nbsp;m/s with t=60&nbsp;s, the bubble is ~625&nbsp;m and the sensor reaches its edge after ~1&nbsp;minute. Capped at 5&nbsp;km.
+          </p>
           <label>Label template
             <input type="text" name="location_label_template" />
           </label>

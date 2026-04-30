@@ -51,7 +51,11 @@ class ScanOrchestrator:
                 s = await settings_store.load()
                 fix = self.gps.fix
                 await location_manager.update_with_fix(
-                    fix, s.new_location_distance_m, s.location_label_template
+                    fix,
+                    static_threshold_m=s.new_location_distance_m,
+                    label_template=s.location_label_template,
+                    dynamic_enabled=s.new_location_dynamic,
+                    dynamic_t_s=s.new_location_dynamic_t_s,
                 )
             except Exception as e:
                 log.exception("gps loop error: %s", e)
