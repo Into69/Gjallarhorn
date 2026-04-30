@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS alert_rules (
     match_type TEXT NOT NULL,               -- device_id | name_contains | vendor_contains | rssi_above
     match_value TEXT NOT NULL,
     location_id INTEGER,                    -- NULL = any location
+    notify_discord INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -96,7 +97,19 @@ CREATE INDEX IF NOT EXISTS idx_alert_events_rule ON alert_events(rule_id);
 async def init_db() -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
+        await _migrate(db)
         await db.commit()
+
+
+async def _migrate(db: aiosqlite.Connection) -> None:
+    """Idempotent ALTER TABLEs for columns added after a DB was first created.
+    `CREATE TABLE IF NOT EXISTS` won't add new columns to an existing table."""
+    async with db.execute("PRAGMA table_info(alert_rules)") as cur:
+        cols = {row[1] for row in await cur.fetchall()}
+    if "notify_discord" not in cols:
+        await db.execute(
+            "ALTER TABLE alert_rules ADD COLUMN notify_discord INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 async def get_setting(key: str) -> Optional[str]:
@@ -270,14 +283,15 @@ async def list_alert_rules() -> list[dict]:
 
 async def create_alert_rule(
     name: str, kind: str | None, match_type: str, match_value: str,
-    location_id: int | None,
+    location_id: int | None, notify_discord: bool = False,
 ) -> int:
     now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "INSERT INTO alert_rules(name,enabled,kind,match_type,match_value,location_id,created_at) "
-            "VALUES(?,1,?,?,?,?,?)",
-            (name, kind, match_type, match_value, location_id, now),
+            "INSERT INTO alert_rules(name,enabled,kind,match_type,match_value,"
+            "location_id,notify_discord,created_at) VALUES(?,1,?,?,?,?,?,?)",
+            (name, kind, match_type, match_value, location_id,
+             1 if notify_discord else 0, now),
         )
         await db.commit()
         return cur.lastrowid

@@ -129,7 +129,7 @@
             <thead>
               <tr>
                 <th>On</th><th>Name</th><th>Kind</th><th>Match</th><th>Value</th>
-                <th>Location</th><th>Created</th><th></th>
+                <th>Location</th><th title="Send to Discord on match">Discord</th><th>Created</th><th></th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -160,6 +160,9 @@
               <select name="location_id" id="rule-location">
                 <option value="">any</option>
               </select>
+            </label>
+            <label class="check">
+              <input type="checkbox" name="notify_discord" /> Send to Discord on match
             </label>
             <button type="submit">Add rule</button>
             <span id="rule-form-status" class="muted"></span>
@@ -237,6 +240,20 @@
           <legend>gpsd</legend>
           <label>Host <input type="text" name="gpsd_host" /></label>
           <label>Port <input type="number" name="gpsd_port" min="1" max="65535" /></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Notifications — Discord</legend>
+          <label>Webhook URL
+            <input type="url" name="discord_webhook_url" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" />
+          </label>
+          <label>Username
+            <input type="text" name="discord_username" placeholder="Gjallarhorn" />
+          </label>
+          <div class="toolbar">
+            <button type="button" id="discord-test" class="secondary">Send test</button>
+            <span id="discord-test-status" class="muted"></span>
+          </div>
         </fieldset>
 
         <button type="submit">Save</button>

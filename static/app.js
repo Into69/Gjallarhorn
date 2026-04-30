@@ -442,6 +442,18 @@ $("#settings-form").addEventListener("submit", async (e) => {
   }
 });
 
+$("#discord-test").addEventListener("click", async () => {
+  const status = $("#discord-test-status");
+  status.textContent = "sending…";
+  try {
+    await api("/api/settings/notifications/discord/test", { method: "POST" });
+    status.textContent = "sent — check Discord";
+  } catch (err) {
+    status.textContent = "failed: " + err.message;
+  }
+  setTimeout(() => (status.textContent = ""), 4000);
+});
+
 // ---------- alerts ----------
 const MATCH_TYPE_LABEL = {
   device_id: "device id",
@@ -466,6 +478,7 @@ async function refreshAlertRules() {
       <td>${escapeHtml(MATCH_TYPE_LABEL[r.match_type] || r.match_type)}</td>
       <td class="mono">${escapeHtml(r.match_value)}</td>
       <td>${r.location_id ?? "any"}</td>
+      <td><input type="checkbox" class="rule-discord" data-id="${r.id}" ${r.notify_discord ? "checked" : ""}></td>
       <td class="mono">${formatTime(r.created_at)}</td>
       <td><button class="danger rule-delete" data-id="${r.id}">Delete</button></td>
     `;
@@ -475,6 +488,13 @@ async function refreshAlertRules() {
     cb.addEventListener("change", async () => {
       await api(`/api/alerts/rules/${cb.dataset.id}`, {
         method: "PATCH", body: JSON.stringify({ enabled: cb.checked }),
+      });
+    })
+  );
+  $$(".rule-discord").forEach(cb =>
+    cb.addEventListener("change", async () => {
+      await api(`/api/alerts/rules/${cb.dataset.id}`, {
+        method: "PATCH", body: JSON.stringify({ notify_discord: cb.checked }),
       });
     })
   );
@@ -573,6 +593,7 @@ $("#rule-form").addEventListener("submit", async (e) => {
     match_type: fd.get("match_type"),
     match_value: fd.get("match_value"),
     location_id: fd.get("location_id") || null,
+    notify_discord: fd.get("notify_discord") === "on",
   };
   $("#rule-form-status").textContent = "saving…";
   try {

@@ -7,12 +7,17 @@ to keep the feed sane while a strong target sits next to the sensor.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
-from datetime import datetime
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
 from typing import Any
 
 import database as db
+from config import settings_store
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +122,14 @@ class AlertService:
             )
             emitted.append(event_id)
 
+            # Fire-and-forget Discord notification, if both the rule opts in
+            # and the webhook is configured (checked inside _dispatch_discord).
+            if rule.get("notify_discord"):
+                asyncio.create_task(_dispatch_discord(
+                    rule=rule, device_kind=device_kind, device_id=device_id,
+                    rssi=rssi, location_id=location_id, details=details,
+                ))
+
         return emitted
 
     async def _location_age_seconds(self, location_id: int | None) -> float:
@@ -134,6 +147,100 @@ class AlertService:
                 return 0.0
             self._location_created[location_id] = cached
         return max(0.0, time.time() - cached)
+
+
+# ── Discord webhook ───────────────────────────────────────────────
+_KIND_COLOR = {
+    "wifi": 0x5cd1ff,        # cyan
+    "bluetooth": 0xb8a3ff,   # purple
+}
+_DEFAULT_COLOR = 0xff6b6b    # red
+
+# Cache failures briefly so a misconfigured webhook doesn't hammer Discord.
+_webhook_failure_until: float = 0.0
+_WEBHOOK_BACKOFF_S = 60.0
+
+
+async def _dispatch_discord(
+    rule: dict, device_kind: str, device_id: str, rssi: int,
+    location_id: int | None, details: dict,
+) -> None:
+    """Post a themed embed to the configured Discord webhook. No-op if unset."""
+    global _webhook_failure_until
+    try:
+        s = await settings_store.load()
+        url = (s.discord_webhook_url or "").strip()
+        if not url:
+            return
+        if time.monotonic() < _webhook_failure_until:
+            return
+        payload = build_discord_payload(
+            rule=rule, device_kind=device_kind, device_id=device_id, rssi=rssi,
+            location_id=location_id, details=details, username=s.discord_username,
+        )
+        await asyncio.to_thread(_post_webhook_sync, url, payload)
+    except Exception as e:
+        _webhook_failure_until = time.monotonic() + _WEBHOOK_BACKOFF_S
+        log.warning("discord webhook failed (suppressing for %ds): %s",
+                    int(_WEBHOOK_BACKOFF_S), e)
+
+
+def _post_webhook_sync(url: str, payload: dict) -> None:
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Gjallarhorn/0.1",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        # Discord returns 204 No Content on success
+        if resp.status >= 400:
+            raise urllib.error.HTTPError(
+                url, resp.status, f"webhook returned {resp.status}", resp.headers, None
+            )
+
+
+def build_discord_payload(
+    rule: dict, device_kind: str, device_id: str, rssi: int,
+    location_id: int | None, details: dict, username: str = "Gjallarhorn",
+) -> dict:
+    name_or_ssid = details.get("ssid") or details.get("name") or ""
+    vendor = details.get("vendor") or ""
+    color = _KIND_COLOR.get(device_kind, _DEFAULT_COLOR)
+    match_type = rule.get("match_type") or "?"
+
+    fields: list[dict] = [
+        {"name": "Device", "value": f"`{device_id}`", "inline": True},
+        {"name": "RSSI",   "value": f"{rssi} dBm",   "inline": True},
+        {"name": "Kind",   "value": device_kind,     "inline": True},
+    ]
+    if name_or_ssid:
+        fields.append({"name": "Name / SSID", "value": str(name_or_ssid), "inline": True})
+    if vendor:
+        fields.append({"name": "Vendor", "value": str(vendor), "inline": True})
+    if location_id is not None:
+        fields.append({"name": "Location", "value": f"#{location_id}", "inline": True})
+    if match_type == "cross_location":
+        n = details.get("_cross_location_n")
+        c = details.get("_cross_location_count")
+        if n is not None and c is not None:
+            fields.append({
+                "name": "Cross-location",
+                "value": f"in {c} of last {n}", "inline": True,
+            })
+
+    embed = {
+        "title": f"⚡ {rule.get('name', 'Alert')}",
+        "description": f"`{match_type}` matched on **{device_kind}**",
+        "color": color,
+        "fields": fields,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "footer": {"text": f"rule #{rule.get('id', '?')}"},
+    }
+    return {"username": username, "embeds": [embed]}
 
 
 def _parse_cross_location_value(value: str) -> tuple[int | None, int]:

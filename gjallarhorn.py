@@ -91,6 +91,30 @@ async def api_put_settings(payload: dict) -> AppSettings:
     return new
 
 
+@app.post("/api/settings/notifications/discord/test")
+async def api_test_discord_webhook():
+    """Post a synthetic embed to the configured webhook so the user can verify it works."""
+    from services.alert_service import build_discord_payload, _post_webhook_sync
+    import asyncio
+
+    s = await settings_store.load()
+    url = (s.discord_webhook_url or "").strip()
+    if not url:
+        raise HTTPException(400, "No Discord webhook URL configured")
+
+    payload = build_discord_payload(
+        rule={"id": 0, "name": "Test alert", "match_type": "device_id"},
+        device_kind="wifi", device_id="aa:bb:cc:dd:ee:ff", rssi=-42,
+        location_id=None, details={"ssid": "TestNetwork", "vendor": "Acme Inc."},
+        username=s.discord_username,
+    )
+    try:
+        await asyncio.to_thread(_post_webhook_sync, url, payload)
+    except Exception as e:
+        raise HTTPException(502, f"Webhook delivery failed: {e}")
+    return {"ok": True}
+
+
 # ---------- Interfaces / adapters ----------
 @app.get("/api/interfaces/wifi")
 async def api_wifi_interfaces():
@@ -274,7 +298,10 @@ async def api_create_rule(payload: dict):
             location_id = int(location_id)
         except (TypeError, ValueError):
             raise HTTPException(400, "location_id must be an integer")
-    rule_id = await db.create_alert_rule(name, kind, match_type, match_value, location_id)
+    notify_discord = bool(payload.get("notify_discord"))
+    rule_id = await db.create_alert_rule(
+        name, kind, match_type, match_value, location_id, notify_discord
+    )
     await alert_service.reload()
     return {"id": rule_id}
 
@@ -312,6 +339,8 @@ async def api_update_rule(rule_id: int, payload: dict):
                 fields["location_id"] = int(v)
             except (TypeError, ValueError):
                 raise HTTPException(400, "location_id must be int or null")
+    if "notify_discord" in payload:
+        fields["notify_discord"] = 1 if payload["notify_discord"] else 0
     await db.update_alert_rule(rule_id, fields)
     await alert_service.reload()
     return {"ok": True}

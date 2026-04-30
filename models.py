@@ -106,3 +106,7 @@ class AppSettings(BaseModel):
     # gpsd
     gpsd_host: str = "127.0.0.1"
     gpsd_port: int = 2947
+
+    # notifications
+    discord_webhook_url: Optional[str] = None
+    discord_username: str = "Gjallarhorn"
