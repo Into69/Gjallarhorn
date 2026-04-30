@@ -587,20 +587,115 @@ async function refreshAlertRules() {
   } catch {}
 }
 
+// Last-fetched events kept in memory so filter/sort can re-render without
+// hitting the server again.
+let alertsCache = [];
+
 async function refreshAlertEvents({ silent = false } = {}) {
-  const { events } = await api(`/api/alerts/events?limit=200`);
+  const { events } = await api(`/api/alerts/events?limit=500`);
+  alertsCache = events || [];
+  syncAlertsRuleFilter();
+  renderFilteredAlerts();
+  if (alertsCache.length && alertsCache[0].id > alertsLastSeenId && !silent) {
+    // New events arrived since last check
+  }
+  if (alertsCache.length) alertsLastSeenId = alertsCache[0].id;
+}
+
+function syncAlertsRuleFilter() {
+  // Populate the rule dropdown from whatever rule_ids appear in the cache.
+  const sel = $("#alerts-rule");
+  if (!sel) return;
+  const previous = sel.value;
+  const seen = new Map();
+  for (const e of alertsCache) {
+    if (e.rule_id != null && !seen.has(e.rule_id)) {
+      seen.set(e.rule_id, e.rule_name || `rule ${e.rule_id}`);
+    }
+  }
+  sel.innerHTML = `<option value="">any rule</option>` +
+    [...seen.entries()]
+      .sort((a, b) => String(a[1]).localeCompare(String(b[1])))
+      .map(([id, name]) => `<option value="${id}">${escapeHtml(name)}</option>`)
+      .join("");
+  // Preserve the user's selection if that rule is still represented.
+  if (previous && seen.has(Number(previous))) sel.value = previous;
+}
+
+function applyAlertFilters(events) {
+  const q = ($("#alerts-search")?.value || "").trim().toLowerCase();
+  const kind = $("#alerts-kind")?.value || "";
+  const rule = $("#alerts-rule")?.value || "";
+  const sort = $("#alerts-sort")?.value || "newest";
+
+  let out = events.filter((e) => {
+    if (kind && e.device_kind !== kind) return false;
+    if (rule && String(e.rule_id) !== rule) return false;
+    if (q) {
+      const det = e.details || {};
+      const hay = [
+        e.device_id, e.rule_name, det.ssid, det.name, det.vendor,
+      ].filter(Boolean).join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  out.sort((a, b) => {
+    if (sort === "oldest") return a.id - b.id;
+    if (sort === "rssi_strong") return (b.rssi ?? -999) - (a.rssi ?? -999);
+    if (sort === "rssi_weak")   return (a.rssi ?? 999)  - (b.rssi ?? 999);
+    return b.id - a.id; // newest
+  });
+  return out;
+}
+
+function renderFilteredAlerts() {
   const list = $("#alerts-list");
-  if (!events.length) {
+  const counter = $("#alerts-count");
+  const total = alertsCache.length;
+  if (!total) {
     list.innerHTML = `<div class="muted">No alerts yet.</div>`;
+    if (counter) counter.textContent = "";
     setBadge(0);
     return;
   }
-  list.innerHTML = events.map(renderAlertEvent).join("");
-  if (events[0].id > alertsLastSeenId && !silent) {
-    // New events arrived since last check
+  const shown = applyAlertFilters(alertsCache);
+  if (counter) {
+    counter.textContent = shown.length === total
+      ? `${total} event${total === 1 ? "" : "s"}`
+      : `${shown.length} of ${total}`;
   }
-  alertsLastSeenId = events[0].id;
+  if (!shown.length) {
+    list.innerHTML = `<div class="muted">No alerts match the current filters.</div>`;
+    return;
+  }
+  list.innerHTML = shown.map(renderAlertEvent).join("");
 }
+
+// Debounce search to keep large feeds responsive while typing.
+let _alertsSearchTimer = null;
+function onAlertsFilterChange(immediate = false) {
+  if (immediate) {
+    if (_alertsSearchTimer) clearTimeout(_alertsSearchTimer);
+    renderFilteredAlerts();
+    return;
+  }
+  if (_alertsSearchTimer) clearTimeout(_alertsSearchTimer);
+  _alertsSearchTimer = setTimeout(renderFilteredAlerts, 120);
+}
+
+$("#alerts-search").addEventListener("input", () => onAlertsFilterChange());
+$("#alerts-kind").addEventListener("change", () => onAlertsFilterChange(true));
+$("#alerts-rule").addEventListener("change", () => onAlertsFilterChange(true));
+$("#alerts-sort").addEventListener("change", () => onAlertsFilterChange(true));
+$("#alerts-filter-reset").addEventListener("click", () => {
+  $("#alerts-search").value = "";
+  $("#alerts-kind").value = "";
+  $("#alerts-rule").value = "";
+  $("#alerts-sort").value = "newest";
+  onAlertsFilterChange(true);
+});
 
 function renderAlertEvent(e) {
   const det = e.details || {};
@@ -632,11 +727,62 @@ function setBadge(n) {
   else { b.hidden = true; }
 }
 
+// Tracks the id of the most recent alert we've already popped on the map.
+// Distinct from alertsLastSeenId (which represents "last viewed in feed")
+// so popups fire even when the user isn't on the alerts tab.
+let alertsLastPoppedId = 0;
+let _alertPopupTimer = null;
+
+function showAlertOnMap(e) {
+  if (e.location_id == null) return;
+  const marker = locationMarkers.get(e.location_id);
+  if (!marker) return; // marker not loaded yet — skip rather than guess
+  const latlng = marker.getLatLng();
+  const det = e.details || {};
+  const label = det.ssid || det.name || "";
+  const vendor = det.vendor || "";
+  const html = `
+    <div class="alert-popup kind-${escapeAttr(e.device_kind)}">
+      <div class="alert-popup-rule">⚡ ${escapeHtml(e.rule_name || "rule " + e.rule_id)}</div>
+      <div><span class="mono">${escapeHtml(e.device_id)}</span></div>
+      ${label ? `<div>${escapeHtml(label)}</div>` : ""}
+      ${vendor ? `<div class="muted">${escapeHtml(vendor)}</div>` : ""}
+      <div class="alert-popup-meta">
+        ${e.rssi != null ? `${e.rssi} dBm · ` : ""}${escapeHtml(formatTime(e.triggered_at))}
+      </div>
+    </div>
+  `;
+  const popup = L.popup({
+    autoClose: false,
+    closeOnClick: false,
+    className: "gj-alert-popup",
+    offset: [0, -4],
+  }).setLatLng(latlng).setContent(html).openOn(map);
+
+  // Auto-dismiss after a few seconds. A subsequent alert popup will already
+  // have replaced this one (Leaflet's openOn closes prior popups).
+  if (_alertPopupTimer) clearTimeout(_alertPopupTimer);
+  _alertPopupTimer = setTimeout(() => {
+    if (map.hasLayer(popup)) map.closePopup(popup);
+  }, 8000);
+}
+
 async function pollAlertsBadge() {
   try {
     const { events } = await api(`/api/alerts/events?limit=10`);
     if (!events.length) { setBadge(0); return; }
     const newest = events[0].id;
+
+    // Popup any events newer than the last one we popped. Skip on first
+    // poll (alertsLastPoppedId === 0) so existing alerts from the DB
+    // don't all pop up at once on page load.
+    if (alertsLastPoppedId > 0) {
+      const fresh = events.filter(e => e.id > alertsLastPoppedId);
+      // Show oldest-first so the newest is the one left visible.
+      for (const e of fresh.slice().reverse()) showAlertOnMap(e);
+    }
+    alertsLastPoppedId = newest;
+
     const unseen = events.filter(e => e.id > alertsLastSeenId).length;
     setBadge(unseen);
     if ($("#tab-alerts").classList.contains("active")) {
