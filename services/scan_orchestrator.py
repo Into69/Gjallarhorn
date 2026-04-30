@@ -71,7 +71,7 @@ class ScanOrchestrator:
                         if d.rssi < s.min_rssi:
                             continue
                         details = d.model_dump(mode="json")
-                        await db.upsert_device(
+                        is_new = await db.upsert_device(
                             location_id=loc_id, kind="wifi", device_id=d.bssid,
                             rssi=d.rssi, details=details,
                         )
@@ -82,7 +82,7 @@ class ScanOrchestrator:
                         )
                         await alert_service.evaluate(
                             device_kind="wifi", device_id=d.bssid, rssi=d.rssi,
-                            location_id=loc_id, details=details,
+                            location_id=loc_id, details=details, is_new=is_new,
                         )
             except Exception as e:
                 log.exception("wifi loop error: %s", e)
@@ -103,7 +103,7 @@ class ScanOrchestrator:
                         if s.hide_random_bt_addresses and d.address_type == "random":
                             continue
                         details = d.model_dump(mode="json")
-                        await db.upsert_device(
+                        is_new = await db.upsert_device(
                             location_id=loc_id, kind="bluetooth", device_id=d.address,
                             rssi=d.rssi, details=details,
                         )
@@ -114,7 +114,7 @@ class ScanOrchestrator:
                         )
                         await alert_service.evaluate(
                             device_kind="bluetooth", device_id=d.address, rssi=d.rssi,
-                            location_id=loc_id, details=details,
+                            location_id=loc_id, details=details, is_new=is_new,
                         )
             except Exception as e:
                 log.exception("bt loop error: %s", e)

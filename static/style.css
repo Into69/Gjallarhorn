@@ -296,13 +296,20 @@ button.danger:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 
 .alerts-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 16px;
   height: 100%;
 }
+.alerts-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+}
 .alerts-rules, .alerts-feed { display: flex; flex-direction: column; min-height: 0; }
 .alerts-rules table { margin-bottom: 12px; }
+
 
 .rule-form {
   display: grid;

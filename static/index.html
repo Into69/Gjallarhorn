@@ -122,6 +122,7 @@
 
     <section id="tab-alerts" class="tab">
       <div class="alerts-layout">
+        <div class="alerts-top">
         <div class="alerts-rules">
           <h3 class="section-h">Rules</h3>
           <table id="rules-table">
@@ -150,6 +151,8 @@
                 <option value="name_contains">name / SSID contains</option>
                 <option value="vendor_contains">vendor contains</option>
                 <option value="rssi_above">RSSI ≥ (stronger than) dBm</option>
+                <option value="new_device">new device at location</option>
+                <option value="cross_location">cross-location: in M of last N</option>
               </select>
             </label>
             <label>Value <input type="text" name="match_value" id="rule-match-value" placeholder="aa:bb:cc or 'Apple' or -60" required /></label>
@@ -172,6 +175,8 @@
             <div class="muted">No alerts yet.</div>
           </div>
         </div>
+        </div>
+
       </div>
     </section>
 

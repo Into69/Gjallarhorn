@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 import database as db
@@ -26,6 +27,8 @@ class AlertService:
         self._rules_loaded = False
         # (rule_id, device_id) -> last fired monotonic timestamp
         self._cooldown: dict[tuple[int, str], float] = {}
+        # location_id -> created_at epoch seconds (cached; created_at never changes)
+        self._location_created: dict[int, float] = {}
 
     async def load_rules(self) -> None:
         self._rules = await db.list_alert_rules()
@@ -42,6 +45,7 @@ class AlertService:
         rssi: int,
         location_id: int | None,
         details: dict,
+        is_new: bool = False,
     ) -> list[int]:
         """Run all enabled rules against a single device sighting. Returns
         a list of newly-inserted alert_events ids (after cooldown filtering)."""
@@ -55,6 +59,7 @@ class AlertService:
         device_id_l = (device_id or "").lower()
         ssid_or_name = (details.get("ssid") or details.get("name") or "")
         vendor = (details.get("vendor") or "")
+        location_age_s: float | None = None  # lazily fetched
 
         for rule in self._rules:
             if not rule.get("enabled"):
@@ -65,7 +70,34 @@ class AlertService:
             loc_filter = rule.get("location_id")
             if loc_filter is not None and loc_filter != location_id:
                 continue
-            if not _matches(rule, device_id_l, ssid_or_name, vendor, rssi):
+
+            mt = rule.get("match_type")
+            if mt == "new_device":
+                if not is_new:
+                    continue
+                # match_value is the establishment-time threshold in seconds.
+                # 0 means fire immediately; >0 means location must have existed
+                # for at least that many seconds before new-device alerts arm.
+                try:
+                    establishment_s = max(0, int((rule.get("match_value") or "0").strip()))
+                except ValueError:
+                    establishment_s = 0
+                if establishment_s > 0:
+                    if location_age_s is None:
+                        location_age_s = await self._location_age_seconds(location_id)
+                    if location_age_s < establishment_s:
+                        continue
+            elif mt == "cross_location":
+                # match_value: "N/M" — fire when device appears in >= M of the last N locations.
+                n_locs, min_m = _parse_cross_location_value(rule.get("match_value") or "")
+                if n_locs is None:
+                    continue
+                count = await db.count_device_in_recent_locations(device_kind, device_id_l, n_locs)
+                if count < min_m:
+                    continue
+                # Stash the count so it lands in the alert's stored details for context.
+                details = {**details, "_cross_location_count": count, "_cross_location_n": n_locs}
+            elif not _matches(rule, device_id_l, ssid_or_name, vendor, rssi):
                 continue
 
             key = (rule["id"], device_id_l)
@@ -86,6 +118,38 @@ class AlertService:
             emitted.append(event_id)
 
         return emitted
+
+    async def _location_age_seconds(self, location_id: int | None) -> float:
+        """Seconds since the given location's row was created. Cached per id."""
+        if location_id is None:
+            return 0.0
+        cached = self._location_created.get(location_id)
+        if cached is None:
+            ts = await db.get_location_created_at(location_id)
+            if ts is None:
+                return 0.0
+            try:
+                cached = datetime.fromisoformat(ts).timestamp()
+            except ValueError:
+                return 0.0
+            self._location_created[location_id] = cached
+        return max(0.0, time.time() - cached)
+
+
+def _parse_cross_location_value(value: str) -> tuple[int | None, int]:
+    """Parse 'N/M' into (n_locations, min_matches). Returns (None, 0) if invalid.
+
+    M defaults to 2 if only N is given. Both must be >= 2 and M <= N.
+    """
+    parts = [p.strip() for p in (value or "").split("/")]
+    try:
+        n = int(parts[0])
+        m = int(parts[1]) if len(parts) > 1 and parts[1] else 2
+    except (ValueError, IndexError):
+        return None, 0
+    if n < 2 or m < 2 or m > n:
+        return None, 0
+    return n, m
 
 
 def _matches(rule: dict, device_id_l: str, name_or_ssid: str, vendor: str, rssi: int) -> bool:

@@ -448,6 +448,8 @@ const MATCH_TYPE_LABEL = {
   name_contains: "name contains",
   vendor_contains: "vendor contains",
   rssi_above: "RSSI ≥",
+  new_device: "new device (after Ns)",
+  cross_location: "cross-location M/N",
 };
 let alertsLastSeenId = 0;
 
@@ -591,15 +593,27 @@ $("#alerts-clear").addEventListener("click", async () => {
   setBadge(0);
 });
 
-$("#rule-match-type").addEventListener("change", (e) => {
+function applyMatchTypeUI(matchType) {
   const placeholders = {
     device_id: "aa:bb:cc:dd:ee:ff or aa:bb:cc",
     name_contains: "Apple, Pixel, MyNet…",
     vendor_contains: "Samsung, Cisco…",
     rssi_above: "-60",
+    new_device: "300 (seconds the location must be established first; 0 = arm immediately)",
+    cross_location: "5/2 — appears in at least 2 of the last 5 locations",
   };
-  $("#rule-match-value").placeholder = placeholders[e.target.value] || "";
-});
+  $("#rule-match-value").placeholder = placeholders[matchType] || "";
+  // Sensible default for new_device's time threshold.
+  if (matchType === "new_device" && !$("#rule-match-value").value) {
+    $("#rule-match-value").value = "300";
+  }
+  // Sensible default for cross_location.
+  if (matchType === "cross_location" && !$("#rule-match-value").value) {
+    $("#rule-match-value").value = "5/2";
+  }
+}
+$("#rule-match-type").addEventListener("change", (e) => applyMatchTypeUI(e.target.value));
+applyMatchTypeUI($("#rule-match-type").value);
 
 // ---------- OUI ----------
 function formatBytes(n) {

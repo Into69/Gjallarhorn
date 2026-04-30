@@ -201,7 +201,8 @@ async def upsert_device(
     device_id: str,
     rssi: int,
     details: dict,
-) -> None:
+) -> bool:
+    """Upsert a device row. Returns True if a new row was inserted, False if updated."""
     now = datetime.utcnow().isoformat()
     payload = json.dumps(details, default=str)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -216,15 +217,26 @@ async def upsert_device(
                 "best_rssi,last_rssi,seen_count,details_json) VALUES(?,?,?,?,?,?,?,1,?)",
                 (location_id, kind, device_id, now, now, rssi, rssi, payload),
             )
-        else:
-            best = max(row[0], rssi)  # rssi is negative — higher is better
-            await db.execute(
-                "UPDATE devices SET last_seen=?, best_rssi=?, last_rssi=?, "
-                "seen_count=seen_count+1, details_json=? "
-                "WHERE location_id=? AND kind=? AND device_id=?",
-                (now, best, rssi, payload, location_id, kind, device_id),
-            )
+            await db.commit()
+            return True
+        best = max(row[0], rssi)  # rssi is negative — higher is better
+        await db.execute(
+            "UPDATE devices SET last_seen=?, best_rssi=?, last_rssi=?, "
+            "seen_count=seen_count+1, details_json=? "
+            "WHERE location_id=? AND kind=? AND device_id=?",
+            (now, best, rssi, payload, location_id, kind, device_id),
+        )
         await db.commit()
+        return False
+
+
+async def get_location_created_at(location_id: int) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT created_at FROM sensor_locations WHERE id=?", (location_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
 
 
 async def insert_observation(
@@ -324,6 +336,24 @@ async def list_alert_events(limit: int = 100, since_id: int | None = None) -> li
         except (TypeError, ValueError):
             r["details"] = {}
     return rows
+
+
+async def count_device_in_recent_locations(kind: str, device_id: str, n_locations: int) -> int:
+    """How many of the most recent N locations have this device in their devices row.
+
+    Used by the cross_location alert rule.
+    """
+    if n_locations < 1:
+        n_locations = 1
+    sql = """
+        SELECT COUNT(DISTINCT location_id) FROM devices
+        WHERE kind=? AND device_id=?
+          AND location_id IN (SELECT id FROM sensor_locations ORDER BY id DESC LIMIT ?)
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(sql, (kind, device_id, n_locations)) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
 
 
 async def clear_alert_events() -> int:

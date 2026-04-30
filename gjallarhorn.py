@@ -240,7 +240,10 @@ async def api_oui_lookup(mac: str):
 
 
 # ---------- Alerts ----------
-ALLOWED_MATCH_TYPES = {"device_id", "name_contains", "vendor_contains", "rssi_above"}
+ALLOWED_MATCH_TYPES = {
+    "device_id", "name_contains", "vendor_contains", "rssi_above",
+    "new_device", "cross_location",
+}
 ALLOWED_KINDS = {None, "wifi", "bluetooth"}
 
 
