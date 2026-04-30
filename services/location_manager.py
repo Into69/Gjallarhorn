@@ -39,33 +39,46 @@ class LocationManager:
         if fix.mode < 2 or fix.lat is None or fix.lon is None:
             return self._active_id
 
-        if self._active_id is None:
-            new_id = await db.create_location(
-                lat=fix.lat, lon=fix.lon, radius_m=threshold_m, label=None
-            )
-            label = label_template.format(id=new_id, lat=fix.lat, lon=fix.lon)
-            await db.update_location_label(new_id, label)
-            self._active_id = new_id
-            self._active_lat = fix.lat
-            self._active_lon = fix.lon
-            log.info("Opened first sensor location id=%s @ %.6f,%.6f", new_id, fix.lat, fix.lon)
-            return new_id
-
-        d = haversine_m(self._active_lat, self._active_lon, fix.lat, fix.lon)
-        if d > threshold_m:
-            new_id = await db.create_location(
-                lat=fix.lat, lon=fix.lon, radius_m=threshold_m, label=None
-            )
-            label = label_template.format(id=new_id, lat=fix.lat, lon=fix.lon)
-            await db.update_location_label(new_id, label)
-            self._active_id = new_id
-            self._active_lat = fix.lat
-            self._active_lon = fix.lon
-            log.info("Sensor moved %.1fm > %.1fm; opened location id=%s", d, threshold_m, new_id)
-        else:
+        # If the fix falls inside an existing location's radius, snap to that one
+        # (re-using a previously mapped place instead of opening a duplicate).
+        # If multiple radii overlap, the nearest centroid wins.
+        matched = await self._find_containing_location(fix.lat, fix.lon)
+        if matched is not None:
+            if self._active_id != matched["id"]:
+                log.info(
+                    "Sensor entered existing location id=%s @ %.6f,%.6f; switching active",
+                    matched["id"], matched["lat"], matched["lon"],
+                )
+            self._active_id = matched["id"]
+            self._active_lat = matched["lat"]
+            self._active_lon = matched["lon"]
             await db.touch_location(self._active_id)
+            return self._active_id
 
-        return self._active_id
+        # Outside every existing radius — open a fresh location.
+        return await self._open_new_location(fix.lat, fix.lon, threshold_m, label_template)
+
+    async def _find_containing_location(self, lat: float, lon: float) -> Optional[dict]:
+        best: Optional[dict] = None
+        best_d: float = float("inf")
+        for loc in await db.list_location_centroids():
+            d = haversine_m(loc["lat"], loc["lon"], lat, lon)
+            if d <= loc["radius_m"] and d < best_d:
+                best, best_d = loc, d
+        return best
+
+    async def _open_new_location(
+        self, lat: float, lon: float, threshold_m: float, label_template: str
+    ) -> int:
+        new_id = await db.create_location(lat=lat, lon=lon, radius_m=threshold_m, label=None)
+        label = label_template.format(id=new_id, lat=lat, lon=lon)
+        await db.update_location_label(new_id, label)
+        self._active_id = new_id
+        self._active_lat = lat
+        self._active_lon = lon
+        log.info("Opened new sensor location id=%s @ %.6f,%.6f r=%.1fm",
+                 new_id, lat, lon, threshold_m)
+        return new_id
 
 
 location_manager = LocationManager()

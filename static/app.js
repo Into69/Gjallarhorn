@@ -20,6 +20,7 @@ $$(".tab-btn").forEach((btn) => {
     if (id === "map" && map) setTimeout(() => map.invalidateSize(), 50);
     if (id === "devices") refreshDevices();
     if (id === "locations") refreshLocations();
+    if (id === "alerts") refreshAlerts();
   });
 });
 
@@ -441,6 +442,165 @@ $("#settings-form").addEventListener("submit", async (e) => {
   }
 });
 
+// ---------- alerts ----------
+const MATCH_TYPE_LABEL = {
+  device_id: "device id",
+  name_contains: "name contains",
+  vendor_contains: "vendor contains",
+  rssi_above: "RSSI ≥",
+};
+let alertsLastSeenId = 0;
+
+async function refreshAlertRules() {
+  const { rules } = await api("/api/alerts/rules");
+  const tbody = $("#rules-table tbody");
+  tbody.innerHTML = "";
+  for (const r of rules) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input type="checkbox" class="rule-toggle" data-id="${r.id}" ${r.enabled ? "checked" : ""}></td>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${escapeHtml(r.kind || "any")}</td>
+      <td>${escapeHtml(MATCH_TYPE_LABEL[r.match_type] || r.match_type)}</td>
+      <td class="mono">${escapeHtml(r.match_value)}</td>
+      <td>${r.location_id ?? "any"}</td>
+      <td class="mono">${formatTime(r.created_at)}</td>
+      <td><button class="danger rule-delete" data-id="${r.id}">Delete</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+  $$(".rule-toggle").forEach(cb =>
+    cb.addEventListener("change", async () => {
+      await api(`/api/alerts/rules/${cb.dataset.id}`, {
+        method: "PATCH", body: JSON.stringify({ enabled: cb.checked }),
+      });
+    })
+  );
+  $$(".rule-delete").forEach(b =>
+    b.addEventListener("click", async () => {
+      if (!confirm("Delete this rule and its alert history?")) return;
+      await api(`/api/alerts/rules/${b.dataset.id}`, { method: "DELETE" });
+      refreshAlertRules();
+    })
+  );
+  // Populate the location dropdown in the form
+  try {
+    const locs = await api("/api/locations");
+    const sel = $("#rule-location");
+    sel.innerHTML = `<option value="">any</option>`;
+    for (const loc of locs.locations || []) {
+      const o = document.createElement("option");
+      o.value = loc.id; o.textContent = `${loc.id} · ${loc.label || ""}`.trim();
+      sel.appendChild(o);
+    }
+  } catch {}
+}
+
+async function refreshAlertEvents({ silent = false } = {}) {
+  const { events } = await api(`/api/alerts/events?limit=200`);
+  const list = $("#alerts-list");
+  if (!events.length) {
+    list.innerHTML = `<div class="muted">No alerts yet.</div>`;
+    setBadge(0);
+    return;
+  }
+  list.innerHTML = events.map(renderAlertEvent).join("");
+  if (events[0].id > alertsLastSeenId && !silent) {
+    // New events arrived since last check
+  }
+  alertsLastSeenId = events[0].id;
+}
+
+function renderAlertEvent(e) {
+  const det = e.details || {};
+  const label = det.ssid || det.name || "";
+  const vendor = det.vendor ? ` · ${escapeHtml(det.vendor)}` : "";
+  const where = e.location_id != null ? `loc #${e.location_id}` : "no loc";
+  return `
+    <div class="alert-item kind-${escapeHtml(e.device_kind)}">
+      <div>
+        <span class="alert-rule">${escapeHtml(e.rule_name || "rule " + e.rule_id)}</span>
+        <span class="muted"> matched </span>
+        <span class="alert-device">${escapeHtml(e.device_id)}</span>
+        ${label ? `<span class="muted"> · </span><span>${escapeHtml(label)}</span>` : ""}
+        ${vendor}
+      </div>
+      <div class="alert-meta">
+        <span class="alert-rssi">${e.rssi != null ? e.rssi + " dBm" : ""}</span>
+        · ${escapeHtml(where)}
+        · ${formatTime(e.triggered_at)}
+      </div>
+    </div>
+  `;
+}
+
+function setBadge(n) {
+  const b = $("#alerts-badge");
+  if (!b) return;
+  if (n > 0) { b.textContent = n; b.hidden = false; }
+  else { b.hidden = true; }
+}
+
+async function pollAlertsBadge() {
+  try {
+    const { events } = await api(`/api/alerts/events?limit=10`);
+    if (!events.length) { setBadge(0); return; }
+    const newest = events[0].id;
+    const unseen = events.filter(e => e.id > alertsLastSeenId).length;
+    setBadge(unseen);
+    if ($("#tab-alerts").classList.contains("active")) {
+      // Tab is open — auto-refresh feed and clear badge
+      await refreshAlertEvents();
+      setBadge(0);
+    }
+  } catch {}
+}
+
+async function refreshAlerts() {
+  await refreshAlertRules();
+  await refreshAlertEvents();
+  setBadge(0);
+}
+
+$("#rule-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const payload = {
+    name: fd.get("name"),
+    kind: fd.get("kind") || null,
+    match_type: fd.get("match_type"),
+    match_value: fd.get("match_value"),
+    location_id: fd.get("location_id") || null,
+  };
+  $("#rule-form-status").textContent = "saving…";
+  try {
+    await api("/api/alerts/rules", { method: "POST", body: JSON.stringify(payload) });
+    e.target.reset();
+    $("#rule-form-status").textContent = "added";
+    setTimeout(() => $("#rule-form-status").textContent = "", 1200);
+    await refreshAlertRules();
+  } catch (err) {
+    $("#rule-form-status").textContent = "error: " + err.message;
+  }
+});
+
+$("#alerts-clear").addEventListener("click", async () => {
+  if (!confirm("Clear the entire alert feed? Rules will stay.")) return;
+  await api("/api/alerts/events", { method: "DELETE" });
+  await refreshAlertEvents();
+  setBadge(0);
+});
+
+$("#rule-match-type").addEventListener("change", (e) => {
+  const placeholders = {
+    device_id: "aa:bb:cc:dd:ee:ff or aa:bb:cc",
+    name_contains: "Apple, Pixel, MyNet…",
+    vendor_contains: "Samsung, Cisco…",
+    rssi_above: "-60",
+  };
+  $("#rule-match-value").placeholder = placeholders[e.target.value] || "";
+});
+
 // ---------- OUI ----------
 function formatBytes(n) {
   if (n == null) return "—";
@@ -529,4 +689,5 @@ function formatTime(iso) {
   setInterval(pollGps, 1500);
   setInterval(refreshLocationMarkers, 5000);
   setInterval(refreshOuiStatus, 10000);
+  setInterval(pollAlertsBadge, 4000);
 })();

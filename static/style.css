@@ -275,6 +275,82 @@ button.danger:hover:not(:disabled) {
 button.danger:disabled { opacity: 0.5; cursor: not-allowed; }
 .toolbar-spacer { flex: 1; }
 
+/* ── alerts tab ───────────────────────────────────── */
+.tab-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--err);
+  color: #1b0a0a;
+}
+
+.section-h {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+}
+
+.alerts-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  height: 100%;
+}
+.alerts-rules, .alerts-feed { display: flex; flex-direction: column; min-height: 0; }
+.alerts-rules table { margin-bottom: 12px; }
+
+.rule-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+.rule-form h4 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 1.5px;
+}
+.rule-form label { display: grid; gap: 4px; font-size: 11px; color: var(--muted); }
+.rule-form button[type=submit] { grid-column: 1 / -1; justify-self: start; }
+.rule-form .muted { grid-column: 1 / -1; }
+
+.feed-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+
+.alerts-list {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 6px;
+  padding-right: 4px;
+}
+.alert-item {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--err);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  display: grid; grid-template-columns: 1fr auto; gap: 4px 12px;
+  animation: alert-flash 1s ease-out;
+}
+.alert-item.kind-wifi { border-left-color: var(--accent); }
+.alert-item.kind-bluetooth { border-left-color: #b8a3ff; }
+@keyframes alert-flash {
+  0% { background: rgba(255, 107, 107, 0.18); }
+  100% { background: var(--panel); }
+}
+.alert-rule { color: var(--accent); font-weight: 600; }
+.alert-meta { color: var(--muted); font-size: 11px; font-family: ui-monospace, Consolas, monospace; }
+.alert-device { font-family: ui-monospace, Consolas, monospace; color: var(--fg); }
+.alert-rssi { color: var(--warn); font-family: ui-monospace, Consolas, monospace; }
+
 #settings-form { display: grid; gap: 12px; max-width: 720px; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--panel); }
 legend { color: var(--muted); padding: 0 6px; }

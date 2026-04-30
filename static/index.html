@@ -14,6 +14,7 @@
       <button class="tab-btn active" data-tab="map">Map</button>
       <button class="tab-btn" data-tab="devices">Devices</button>
       <button class="tab-btn" data-tab="locations">Locations</button>
+      <button class="tab-btn" data-tab="alerts">Alerts <span id="alerts-badge" class="tab-badge" hidden>0</span></button>
       <button class="tab-btn" data-tab="settings">Settings</button>
     </nav>
     <div id="status">
@@ -117,6 +118,61 @@
         </thead>
         <tbody></tbody>
       </table>
+    </section>
+
+    <section id="tab-alerts" class="tab">
+      <div class="alerts-layout">
+        <div class="alerts-rules">
+          <h3 class="section-h">Rules</h3>
+          <table id="rules-table">
+            <thead>
+              <tr>
+                <th>On</th><th>Name</th><th>Kind</th><th>Match</th><th>Value</th>
+                <th>Location</th><th>Created</th><th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+
+          <form id="rule-form" class="rule-form">
+            <h4>New rule</h4>
+            <label>Name <input type="text" name="name" placeholder="Watch for…" required /></label>
+            <label>Kind
+              <select name="kind">
+                <option value="">any</option>
+                <option value="wifi">wifi</option>
+                <option value="bluetooth">bluetooth</option>
+              </select>
+            </label>
+            <label>Match type
+              <select name="match_type" id="rule-match-type">
+                <option value="device_id">device id (exact / prefix)</option>
+                <option value="name_contains">name / SSID contains</option>
+                <option value="vendor_contains">vendor contains</option>
+                <option value="rssi_above">RSSI ≥ (stronger than) dBm</option>
+              </select>
+            </label>
+            <label>Value <input type="text" name="match_value" id="rule-match-value" placeholder="aa:bb:cc or 'Apple' or -60" required /></label>
+            <label>Location
+              <select name="location_id" id="rule-location">
+                <option value="">any</option>
+              </select>
+            </label>
+            <button type="submit">Add rule</button>
+            <span id="rule-form-status" class="muted"></span>
+          </form>
+        </div>
+
+        <div class="alerts-feed">
+          <div class="feed-header">
+            <h3 class="section-h">Live feed</h3>
+            <button id="alerts-clear" class="danger">Clear feed</button>
+          </div>
+          <div id="alerts-list" class="alerts-list">
+            <div class="muted">No alerts yet.</div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section id="tab-settings" class="tab">

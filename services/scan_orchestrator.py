@@ -9,6 +9,7 @@ from services.location_manager import location_manager
 from services.gps_service import GPSService
 from services.wifi_scanner import scan_wifi
 from services.bluetooth_scanner import scan_bluetooth
+from services.alert_service import alert_service
 import database as db
 
 log = logging.getLogger(__name__)
@@ -69,14 +70,19 @@ class ScanOrchestrator:
                     for d in devs:
                         if d.rssi < s.min_rssi:
                             continue
+                        details = d.model_dump(mode="json")
                         await db.upsert_device(
                             location_id=loc_id, kind="wifi", device_id=d.bssid,
-                            rssi=d.rssi, details=d.model_dump(mode="json"),
+                            rssi=d.rssi, details=details,
                         )
                         await db.insert_observation(
                             location_id=loc_id, kind="wifi", device_id=d.bssid,
                             rssi=d.rssi, lat=fix.lat, lon=fix.lon,
-                            raw=d.model_dump(mode="json"),
+                            raw=details,
+                        )
+                        await alert_service.evaluate(
+                            device_kind="wifi", device_id=d.bssid, rssi=d.rssi,
+                            location_id=loc_id, details=details,
                         )
             except Exception as e:
                 log.exception("wifi loop error: %s", e)
@@ -96,14 +102,19 @@ class ScanOrchestrator:
                             continue
                         if s.hide_random_bt_addresses and d.address_type == "random":
                             continue
+                        details = d.model_dump(mode="json")
                         await db.upsert_device(
                             location_id=loc_id, kind="bluetooth", device_id=d.address,
-                            rssi=d.rssi, details=d.model_dump(mode="json"),
+                            rssi=d.rssi, details=details,
                         )
                         await db.insert_observation(
                             location_id=loc_id, kind="bluetooth", device_id=d.address,
                             rssi=d.rssi, lat=fix.lat, lon=fix.lon,
-                            raw=d.model_dump(mode="json"),
+                            raw=details,
+                        )
+                        await alert_service.evaluate(
+                            device_kind="bluetooth", device_id=d.address, rssi=d.rssi,
+                            location_id=loc_id, details=details,
                         )
             except Exception as e:
                 log.exception("bt loop error: %s", e)

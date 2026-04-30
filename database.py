@@ -64,6 +64,32 @@ CREATE TABLE IF NOT EXISTS oui_entries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_oui_len ON oui_entries(length(prefix));
+
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    kind TEXT,                              -- 'wifi' | 'bluetooth' | NULL = both
+    match_type TEXT NOT NULL,               -- device_id | name_contains | vendor_contains | rssi_above
+    match_value TEXT NOT NULL,
+    location_id INTEGER,                    -- NULL = any location
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS alert_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id INTEGER NOT NULL,
+    triggered_at TEXT NOT NULL,
+    location_id INTEGER,
+    device_kind TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    rssi INTEGER,
+    details_json TEXT NOT NULL,
+    FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_alert_events_time ON alert_events(triggered_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_events_rule ON alert_events(rule_id);
 """
 
 
@@ -110,6 +136,17 @@ async def touch_location(location_id: int) -> None:
             (now, location_id),
         )
         await db.commit()
+
+
+async def list_location_centroids() -> list[dict]:
+    """Lightweight: id/lat/lon/radius for every location. Used by the
+    location manager to test 'am I inside an existing radius'."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, lat, lon, radius_m FROM sensor_locations"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
 
 async def list_locations() -> list[dict]:
@@ -207,6 +244,95 @@ async def insert_observation(
             (location_id, kind, device_id, rssi, lat, lon, now, json.dumps(raw, default=str)),
         )
         await db.commit()
+
+
+# ---------- alerts ----------
+async def list_alert_rules() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM alert_rules ORDER BY id DESC"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def create_alert_rule(
+    name: str, kind: str | None, match_type: str, match_value: str,
+    location_id: int | None,
+) -> int:
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO alert_rules(name,enabled,kind,match_type,match_value,location_id,created_at) "
+            "VALUES(?,1,?,?,?,?,?)",
+            (name, kind, match_type, match_value, location_id, now),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def update_alert_rule(rule_id: int, fields: dict) -> None:
+    if not fields:
+        return
+    cols = ", ".join(f"{k}=?" for k in fields.keys())
+    args = list(fields.values()) + [rule_id]
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(f"UPDATE alert_rules SET {cols} WHERE id=?", args)
+        await db.commit()
+
+
+async def delete_alert_rule(rule_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM alert_events WHERE rule_id=?", (rule_id,))
+        await db.execute("DELETE FROM alert_rules WHERE id=?", (rule_id,))
+        await db.commit()
+
+
+async def insert_alert_event(
+    rule_id: int, location_id: int | None, device_kind: str, device_id: str,
+    rssi: int | None, details: dict,
+) -> int:
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO alert_events(rule_id,triggered_at,location_id,device_kind,"
+            "device_id,rssi,details_json) VALUES(?,?,?,?,?,?,?)",
+            (rule_id, now, location_id, device_kind, device_id, rssi, json.dumps(details, default=str)),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def list_alert_events(limit: int = 100, since_id: int | None = None) -> list[dict]:
+    sql = (
+        "SELECT e.*, r.name AS rule_name, r.match_type AS rule_match_type "
+        "FROM alert_events e LEFT JOIN alert_rules r ON r.id = e.rule_id "
+    )
+    args: list = []
+    if since_id is not None:
+        sql += "WHERE e.id > ? "
+        args.append(since_id)
+    sql += "ORDER BY e.id DESC LIMIT ?"
+    args.append(limit)
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(sql, tuple(args)) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    for r in rows:
+        try:
+            r["details"] = json.loads(r.pop("details_json"))
+        except (TypeError, ValueError):
+            r["details"] = {}
+    return rows
+
+
+async def clear_alert_events() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM alert_events") as cur:
+            n = (await cur.fetchone())[0]
+        await db.execute("DELETE FROM alert_events")
+        await db.commit()
+    return n
 
 
 async def replace_oui_entries(rows: list[tuple[str, str, str, str | None]]) -> int:

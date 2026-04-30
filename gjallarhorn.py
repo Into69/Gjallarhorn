@@ -18,6 +18,7 @@ from services.bluetooth_scanner import list_bluetooth_adapters, list_bluetooth_a
 from services.scan_orchestrator import ScanOrchestrator
 from services.location_manager import location_manager
 from services.oui import oui_service
+from services.alert_service import alert_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 for _noisy in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"):
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
     gps = GPSService(host=s.gpsd_host, port=s.gpsd_port, poll_s=s.gps_poll_interval_s)
     await gps.start()
     await oui_service.ensure_loaded()
+    await alert_service.load_rules()
     orchestrator = ScanOrchestrator(gps)
     await orchestrator.start()
     log.info("Gjallarhorn started")
@@ -235,6 +237,99 @@ async def api_oui_update():
 @app.get("/api/oui/lookup")
 async def api_oui_lookup(mac: str):
     return {"mac": mac, "vendor": await oui_service.lookup(mac)}
+
+
+# ---------- Alerts ----------
+ALLOWED_MATCH_TYPES = {"device_id", "name_contains", "vendor_contains", "rssi_above"}
+ALLOWED_KINDS = {None, "wifi", "bluetooth"}
+
+
+@app.get("/api/alerts/rules")
+async def api_list_rules():
+    return {"rules": await db.list_alert_rules()}
+
+
+@app.post("/api/alerts/rules")
+async def api_create_rule(payload: dict):
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    match_type = payload.get("match_type")
+    if match_type not in ALLOWED_MATCH_TYPES:
+        raise HTTPException(400, f"match_type must be one of {sorted(ALLOWED_MATCH_TYPES)}")
+    match_value = (payload.get("match_value") or "").strip()
+    if not match_value:
+        raise HTTPException(400, "match_value required")
+    kind = payload.get("kind") or None
+    if kind not in ALLOWED_KINDS:
+        raise HTTPException(400, "kind must be wifi, bluetooth, or null")
+    location_id = payload.get("location_id")
+    if location_id in ("", None):
+        location_id = None
+    else:
+        try:
+            location_id = int(location_id)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "location_id must be an integer")
+    rule_id = await db.create_alert_rule(name, kind, match_type, match_value, location_id)
+    await alert_service.reload()
+    return {"id": rule_id}
+
+
+@app.patch("/api/alerts/rules/{rule_id}")
+async def api_update_rule(rule_id: int, payload: dict):
+    fields: dict = {}
+    if "enabled" in payload:
+        fields["enabled"] = 1 if payload["enabled"] else 0
+    if "name" in payload:
+        name = (payload["name"] or "").strip()
+        if not name:
+            raise HTTPException(400, "name cannot be empty")
+        fields["name"] = name
+    if "match_type" in payload:
+        if payload["match_type"] not in ALLOWED_MATCH_TYPES:
+            raise HTTPException(400, "invalid match_type")
+        fields["match_type"] = payload["match_type"]
+    if "match_value" in payload:
+        v = (payload["match_value"] or "").strip()
+        if not v:
+            raise HTTPException(400, "match_value cannot be empty")
+        fields["match_value"] = v
+    if "kind" in payload:
+        k = payload["kind"] or None
+        if k not in ALLOWED_KINDS:
+            raise HTTPException(400, "invalid kind")
+        fields["kind"] = k
+    if "location_id" in payload:
+        v = payload["location_id"]
+        if v in ("", None):
+            fields["location_id"] = None
+        else:
+            try:
+                fields["location_id"] = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "location_id must be int or null")
+    await db.update_alert_rule(rule_id, fields)
+    await alert_service.reload()
+    return {"ok": True}
+
+
+@app.delete("/api/alerts/rules/{rule_id}")
+async def api_delete_rule(rule_id: int):
+    await db.delete_alert_rule(rule_id)
+    await alert_service.reload()
+    return {"ok": True}
+
+
+@app.get("/api/alerts/events")
+async def api_list_events(limit: int = 100, since_id: Optional[int] = None):
+    return {"events": await db.list_alert_events(limit=limit, since_id=since_id)}
+
+
+@app.delete("/api/alerts/events")
+async def api_clear_events():
+    n = await db.clear_alert_events()
+    return {"deleted": n}
 
 
 # ---------- Manual control ----------
