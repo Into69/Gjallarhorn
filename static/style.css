@@ -273,7 +273,18 @@ button.danger:hover:not(:disabled) {
   border-color: var(--err);
 }
 button.danger:disabled { opacity: 0.5; cursor: not-allowed; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
 .toolbar-spacer { flex: 1; }
+
+.warn-box {
+  background: rgba(255, 184, 107, 0.07);
+  border: 1px solid #3a2c14;
+  color: var(--warn);
+  padding: 8px 12px; border-radius: 6px; margin: 8px 0;
+}
+.warn-box pre { color: var(--fg); margin: 6px 0 0; font-size: 12px; }
+#upd-target pre { font-size: 12px; color: var(--fg); background: var(--panel-2);
+  padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); margin: 4px 0 8px; }
 
 /* ── alerts tab ───────────────────────────────────── */
 .tab-badge {

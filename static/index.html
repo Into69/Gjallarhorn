@@ -260,6 +260,31 @@
         <span id="save-status"></span>
       </form>
 
+      <fieldset id="update-panel">
+        <legend>Updates</legend>
+        <p class="muted">Pulls the latest commits from <code>origin</code> and restarts the app. The working tree must be clean. Do not expose this server to untrusted networks.</p>
+        <dl id="update-stats">
+          <dt>Current</dt><dd id="upd-current">—</dd>
+          <dt>Branch</dt><dd id="upd-branch">—</dd>
+          <dt>Remote</dt><dd id="upd-remote">—</dd>
+          <dt>Status</dt><dd id="upd-state">—</dd>
+        </dl>
+        <div id="upd-target" hidden>
+          <p class="muted">Available update:</p>
+          <pre id="upd-target-info" class="mono"></pre>
+        </div>
+        <div id="upd-dirty" class="warn-box" hidden>
+          <strong>Local changes present</strong> — refusing to update. Commit, stash, or discard:
+          <pre id="upd-dirty-files" class="mono"></pre>
+        </div>
+        <div class="toolbar">
+          <button id="upd-check">Check for updates</button>
+          <button id="upd-apply" class="secondary" disabled>Download &amp; restart</button>
+          <button id="upd-restart" class="danger">Restart now</button>
+          <span id="upd-status" class="muted"></span>
+        </div>
+      </fieldset>
+
       <fieldset id="oui-panel">
         <legend>OUI / vendor database</legend>
         <p class="muted">Downloads IEEE registries (MA-L, MA-M, MA-S) and resolves WiFi BSSIDs and Bluetooth MACs to vendor names. A scheduled agent refreshes this monthly.</p>

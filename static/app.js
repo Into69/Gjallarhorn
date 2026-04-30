@@ -704,6 +704,126 @@ $("#oui-test").addEventListener("click", async () => {
   }
 });
 
+// ---------- updates ----------
+function renderUpdateStatus(s) {
+  if (!s.ok) {
+    $("#upd-state").textContent = s.error || "unavailable";
+    $("#upd-apply").disabled = true;
+    return;
+  }
+  const cur = s.current;
+  $("#upd-current").innerHTML = cur
+    ? `<span class="mono">${escapeHtml(cur.short)}</span> · ${escapeHtml(cur.subject)} <span class="muted">(${formatTime(cur.date)})</span>`
+    : "—";
+  $("#upd-branch").textContent = s.branch || "—";
+  $("#upd-remote").innerHTML = s.remote_url
+    ? `<span class="mono">${escapeHtml(s.remote_url)}</span>`
+    : "—";
+
+  let stateText = "up to date";
+  let stateCls = "";
+  if (s.fetch_error) { stateText = "fetch failed: " + s.fetch_error; stateCls = "warn"; }
+  else if (s.behind > 0 && s.ahead > 0) { stateText = `diverged (behind ${s.behind}, ahead ${s.ahead}) — fast-forward not possible`; stateCls = "warn"; }
+  else if (s.behind > 0) { stateText = `${s.behind} commit${s.behind === 1 ? "" : "s"} behind origin`; stateCls = "warn"; }
+  else if (s.ahead > 0) { stateText = `${s.ahead} commit${s.ahead === 1 ? "" : "s"} ahead of origin`; }
+  $("#upd-state").innerHTML = stateCls
+    ? `<span class="pill ${stateCls}">${escapeHtml(stateText)}</span>`
+    : escapeHtml(stateText);
+
+  // Target preview
+  const showTarget = s.behind > 0 && s.target;
+  $("#upd-target").hidden = !showTarget;
+  if (showTarget) {
+    $("#upd-target-info").textContent =
+      `${s.target.short}  ${s.target.subject}\n` +
+      `${s.target.author} · ${formatTime(s.target.date)}` +
+      (s.requirements_changed ? `\n\nrequirements.txt changed — run "pip install -r requirements.txt" before/after restart` : "");
+  }
+
+  // Dirty warning
+  $("#upd-dirty").hidden = !s.dirty;
+  if (s.dirty) {
+    $("#upd-dirty-files").textContent = (s.dirty_files || []).join("\n") || "(unknown)";
+  }
+
+  // Apply button is enabled only when we can actually do a fast-forward
+  $("#upd-apply").disabled = !(s.behind > 0 && s.ahead === 0 && !s.dirty && s.upstream);
+}
+
+async function loadUpdateStatus() {
+  try {
+    const s = await api("/api/system/update/status");
+    renderUpdateStatus(s);
+  } catch (e) {
+    $("#upd-state").textContent = "error: " + e.message;
+  }
+}
+
+$("#upd-check").addEventListener("click", async () => {
+  const btn = $("#upd-check");
+  btn.disabled = true; btn.textContent = "Checking…";
+  $("#upd-status").textContent = "fetching origin…";
+  try {
+    const s = await api("/api/system/update/check", { method: "POST" });
+    renderUpdateStatus(s);
+    $("#upd-status").textContent = s.fetch_error ? "" : "checked";
+    setTimeout(() => ($("#upd-status").textContent = ""), 1500);
+  } catch (e) {
+    $("#upd-status").textContent = "error: " + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = "Check for updates";
+  }
+});
+
+$("#upd-apply").addEventListener("click", async () => {
+  if (!confirm("Pull the latest commits from origin and restart the app?\n\nIn-flight requests will fail briefly during the restart.")) return;
+  const btn = $("#upd-apply");
+  btn.disabled = true; btn.textContent = "Updating…";
+  $("#upd-status").textContent = "pulling…";
+  try {
+    const r = await api("/api/system/update/apply", { method: "POST", body: JSON.stringify({ restart: true }) });
+    if (r.updated) {
+      $("#upd-status").textContent = r.restarting ? "updated — restarting…" : "updated";
+      if (r.restarting) waitForRestart();
+    } else {
+      $("#upd-status").textContent = "already up to date";
+      await loadUpdateStatus();
+    }
+  } catch (e) {
+    $("#upd-status").textContent = "error: " + e.message;
+    btn.disabled = false;
+  }
+  btn.textContent = "Download & restart";
+});
+
+$("#upd-restart").addEventListener("click", async () => {
+  if (!confirm("Restart the app now? In-flight requests will fail briefly.")) return;
+  $("#upd-status").textContent = "restarting…";
+  try {
+    await api("/api/system/restart", { method: "POST" });
+    waitForRestart();
+  } catch (e) {
+    $("#upd-status").textContent = "error: " + e.message;
+  }
+});
+
+async function waitForRestart() {
+  // Poll until the new process answers, then refresh.
+  const deadline = Date.now() + 30000;
+  await new Promise(r => setTimeout(r, 1500));
+  while (Date.now() < deadline) {
+    try {
+      await fetch("/api/system/update/status", { cache: "no-store" });
+      $("#upd-status").textContent = "back online — reloading…";
+      setTimeout(() => location.reload(), 600);
+      return;
+    } catch {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  $("#upd-status").textContent = "timed out waiting for restart — reload manually";
+}
+
 // ---------- utils ----------
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -724,6 +844,7 @@ function formatTime(iso) {
   pollGps();
   refreshLocationMarkers();
   refreshOuiStatus();
+  loadUpdateStatus();
   setInterval(pollGps, 1500);
   setInterval(refreshLocationMarkers, 5000);
   setInterval(refreshOuiStatus, 10000);

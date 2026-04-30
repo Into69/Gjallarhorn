@@ -115,6 +115,41 @@ async def api_test_discord_webhook():
     return {"ok": True}
 
 
+# ---------- Self-update ----------
+@app.get("/api/system/update/status")
+async def api_update_status():
+    from services import updater
+    return await updater.get_status(do_fetch=False)
+
+
+@app.post("/api/system/update/check")
+async def api_update_check():
+    from services import updater
+    return await updater.get_status(do_fetch=True)
+
+
+@app.post("/api/system/update/apply")
+async def api_update_apply(payload: dict | None = None):
+    """Fast-forward pull from origin and (by default) restart the process."""
+    from services import updater
+    restart = True if payload is None else bool(payload.get("restart", True))
+    try:
+        result = await updater.apply_update()
+    except updater.GitError as e:
+        raise HTTPException(409, str(e))
+    if result.get("updated") and restart:
+        updater.schedule_restart()
+        result["restarting"] = True
+    return result
+
+
+@app.post("/api/system/restart")
+async def api_system_restart():
+    from services import updater
+    updater.schedule_restart()
+    return {"ok": True, "restarting": True}
+
+
 # ---------- Interfaces / adapters ----------
 @app.get("/api/interfaces/wifi")
 async def api_wifi_interfaces():
