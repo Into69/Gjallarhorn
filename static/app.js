@@ -53,6 +53,66 @@ async function applyMapProvider(key) {
 }
 
 // ---------- live status / GPS poll ----------
+const CARDINAL = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                  "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+function cardinal(deg) {
+  if (deg == null || isNaN(deg)) return "";
+  return CARDINAL[Math.round(((deg % 360 + 360) % 360) / 22.5) % 16];
+}
+
+function renderFixCard(fix) {
+  const modeEl = $("#fix-mode");
+  if (fix.mode >= 3) { modeEl.textContent = "3D Fix"; modeEl.className = "fix-mode fix-3d"; }
+  else if (fix.mode === 2) { modeEl.textContent = "2D Fix"; modeEl.className = "fix-mode fix-2d"; }
+  else { modeEl.textContent = "No Fix"; modeEl.className = "fix-mode no-fix"; }
+
+  const used = fix.sats_used ?? null, vis = fix.sats_visible ?? null;
+  $("#fix-sats").textContent = (used != null && vis != null) ? `${used}/${vis} sats`
+                              : (vis != null ? `${vis} visible` : "— sats");
+
+  $("#fix-lat").textContent = fix.lat != null ? `${fix.lat.toFixed(6)}°` : "—";
+  $("#fix-lon").textContent = fix.lon != null ? `${fix.lon.toFixed(6)}°` : "—";
+
+  $("#fix-alt").innerHTML = fix.alt != null
+    ? `${fix.alt.toFixed(1)} <span class="unit">m</span>`
+    : `<span class="unit">—</span>`;
+
+  if (fix.speed != null) {
+    const kmh = (fix.speed * 3.6).toFixed(1);
+    $("#fix-speed").innerHTML =
+      `${fix.speed.toFixed(2)} <span class="unit">m/s</span><span class="sub">${kmh} km/h</span>`;
+  } else {
+    $("#fix-speed").innerHTML = `<span class="unit">—</span>`;
+  }
+
+  if (fix.track != null) {
+    $("#fix-heading").innerHTML =
+      `${Math.round(fix.track)}° <span class="unit">${cardinal(fix.track)}</span>`;
+  } else {
+    $("#fix-heading").innerHTML = `<span class="unit">—</span>`;
+  }
+
+  if (fix.error_h != null) {
+    const sub = fix.error_v != null ? `<span class="sub">±${fix.error_v.toFixed(1)} m vert</span>` : "";
+    $("#fix-accuracy").innerHTML =
+      `±${fix.error_h.toFixed(1)} <span class="unit">m</span>${sub}`;
+  } else {
+    $("#fix-accuracy").innerHTML = `<span class="unit">—</span>`;
+  }
+
+  const pct = (used != null && vis) ? (used / vis) * 100 : 0;
+  $("#fix-sat-fill").style.width = `${Math.max(0, Math.min(100, pct))}%`;
+  $("#fix-sat-detail").textContent = (used != null && vis != null)
+    ? `${used} used / ${vis} visible` : "—";
+
+  if (fix.time) {
+    try { $("#fix-updated").textContent = new Date(fix.time).toLocaleTimeString(); }
+    catch { $("#fix-updated").textContent = String(fix.time); }
+  } else {
+    $("#fix-updated").textContent = "—";
+  }
+}
+
 async function pollGps() {
   try {
     const data = await api("/api/gps");
@@ -71,7 +131,8 @@ async function pollGps() {
     $("#loc-status").textContent = `Loc: ${data.active_location_id ?? "—"}`;
     $("#loc-status").className = "pill " + (data.active_location_id ? "ok" : "");
 
-    $("#fix-detail").textContent = JSON.stringify(fix, null, 2);
+    renderFixCard(fix);
+    $("#fix-active-loc").textContent = data.active_location_id ?? "—";
 
     if (fix.lat != null && fix.lon != null) {
       const ll = [fix.lat, fix.lon];
@@ -95,17 +156,57 @@ async function pollGps() {
   }
 }
 
+function locationTooltipHtml(loc, isActive) {
+  const label = escapeHtml(loc.label || `Location ${loc.id}`);
+  const activeBadge = isActive ? `<span class="gj-tip-badge active">ACTIVE</span>` : "";
+  return `
+    <div class="gj-tip-card">
+      <div class="gj-tip-header">
+        <span class="gj-tip-id">#${loc.id}</span>
+        <span class="gj-tip-label">${label}</span>
+        ${activeBadge}
+      </div>
+      <div class="gj-tip-coords">${loc.lat.toFixed(5)}, ${loc.lon.toFixed(5)}</div>
+      <div class="gj-tip-stats">
+        <div class="gj-tip-stat">
+          <span class="gj-tip-stat-label">WiFi</span>
+          <span class="gj-tip-stat-value wifi">${loc.wifi_count ?? 0}</span>
+        </div>
+        <div class="gj-tip-stat">
+          <span class="gj-tip-stat-label">Bluetooth</span>
+          <span class="gj-tip-stat-value bt">${loc.bt_count ?? 0}</span>
+        </div>
+        <div class="gj-tip-stat">
+          <span class="gj-tip-stat-label">Fixes</span>
+          <span class="gj-tip-stat-value">${loc.fix_count ?? 0}</span>
+        </div>
+        <div class="gj-tip-stat">
+          <span class="gj-tip-stat-label">Radius</span>
+          <span class="gj-tip-stat-value">${Math.round(loc.radius_m)}<span class="gj-tip-unit">m</span></span>
+        </div>
+      </div>
+    </div>`;
+}
+
 async function refreshLocationMarkers() {
   try {
     const { locations, active_id } = await api("/api/locations");
     for (const m of locationMarkers.values()) map.removeLayer(m);
     locationMarkers.clear();
     for (const loc of locations) {
+      const isActive = loc.id === active_id;
       const c = L.circle([loc.lat, loc.lon], {
         radius: loc.radius_m,
-        color: loc.id === active_id ? "#79e08c" : "#ffb86b",
-        weight: 1, fillOpacity: 0.08,
-      }).bindPopup(`<b>${loc.label || `Location ${loc.id}`}</b><br/>fixes: ${loc.fix_count}`);
+        color: isActive ? "#79e08c" : "#ffb86b",
+        weight: 1.5,
+        fillOpacity: isActive ? 0.12 : 0.06,
+      }).bindTooltip(locationTooltipHtml(loc, isActive), {
+        className: "gj-tip",
+        direction: "top",
+        offset: [0, -4],
+        opacity: 1,
+        sticky: true,
+      });
       c.addTo(map);
       locationMarkers.set(loc.id, c);
     }
@@ -193,6 +294,30 @@ $("#loc-refresh").addEventListener("click", refreshLocations);
 $("#loc-new").addEventListener("click", async () => {
   try { await api("/api/locations/new", { method: "POST" }); refreshLocations(); }
   catch (e) { alert(e.message); }
+});
+$("#loc-delete-all").addEventListener("click", async () => {
+  const ok = confirm(
+    "Delete ALL locations?\n\n" +
+    "This permanently removes every sensor location AND every device " +
+    "and observation tied to them. The active location will be re-opened " +
+    "from the next GPS fix.\n\n" +
+    "This cannot be undone."
+  );
+  if (!ok) return;
+  const btn = $("#loc-delete-all");
+  btn.disabled = true; btn.textContent = "Deleting…";
+  try {
+    const res = await api("/api/locations", { method: "DELETE" });
+    const d = res.deleted || {};
+    alert(`Deleted ${d.locations || 0} locations, ${d.devices || 0} devices, ${d.observations || 0} observations.`);
+    await refreshLocations();
+    await refreshLocationMarkers();
+    await loadLocationOptions();
+  } catch (e) {
+    alert("Delete failed: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "Delete all";
+  }
 });
 
 // ---------- settings tab ----------

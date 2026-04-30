@@ -26,8 +26,52 @@
     <section id="tab-map" class="tab active">
       <div id="map"></div>
       <aside id="map-side">
-        <h3>Current fix</h3>
-        <pre id="fix-detail">…</pre>
+        <div class="fix-card">
+          <div class="fix-header">
+            <span id="fix-mode" class="fix-mode no-fix">No fix</span>
+            <span id="fix-sats" class="fix-sats">— sats</span>
+          </div>
+
+          <div class="fix-coords">
+            <div class="fix-coord">
+              <label>Latitude</label>
+              <div id="fix-lat" class="fix-coord-value">—</div>
+            </div>
+            <div class="fix-coord">
+              <label>Longitude</label>
+              <div id="fix-lon" class="fix-coord-value">—</div>
+            </div>
+          </div>
+
+          <div class="fix-grid">
+            <div class="fix-stat">
+              <label>Altitude</label>
+              <div id="fix-alt" class="fix-stat-value">—</div>
+            </div>
+            <div class="fix-stat">
+              <label>Speed</label>
+              <div id="fix-speed" class="fix-stat-value">—</div>
+            </div>
+            <div class="fix-stat">
+              <label>Heading</label>
+              <div id="fix-heading" class="fix-stat-value">—</div>
+            </div>
+            <div class="fix-stat">
+              <label>Accuracy</label>
+              <div id="fix-accuracy" class="fix-stat-value">—</div>
+            </div>
+          </div>
+
+          <div class="fix-sat-bar">
+            <label>Satellites <span id="fix-sat-detail">—</span></label>
+            <div class="sat-bar-track"><div id="fix-sat-fill" class="sat-bar-fill"></div></div>
+          </div>
+
+          <div class="fix-footer">
+            <span class="fix-active-loc">Active loc <strong id="fix-active-loc">—</strong></span>
+            <span class="fix-updated">Updated <span id="fix-updated">—</span></span>
+          </div>
+        </div>
       </aside>
     </section>
 
@@ -61,6 +105,8 @@
       <div class="toolbar">
         <button id="loc-refresh">Refresh</button>
         <button id="loc-new">Force new location</button>
+        <span class="toolbar-spacer"></span>
+        <button id="loc-delete-all" class="danger">Delete all</button>
       </div>
       <table id="loc-table">
         <thead>

@@ -113,12 +113,41 @@ async def touch_location(location_id: int) -> None:
 
 
 async def list_locations() -> list[dict]:
+    sql = """
+        SELECT l.*,
+            COALESCE(SUM(CASE WHEN d.kind = 'wifi'      THEN 1 ELSE 0 END), 0) AS wifi_count,
+            COALESCE(SUM(CASE WHEN d.kind = 'bluetooth' THEN 1 ELSE 0 END), 0) AS bt_count,
+            COALESCE(SUM(d.seen_count), 0) AS total_observations
+        FROM sensor_locations l
+        LEFT JOIN devices d ON d.location_id = l.id
+        GROUP BY l.id
+        ORDER BY l.id DESC
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM sensor_locations ORDER BY id DESC"
-        ) as cur:
+        async with db.execute(sql) as cur:
             return [dict(r) for r in await cur.fetchall()]
+
+
+async def delete_all_locations() -> dict:
+    """Delete every sensor location and all associated devices/observations.
+    Returns the row counts that were removed."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM sensor_locations") as cur:
+            n_loc = (await cur.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM devices") as cur:
+            n_dev = (await cur.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM observations") as cur:
+            n_obs = (await cur.fetchone())[0]
+        await db.execute("DELETE FROM observations")
+        await db.execute("DELETE FROM devices")
+        await db.execute("DELETE FROM sensor_locations")
+        # Reset AUTOINCREMENT counters so new ids start from 1
+        await db.execute(
+            "DELETE FROM sqlite_sequence WHERE name IN ('sensor_locations','observations')"
+        )
+        await db.commit()
+    return {"locations": n_loc, "devices": n_dev, "observations": n_obs}
 
 
 async def update_location_label(location_id: int, label: str) -> None:

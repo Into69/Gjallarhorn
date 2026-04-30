@@ -205,6 +205,18 @@ async def api_location_devices(loc_id: int, kind: Optional[str] = None):
     return {"devices": await db.devices_at_location(loc_id, kind)}
 
 
+@app.delete("/api/locations")
+async def api_delete_all_locations():
+    """Wipe every location and all associated devices and observations."""
+    counts = await db.delete_all_locations()
+    # Reset the active-location pointer so the next GPS fix opens a fresh one.
+    location_manager._active_id = None  # type: ignore[attr-defined]
+    location_manager._active_lat = None  # type: ignore[attr-defined]
+    location_manager._active_lon = None  # type: ignore[attr-defined]
+    log.info("Deleted all locations: %s", counts)
+    return {"ok": True, "deleted": counts}
+
+
 # ---------- OUI database ----------
 @app.get("/api/oui/status")
 async def api_oui_status():
