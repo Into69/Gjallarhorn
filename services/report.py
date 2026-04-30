@@ -98,20 +98,34 @@ def _fmt_time(iso: str | None) -> str:
         return iso
 
 
-def _truncate(s: str, n: int) -> str:
-    s = s or ""
-    return s if len(s) <= n else s[: n - 1] + "…"
+# Reusable cell paragraph styles. Using Paragraph (rather than raw strings)
+# inside Table cells lets text wrap to multiple lines so nothing gets clipped
+# when content exceeds the column width. wordWrap="CJK" ensures even long
+# unbroken tokens (BSSIDs, run-on SSIDs) wrap at the cell edge.
+_CELL_STYLE = ParagraphStyle(
+    "rcell", fontName="Helvetica", fontSize=8, leading=10, wordWrap="CJK",
+)
+_CELL_MONO_STYLE = ParagraphStyle(
+    "rcell_mono", fontName="Courier", fontSize=7.5, leading=9.5, wordWrap="CJK",
+)
 
 
-def _device_row(d: dict) -> tuple[str, str, str, str, str, str]:
+def _cell(text: Any, *, mono: bool = False) -> Paragraph:
+    """Wrap a value in a Paragraph so the table cell auto-grows vertically."""
+    s = "" if text is None else str(text)
+    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return Paragraph(s, _CELL_MONO_STYLE if mono else _CELL_STYLE)
+
+
+def _device_row(d: dict) -> tuple:
     det = d.get("details") or {}
     name = det.get("ssid") or det.get("name") or ""
     vendor = det.get("vendor") or ""
     return (
         d.get("kind", ""),
-        d.get("device_id", ""),
-        _truncate(name, 24),
-        _truncate(vendor, 22),
+        _cell(d.get("device_id", ""), mono=True),
+        _cell(name),
+        _cell(vendor),
         f"{d.get('best_rssi', '')} dBm",
         str(d.get("seen_count", "")),
     )
@@ -124,13 +138,18 @@ def _table(headers: list[str], rows: list[tuple], col_widths: list[float] | None
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f4060")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("FONTSIZE", (0, 0), (-1, 0), 9),
+        # Plain-string data cells inherit this size; Paragraph cells use
+        # their own ParagraphStyle and ignore it.
+        ("FONTSIZE", (0, 1), (-1, -1), 8.5),
         ("BOTTOMPADDING", (0, 0), (-1, 0), 5),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f5f9")]),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#c8cdd5")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 1), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
     ]))
     return t
 
@@ -164,6 +183,7 @@ async def build_report_pdf() -> bytes:
     flow.append(_table(
         ["Locations", "Wi-Fi devices", "Bluetooth devices", "Total observations", "Common devices"],
         [(str(len(locations)), str(total_wifi), str(total_bt), str(total_obs), str(len(common)))],
+        col_widths=[1.46 * inch] * 5,
     ))
     flow.append(Spacer(1, 16))
 
@@ -182,7 +202,7 @@ async def build_report_pdf() -> bytes:
         comp_rows = [
             (
                 str(l["id"]),
-                _truncate(l.get("label") or "", 28),
+                _cell(l.get("label") or ""),
                 str(l.get("wifi_count") or 0),
                 str(l.get("bt_count") or 0),
                 str(l.get("total_observations") or 0),
@@ -194,7 +214,7 @@ async def build_report_pdf() -> bytes:
         flow.append(_table(
             ["ID", "Label", "Wi-Fi", "BT", "Obs.", "Created", "Last seen"],
             comp_rows,
-            col_widths=[0.4 * inch, 2.0 * inch, 0.6 * inch, 0.5 * inch, 0.7 * inch, 1.2 * inch, 1.2 * inch],
+            col_widths=[0.45 * inch, 2.4 * inch, 0.6 * inch, 0.55 * inch, 0.7 * inch, 1.3 * inch, 1.3 * inch],
         ))
 
     # ── Common devices ──
@@ -213,23 +233,21 @@ async def build_report_pdf() -> bytes:
             det = d.get("details") or {}
             name = det.get("ssid") or det.get("name") or ""
             vendor = det.get("vendor") or ""
-            locs = ", ".join(str(x) for x in (d.get("locations") or [])[:8])
-            if d.get("locations") and len(d["locations"]) > 8:
-                locs += f", +{len(d['locations']) - 8}"
+            locs = ", ".join(str(x) for x in (d.get("locations") or []))
             rows.append((
                 d.get("kind", ""),
-                d.get("device_id", ""),
-                _truncate(name, 22),
-                _truncate(vendor, 20),
+                _cell(d.get("device_id", ""), mono=True),
+                _cell(name),
+                _cell(vendor),
                 str(d.get("n_locations", "")),
-                locs,
+                _cell(locs),
                 f"{d.get('max_rssi', '')} dBm",
                 str(d.get("total_seen", "")),
             ))
         flow.append(_table(
             ["Kind", "Device ID", "Name / SSID", "Vendor", "#locs", "Locations", "Best RSSI", "Total seen"],
             rows,
-            col_widths=[0.5 * inch, 1.1 * inch, 1.1 * inch, 1.0 * inch, 0.45 * inch, 1.0 * inch, 0.7 * inch, 0.65 * inch],
+            col_widths=[0.55 * inch, 1.20 * inch, 1.20 * inch, 1.10 * inch, 0.45 * inch, 1.40 * inch, 0.70 * inch, 0.70 * inch],
         ))
 
     # ── Per-location detail ──
@@ -280,7 +298,7 @@ async def build_report_pdf() -> bytes:
             flow.append(_table(
                 ["Kind", "Device ID", "Name / SSID", "Vendor", "Best RSSI", "Seen"],
                 [_device_row(d) for d in top],
-                col_widths=[0.6 * inch, 1.4 * inch, 1.7 * inch, 1.5 * inch, 0.8 * inch, 0.5 * inch],
+                col_widths=[0.65 * inch, 1.5 * inch, 2.0 * inch, 1.7 * inch, 0.85 * inch, 0.6 * inch],
             ))
 
     buf = io.BytesIO()
