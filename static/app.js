@@ -578,6 +578,7 @@ $("#rule-form").addEventListener("submit", async (e) => {
   try {
     await api("/api/alerts/rules", { method: "POST", body: JSON.stringify(payload) });
     e.target.reset();
+    applyMatchTypeUI($("#rule-match-type").value);
     $("#rule-form-status").textContent = "added";
     setTimeout(() => $("#rule-form-status").textContent = "", 1200);
     await refreshAlertRules();
@@ -593,24 +594,26 @@ $("#alerts-clear").addEventListener("click", async () => {
   setBadge(0);
 });
 
+const MATCH_TYPE_PLACEHOLDERS = {
+  device_id: "aa:bb:cc:dd:ee:ff or aa:bb:cc",
+  name_contains: "Apple, Pixel, MyNet…",
+  vendor_contains: "Samsung, Cisco…",
+  rssi_above: "-60",
+  new_device: "300 (seconds the location must be established first; 0 = arm immediately)",
+  cross_location: "5/2 — appears in at least 2 of the last 5 locations",
+};
+const MATCH_TYPE_DEFAULTS = {
+  rssi_above: "-60",
+  new_device: "300",
+  cross_location: "5/2",
+};
+
 function applyMatchTypeUI(matchType) {
-  const placeholders = {
-    device_id: "aa:bb:cc:dd:ee:ff or aa:bb:cc",
-    name_contains: "Apple, Pixel, MyNet…",
-    vendor_contains: "Samsung, Cisco…",
-    rssi_above: "-60",
-    new_device: "300 (seconds the location must be established first; 0 = arm immediately)",
-    cross_location: "5/2 — appears in at least 2 of the last 5 locations",
-  };
-  $("#rule-match-value").placeholder = placeholders[matchType] || "";
-  // Sensible default for new_device's time threshold.
-  if (matchType === "new_device" && !$("#rule-match-value").value) {
-    $("#rule-match-value").value = "300";
-  }
-  // Sensible default for cross_location.
-  if (matchType === "cross_location" && !$("#rule-match-value").value) {
-    $("#rule-match-value").value = "5/2";
-  }
+  const v = $("#rule-match-value");
+  v.placeholder = MATCH_TYPE_PLACEHOLDERS[matchType] || "";
+  // Always swap the value to the new type's default (or clear it for free-text
+  // types) so a stale value from the previous type can't accidentally submit.
+  v.value = MATCH_TYPE_DEFAULTS[matchType] || "";
 }
 $("#rule-match-type").addEventListener("change", (e) => applyMatchTypeUI(e.target.value));
 applyMatchTypeUI($("#rule-match-type").value);
