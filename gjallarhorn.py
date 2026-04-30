@@ -13,8 +13,8 @@ import database as db
 from config import settings_store
 from models import AppSettings
 from services.gps_service import GPSService
-from services.wifi_scanner import list_wifi_interfaces
-from services.bluetooth_scanner import list_bluetooth_adapters
+from services.wifi_scanner import list_wifi_interfaces, list_wifi_interface_info
+from services.bluetooth_scanner import list_bluetooth_adapters, list_bluetooth_adapter_info
 from services.scan_orchestrator import ScanOrchestrator
 from services.location_manager import location_manager
 from services.oui import oui_service
@@ -92,11 +92,23 @@ async def api_put_settings(payload: dict) -> AppSettings:
 # ---------- Interfaces / adapters ----------
 @app.get("/api/interfaces/wifi")
 async def api_wifi_interfaces():
+    """Rich info per wireless interface, incl. associated SSID if any."""
+    return {"interfaces": await list_wifi_interface_info()}
+
+
+@app.get("/api/interfaces/wifi/names")
+async def api_wifi_interface_names():
     return {"interfaces": await list_wifi_interfaces()}
 
 
 @app.get("/api/interfaces/bluetooth")
 async def api_bt_adapters():
+    """Rich info per BlueZ adapter (address, powered, discovering, etc.)."""
+    return {"adapters": await list_bluetooth_adapter_info()}
+
+
+@app.get("/api/interfaces/bluetooth/names")
+async def api_bt_adapter_names():
     return {"adapters": await list_bluetooth_adapters()}
 
 

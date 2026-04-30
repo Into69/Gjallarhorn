@@ -12,14 +12,44 @@ log = logging.getLogger(__name__)
 
 
 async def list_bluetooth_adapters() -> list[str]:
-    """List BT adapters. On Linux uses BlueZ via DBus; falls back to a single 'default' entry."""
+    """List BT adapter names only (compat shim)."""
+    return [a["name"] for a in await list_bluetooth_adapter_info()]
+
+
+async def list_bluetooth_adapter_info() -> list[dict]:
+    """List BT adapters with details. On Linux pulls from BlueZ via DBus.
+
+    Each entry: name, address, alias, powered, discoverable, pairable,
+    discovering, class. On platforms where BlueZ isn't available
+    falls back to a single placeholder ``{"name": "default"}`` entry.
+    """
     try:
         from bleak.backends.bluezdbus.manager import get_global_bluez_manager
         mgr = await get_global_bluez_manager()
-        adapters = list(mgr._adapters.keys())  # type: ignore[attr-defined]
-        return [a.split("/")[-1] for a in adapters] or ["default"]
-    except Exception:
-        return ["default"]
+        out: list[dict] = []
+        adapters = getattr(mgr, "_adapters", {}) or {}
+        for path, props in adapters.items():
+            name = path.rstrip("/").split("/")[-1]
+            entry = {"name": name}
+            # `props` may be a dict-of-properties (newer bleak) or an
+            # adapter proxy with attribute access — try both shapes.
+            def _get(key: str, attr: str | None = None):
+                if isinstance(props, dict):
+                    return props.get(key)
+                return getattr(props, attr or key.lower(), None)
+
+            entry["address"] = _get("Address", "address")
+            entry["alias"] = _get("Alias", "alias") or _get("Name", "name")
+            entry["powered"] = _get("Powered", "powered")
+            entry["discoverable"] = _get("Discoverable", "discoverable")
+            entry["pairable"] = _get("Pairable", "pairable")
+            entry["discovering"] = _get("Discovering", "discovering")
+            entry["class"] = _get("Class")
+            out.append(entry)
+        return out or [{"name": "default"}]
+    except Exception as e:
+        log.debug("bluetooth adapter info unavailable: %s", e)
+        return [{"name": "default"}]
 
 
 async def scan_bluetooth(adapter: Optional[str], duration_s: float = 8.0) -> list[BluetoothDevice]:

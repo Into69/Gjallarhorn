@@ -86,3 +86,19 @@ fieldset label.check { grid-template-columns: auto 1fr; align-items: center; gap
   margin: 12px 0; font-size: 12px; }
 #oui-stats dt { color: var(--muted); }
 #oui-stats dd { margin: 0; font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
+
+.iface-info { margin-top: 8px; display: grid; gap: 6px; }
+.iface-card { background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px; font-size: 12px; }
+.iface-card.connected { border-color: #3a2c14; }
+.iface-card h4 { margin: 0 0 4px; font-size: 12px; color: var(--accent);
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
+.iface-card .badge { display: inline-block; padding: 1px 6px; margin-left: 6px;
+  border-radius: 999px; font-size: 11px; background: var(--panel); color: var(--muted);
+  border: 1px solid var(--border); }
+.iface-card .badge.warn { color: var(--warn); border-color: #3a2c14; }
+.iface-card .badge.ok { color: var(--ok); border-color: #1e3a25; }
+.iface-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 4px 0 0; }
+.iface-card dt { color: var(--muted); }
+.iface-card dd { margin: 0; font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
+select option:disabled { color: var(--muted); }

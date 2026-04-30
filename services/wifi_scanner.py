@@ -34,7 +34,16 @@ def _band_from_freq(freq_mhz: int) -> str:
 
 
 async def list_wifi_interfaces() -> list[str]:
-    """Return wireless interface names visible to `iw dev`."""
+    """Return only the interface names (compat shim)."""
+    return [info["name"] for info in await list_wifi_interface_info()]
+
+
+async def list_wifi_interface_info() -> list[dict]:
+    """Return rich info per wireless interface from `iw dev`.
+
+    Each entry: name, type, mac, ssid (None if not associated),
+    channel, frequency_mhz, band, width, txpower_dbm.
+    """
     if not shutil.which("iw"):
         return []
     try:
@@ -45,17 +54,93 @@ async def list_wifi_interfaces() -> list[str]:
     except Exception as e:
         log.warning("iw dev failed: %s", e)
         return []
-    names = re.findall(r"^\s*Interface\s+(\S+)", out.decode(errors="ignore"), re.MULTILINE)
-    return names
+    return _parse_iw_dev(out.decode(errors="ignore"))
+
+
+def _parse_iw_dev(text: str) -> list[dict]:
+    interfaces: list[dict] = []
+    cur: dict | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("Interface "):
+            if cur:
+                interfaces.append(cur)
+            cur = {"name": line.split(None, 1)[1]}
+        elif cur is None:
+            continue
+        elif line.startswith("addr "):
+            cur["mac"] = line.split(None, 1)[1].lower()
+        elif line.startswith("ssid "):
+            cur["ssid"] = line.split(None, 1)[1]
+        elif line.startswith("type "):
+            cur["type"] = line.split(None, 1)[1]
+        elif line.startswith("channel "):
+            m = re.match(r"channel\s+(\d+)\s*\((\d+)\s*MHz\)", line)
+            if m:
+                cur["channel"] = int(m.group(1))
+                cur["frequency_mhz"] = int(m.group(2))
+                cur["band"] = _band_from_freq(int(m.group(2)))
+            mw = re.search(r"width:\s*(\S+\s*\S*)", line)
+            if mw:
+                cur["width"] = mw.group(1).rstrip(",")
+        elif line.startswith("txpower "):
+            m = re.match(r"txpower\s+([\d.]+)", line)
+            if m:
+                cur["txpower_dbm"] = float(m.group(1))
+    if cur:
+        interfaces.append(cur)
+    return interfaces
+
+
+_warned_iw_perm = False
+_warned_no_backend = False
 
 
 async def scan_wifi(interface: str) -> list[WifiDevice]:
-    """Run `iw dev <iface> scan` and parse all observable details."""
+    """Scan for nearby APs.
+
+    Tries `iw dev <iface> scan` first (full detail). If that fails with a
+    permission error, falls back to `nmcli` — NetworkManager already has
+    the privileges to scan and exposes results unprivileged.
+    """
+    global _warned_iw_perm, _warned_no_backend
     if not interface:
         return []
-    if not shutil.which("iw"):
-        log.warning("`iw` not installed; cannot scan wifi")
-        return []
+
+    devices: list[WifiDevice] = []
+    iw_err: str | None = None
+    if shutil.which("iw"):
+        devices, iw_err = await _scan_with_iw(interface)
+        if devices:
+            return await _enrich_with_vendor(devices)
+
+    if iw_err and "not permitted" in iw_err.lower():
+        if not _warned_iw_perm:
+            log.warning(
+                "iw scan denied (CAP_NET_ADMIN required). "
+                "Either run as root, or grant the cap to your python: "
+                "sudo setcap cap_net_admin,cap_net_raw+eip $(readlink -f $(which python3)). "
+                "Falling back to nmcli where available."
+            )
+            _warned_iw_perm = True
+    elif iw_err:
+        log.debug("iw scan: %s", iw_err)
+
+    if shutil.which("nmcli"):
+        devices = await _scan_with_nmcli(interface)
+        if devices:
+            return await _enrich_with_vendor(devices)
+
+    if not _warned_no_backend:
+        log.warning(
+            "No usable wifi backend (iw blocked or missing, nmcli not installed). "
+            "Install network-manager or fix `iw` privileges to enable scanning."
+        )
+        _warned_no_backend = True
+    return []
+
+
+async def _scan_with_iw(interface: str) -> tuple[list[WifiDevice], str | None]:
     try:
         proc = await asyncio.create_subprocess_exec(
             "iw", "dev", interface, "scan",
@@ -63,13 +148,108 @@ async def scan_wifi(interface: str) -> list[WifiDevice]:
         )
         out, err = await proc.communicate()
     except Exception as e:
-        log.warning("iw scan failed: %s", e)
+        return [], str(e)
+    err_text = err.decode(errors="ignore").strip()
+    if proc.returncode != 0 and not out:
+        return [], err_text or f"iw exited {proc.returncode}"
+    return list(_parse_iw_scan(out.decode(errors="ignore"))), err_text or None
+
+
+async def _scan_with_nmcli(interface: str) -> list[WifiDevice]:
+    """Fallback wifi scan via NetworkManager. Lower detail than iw but unprivileged."""
+    fields = "BSSID,SSID,CHAN,FREQ,SIGNAL,SECURITY"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "nmcli", "-t", "-f", fields, "device", "wifi", "list",
+            "ifname", interface, "--rescan", "auto",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await proc.communicate()
+    except Exception as e:
+        log.warning("nmcli scan failed: %s", e)
         return []
     if proc.returncode != 0:
-        log.warning("iw scan returned %s: %s", proc.returncode, err.decode(errors="ignore").strip())
-        if not out:
-            return []
-    devices = list(_parse_iw_scan(out.decode(errors="ignore")))
+        log.warning("nmcli returned %s: %s", proc.returncode, err.decode(errors="ignore").strip())
+        return []
+
+    now = datetime.utcnow()
+    devices: list[WifiDevice] = []
+    for line in out.decode(errors="ignore").splitlines():
+        if not line.strip():
+            continue
+        parts = _split_nmcli_terse(line)
+        if len(parts) < 6:
+            continue
+        bssid_raw, ssid, chan, freq, signal, sec = parts[:6]
+        bssid = bssid_raw.lower()
+        if not re.match(r"^[0-9a-f:]{17}$", bssid):
+            continue
+        try:
+            sig_pct = int(signal)
+        except ValueError:
+            sig_pct = 0
+        # NetworkManager reports SIGNAL as a 0-100 percentage; map to dBm
+        # via the same approximation NM uses internally (-100 dBm @ 0%, -50 dBm @ 100%).
+        rssi = -100 + sig_pct // 2
+        try:
+            freq_mhz: int | None = int(freq)
+        except ValueError:
+            freq_mhz = None
+        try:
+            channel: int | None = int(chan)
+        except ValueError:
+            channel = None
+        sec_norm = (sec or "").upper().strip() or "OPEN"
+        if "WPA3" in sec_norm or "SAE" in sec_norm:
+            enc = "WPA3"
+        elif "WPA2" in sec_norm:
+            enc = "WPA2"
+        elif "WPA" in sec_norm:
+            enc = "WPA"
+        elif "WEP" in sec_norm:
+            enc = "WEP"
+        else:
+            enc = "OPEN"
+        devices.append(WifiDevice(
+            bssid=bssid,
+            ssid=ssid or "<hidden>",
+            rssi=rssi,
+            frequency_mhz=freq_mhz,
+            channel=channel,
+            band=_band_from_freq(freq_mhz) if freq_mhz else None,
+            encryption=enc,
+            cipher=None,
+            auth=sec or None,
+            vendor_oui=bssid[:8].upper().replace(":", "-"),
+            capabilities=None,
+            beacon_interval_ms=None,
+            last_seen=now,
+        ))
+    return devices
+
+
+def _split_nmcli_terse(line: str) -> list[str]:
+    """Split nmcli -t output, treating ``\\:`` as a literal colon inside fields."""
+    parts: list[str] = []
+    cur: list[str] = []
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and i + 1 < len(line):
+            cur.append(line[i + 1])
+            i += 2
+        elif c == ":":
+            parts.append("".join(cur))
+            cur = []
+            i += 1
+        else:
+            cur.append(c)
+            i += 1
+    parts.append("".join(cur))
+    return parts
+
+
+async def _enrich_with_vendor(devices: list[WifiDevice]) -> list[WifiDevice]:
     for d in devices:
         d.vendor = await oui_service.lookup(d.bssid)
     return devices

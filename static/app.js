@@ -196,21 +196,92 @@ $("#loc-new").addEventListener("click", async () => {
 });
 
 // ---------- settings tab ----------
+function fmtKV(label, value) {
+  if (value === null || value === undefined || value === "") return "";
+  return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd>`;
+}
+
+function renderWifiCard(iface) {
+  const connected = !!iface.ssid;
+  const badges = [];
+  if (connected) badges.push(`<span class="badge warn">connected → ${escapeHtml(iface.ssid)}</span>`);
+  if (iface.type) badges.push(`<span class="badge">${escapeHtml(iface.type)}</span>`);
+  if (iface.band) badges.push(`<span class="badge">${escapeHtml(iface.band)}</span>`);
+  return `
+    <div class="iface-card ${connected ? "connected" : ""}">
+      <h4>${escapeHtml(iface.name)} ${badges.join(" ")}</h4>
+      <dl>
+        ${fmtKV("MAC", iface.mac)}
+        ${fmtKV("Type", iface.type)}
+        ${fmtKV("SSID", iface.ssid || "(not associated)")}
+        ${fmtKV("Channel", iface.channel)}
+        ${fmtKV("Frequency", iface.frequency_mhz ? iface.frequency_mhz + " MHz" : null)}
+        ${fmtKV("Width", iface.width)}
+        ${fmtKV("TX power", iface.txpower_dbm != null ? iface.txpower_dbm + " dBm" : null)}
+      </dl>
+    </div>`;
+}
+
+function renderBtCard(adapter) {
+  const badges = [];
+  if (adapter.powered === true) badges.push(`<span class="badge ok">powered</span>`);
+  if (adapter.powered === false) badges.push(`<span class="badge warn">off</span>`);
+  if (adapter.discovering) badges.push(`<span class="badge">discovering</span>`);
+  if (adapter.discoverable) badges.push(`<span class="badge">discoverable</span>`);
+  return `
+    <div class="iface-card">
+      <h4>${escapeHtml(adapter.name)} ${badges.join(" ")}</h4>
+      <dl>
+        ${fmtKV("Address", adapter.address)}
+        ${fmtKV("Alias", adapter.alias)}
+        ${fmtKV("Powered", adapter.powered)}
+        ${fmtKV("Discoverable", adapter.discoverable)}
+        ${fmtKV("Pairable", adapter.pairable)}
+        ${fmtKV("Discovering", adapter.discovering)}
+        ${fmtKV("Class", adapter.class != null ? "0x" + Number(adapter.class).toString(16) : null)}
+      </dl>
+    </div>`;
+}
+
 async function loadInterfaces() {
+  // WiFi
   const wifi = await api("/api/interfaces/wifi");
   const wsel = $("#set-wifi-iface");
   wsel.innerHTML = `<option value="">(none / auto)</option>`;
-  for (const n of wifi.interfaces) {
-    const o = document.createElement("option"); o.value = n; o.textContent = n;
+  for (const iface of wifi.interfaces) {
+    const o = document.createElement("option");
+    o.value = iface.name;
+    const tag = iface.ssid ? ` — connected to ${iface.ssid}` : "";
+    o.textContent = `${iface.name}${tag}`;
+    if (iface.ssid) {
+      o.disabled = true;
+      o.title = "Disabled: interface is associated with an access point. Disconnect it before using for scans.";
+    }
     wsel.appendChild(o);
   }
+  $("#wifi-iface-info").innerHTML = wifi.interfaces.length
+    ? wifi.interfaces.map(renderWifiCard).join("")
+    : `<div class="muted">No WiFi interfaces detected (requires Linux + <code>iw</code>).</div>`;
+
+  // Bluetooth
   const bt = await api("/api/interfaces/bluetooth");
   const bsel = $("#set-bt-adapter");
   bsel.innerHTML = `<option value="">(default)</option>`;
-  for (const n of bt.adapters) {
-    const o = document.createElement("option"); o.value = n; o.textContent = n;
+  for (const a of bt.adapters) {
+    const o = document.createElement("option");
+    o.value = a.name;
+    const addr = a.address ? ` · ${a.address}` : "";
+    const power = a.powered === false ? " · off" : "";
+    o.textContent = `${a.name}${addr}${power}`;
+    if (a.powered === false) {
+      o.disabled = true;
+      o.title = "Disabled: adapter is not powered on.";
+    }
     bsel.appendChild(o);
   }
+  $("#bt-adapter-info").innerHTML = bt.adapters.length
+    ? bt.adapters.map(renderBtCard).join("")
+    : `<div class="muted">No Bluetooth adapters detected.</div>`;
 }
 
 async function loadSettings() {
