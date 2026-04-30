@@ -741,7 +741,6 @@ function setBadge(n) {
 // Distinct from alertsLastSeenId (which represents "last viewed in feed")
 // so popups fire even when the user isn't on the alerts tab.
 let alertsLastPoppedId = 0;
-let _alertPopupTimer = null;
 // `${rule_id}|${device_id}` pairs we've already shown on the map this session.
 // A "repeat" of an existing pair (same rule firing again on the same device
 // after the cooldown) is suppressed so the operator only sees genuinely new
@@ -749,38 +748,54 @@ let _alertPopupTimer = null;
 const _alertPoppedPairs = new Set();
 function _alertPairKey(e) { return `${e.rule_id}|${e.device_id}`; }
 
+const ALERT_TOAST_TTL_MS = 8000;
+const ALERT_TOAST_MAX = 5;
+
 function showAlertOnMap(e) {
-  if (e.location_id == null) return;
-  const marker = locationMarkers.get(e.location_id);
-  if (!marker) return; // marker not loaded yet — skip rather than guess
-  const latlng = marker.getLatLng();
+  // Render as a floating toast in the map's corner — no longer pinned to
+  // any location bubble, so the popup shows even if the marker isn't on
+  // screen and doesn't drag the user's eye away from what they were looking at.
+  const stack = $("#alert-toasts");
+  if (!stack) return;
   const det = e.details || {};
   const label = det.ssid || det.name || "";
   const vendor = det.vendor || "";
-  const html = `
-    <div class="alert-popup kind-${escapeAttr(e.device_kind)}">
+
+  const toast = document.createElement("div");
+  toast.className = `alert-toast kind-${escapeAttr(e.device_kind)}`;
+  toast.innerHTML = `
+    <button class="alert-toast-close" aria-label="dismiss">×</button>
+    <div class="alert-popup">
       <div class="alert-popup-rule">⚡ ${escapeHtml(e.rule_name || "rule " + e.rule_id)}</div>
       <div><span class="mono">${escapeHtml(e.device_id)}</span></div>
       ${label ? `<div>${escapeHtml(label)}</div>` : ""}
       ${vendor ? `<div class="muted">${escapeHtml(vendor)}</div>` : ""}
       <div class="alert-popup-meta">
-        ${e.rssi != null ? `${e.rssi} dBm · ` : ""}${escapeHtml(formatTime(e.triggered_at))}
+        ${e.rssi != null ? `${e.rssi} dBm · ` : ""}${e.location_id != null ? `loc #${e.location_id} · ` : ""}${escapeHtml(formatTime(e.triggered_at))}
       </div>
     </div>
   `;
-  const popup = L.popup({
-    autoClose: false,
-    closeOnClick: false,
-    className: "gj-alert-popup",
-    offset: [0, -4],
-  }).setLatLng(latlng).setContent(html).openOn(map);
 
-  // Auto-dismiss after a few seconds. A subsequent alert popup will already
-  // have replaced this one (Leaflet's openOn closes prior popups).
-  if (_alertPopupTimer) clearTimeout(_alertPopupTimer);
-  _alertPopupTimer = setTimeout(() => {
-    if (map.hasLayer(popup)) map.closePopup(popup);
-  }, 8000);
+  const dismiss = () => {
+    if (toast._dismissed) return;
+    toast._dismissed = true;
+    clearTimeout(toast._timer);
+    toast.classList.add("dismissing");
+    setTimeout(() => toast.remove(), 200);
+  };
+  toast.querySelector(".alert-toast-close").addEventListener("click", dismiss);
+  toast._timer = setTimeout(dismiss, ALERT_TOAST_TTL_MS);
+
+  stack.appendChild(toast);
+
+  // Cap the stack so a burst of alerts can't push the screen full.
+  while (stack.children.length > ALERT_TOAST_MAX) {
+    const oldest = stack.firstElementChild;
+    if (oldest) {
+      clearTimeout(oldest._timer);
+      oldest.remove();
+    }
+  }
 }
 
 async function pollAlertsBadge() {
