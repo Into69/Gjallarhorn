@@ -1,6 +1,18 @@
+"""Streaming gpsd client.
+
+Talks to gpsd the same way `cgps` does: opens a TCP connection to
+2947, sends ``?WATCH={"enable":true,"json":true}``, and reads
+newline-delimited JSON messages as they arrive (TPV for time /
+position / velocity, SKY for satellites). The latest fix is exposed
+via :pyattr:`GPSService.fix`.
+
+Pure asyncio — no thread, no `gpsd-py3` dependency. Reconnects
+automatically with bounded backoff if gpsd goes away.
+"""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Optional
@@ -10,17 +22,14 @@ from models import GPSFix
 log = logging.getLogger(__name__)
 
 
+WATCH_CMD = b'?WATCH={"enable":true,"json":true}\n'
+
+
 class GPSService:
-    """Async wrapper around gpsd. Falls back to a mock fix when gpsd is unreachable.
-
-    The gpsd-py3 lib is sync, so we drive it from a thread and expose the latest
-    fix via an asyncio.Event-protected attribute.
-    """
-
     def __init__(self, host: str = "127.0.0.1", port: int = 2947, poll_s: float = 1.0):
         self.host = host
         self.port = port
-        self.poll_s = poll_s
+        self.poll_s = poll_s  # retained for API compatibility; used as min backoff
         self._fix = GPSFix()
         self._connected = False
         self._task: Optional[asyncio.Task] = None
@@ -46,66 +55,98 @@ class GPSService:
             await asyncio.wait([self._task], timeout=2)
 
     async def _run(self) -> None:
+        backoff = max(self.poll_s, 1.0)
         while not self._stop.is_set():
             try:
-                fix = await asyncio.to_thread(self._poll_once)
-                if fix is not None:
-                    self._fix = fix
-                    self._connected = True
+                await self._stream_once()
+                backoff = max(self.poll_s, 1.0)
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 self._connected = False
-                log.debug("gpsd poll failed: %s", e)
+                log.debug("gpsd stream ended: %s", e)
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.poll_s)
+                await asyncio.wait_for(self._stop.wait(), timeout=backoff)
             except asyncio.TimeoutError:
                 pass
+            backoff = min(backoff * 1.5, 10.0)
 
-    def _poll_once(self) -> GPSFix | None:
+    async def _stream_once(self) -> None:
+        reader, writer = await asyncio.open_connection(self.host, self.port)
         try:
-            import gpsd  # gpsd-py3
-        except ImportError:
-            return None
-        try:
-            gpsd.connect(host=self.host, port=self.port)
-            packet = gpsd.get_current()
-        except Exception as e:
-            log.debug("gpsd unreachable: %s", e)
-            return None
-
-        mode = getattr(packet, "mode", 0)
-        fix = GPSFix(mode=mode)
-        if mode >= 2:
+            writer.write(WATCH_CMD)
+            await writer.drain()
+            self._connected = True
+            log.info("gpsd connected to %s:%d (streaming)", self.host, self.port)
+            while not self._stop.is_set():
+                line = await reader.readline()
+                if not line:
+                    raise ConnectionError("gpsd closed connection")
+                try:
+                    msg = json.loads(line.decode("utf-8", errors="replace"))
+                except json.JSONDecodeError:
+                    continue
+                self._handle(msg)
+        finally:
+            writer.close()
             try:
-                fix.lat, fix.lon = packet.position()
+                await writer.wait_closed()
             except Exception:
                 pass
-        if mode >= 3:
+            self._connected = False
+
+    def _handle(self, msg: dict) -> None:
+        cls = msg.get("class")
+        if cls == "TPV":
+            self._handle_tpv(msg)
+        elif cls == "SKY":
+            self._handle_sky(msg)
+        # VERSION / DEVICE / DEVICES / WATCH ignored — informational only
+
+    def _handle_tpv(self, msg: dict) -> None:
+        f = self._fix.model_copy()
+        mode = msg.get("mode")
+        if mode is not None:
+            f.mode = mode
+        if "lat" in msg:
+            f.lat = msg["lat"]
+        if "lon" in msg:
+            f.lon = msg["lon"]
+        # gpsd >= 3.20 prefers altHAE/altMSL over the deprecated 'alt'
+        alt = msg.get("altHAE")
+        if alt is None:
+            alt = msg.get("altMSL")
+        if alt is None:
+            alt = msg.get("alt")
+        if alt is not None:
+            f.alt = alt
+        for k in ("speed", "track", "climb"):
+            if k in msg:
+                setattr(f, k, msg[k])
+        # Horizontal error: prefer eph (95% confidence), fall back to max(epx, epy)
+        eph = msg.get("eph")
+        if eph is None:
+            epx, epy = msg.get("epx"), msg.get("epy")
+            if epx is not None and epy is not None:
+                eph = max(epx, epy)
+        if eph is not None:
+            f.error_h = eph
+        if "epv" in msg:
+            f.error_v = msg["epv"]
+        t = msg.get("time")
+        if isinstance(t, str):
             try:
-                fix.alt = packet.altitude()
-            except Exception:
+                f.time = datetime.fromisoformat(t.replace("Z", "+00:00"))
+            except ValueError:
                 pass
-        try:
-            fix.speed = packet.speed()
-        except Exception:
-            pass
-        try:
-            fix.track = packet.movement().get("track")
-        except Exception:
-            pass
-        try:
-            err = getattr(packet, "error", {}) or {}
-            fix.error_h = err.get("x")
-            fix.error_v = err.get("v")
-        except Exception:
-            pass
-        try:
-            fix.sats_visible = getattr(packet, "sats", None)
-            fix.sats_used = getattr(packet, "sats_valid", None)
-        except Exception:
-            pass
-        try:
-            t = packet.get_time()
-            fix.time = t if isinstance(t, datetime) else None
-        except Exception:
-            pass
-        return fix
+        self._fix = f
+
+    def _handle_sky(self, msg: dict) -> None:
+        f = self._fix.model_copy()
+        sats = msg.get("satellites") or []
+        f.sats_visible = msg.get("nSat", len(sats) if sats else None)
+        used = msg.get("uSat")
+        if used is None and sats:
+            used = sum(1 for s in sats if s.get("used"))
+        f.sats_used = used
+        self._fix = f
