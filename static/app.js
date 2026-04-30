@@ -742,6 +742,12 @@ function setBadge(n) {
 // so popups fire even when the user isn't on the alerts tab.
 let alertsLastPoppedId = 0;
 let _alertPopupTimer = null;
+// `${rule_id}|${device_id}` pairs we've already shown on the map this session.
+// A "repeat" of an existing pair (same rule firing again on the same device
+// after the cooldown) is suppressed so the operator only sees genuinely new
+// matches, not the same ping recurring every minute.
+const _alertPoppedPairs = new Set();
+function _alertPairKey(e) { return `${e.rule_id}|${e.device_id}`; }
 
 function showAlertOnMap(e) {
   if (e.location_id == null) return;
@@ -783,13 +789,25 @@ async function pollAlertsBadge() {
     if (!events.length) { setBadge(0); return; }
     const newest = events[0].id;
 
-    // Popup any events newer than the last one we popped. Skip on first
-    // poll (alertsLastPoppedId === 0) so existing alerts from the DB
-    // don't all pop up at once on page load.
-    if (alertsLastPoppedId > 0) {
+    // Popup any events newer than the last one we popped, skipping pairs
+    // (rule_id, device_id) we've already shown so a repeating alert
+    // doesn't pop again every minute.
+    //
+    // On the very first poll (alertsLastPoppedId === 0) we don't pop
+    // anything — and we also seed `_alertPoppedPairs` with the recent
+    // events' pairs so subsequent firings of those same pairs are
+    // treated as repeats too, not "new since I opened the page".
+    if (alertsLastPoppedId === 0) {
+      for (const e of events) _alertPoppedPairs.add(_alertPairKey(e));
+    } else {
       const fresh = events.filter(e => e.id > alertsLastPoppedId);
       // Show oldest-first so the newest is the one left visible.
-      for (const e of fresh.slice().reverse()) showAlertOnMap(e);
+      for (const e of fresh.slice().reverse()) {
+        const key = _alertPairKey(e);
+        if (_alertPoppedPairs.has(key)) continue;
+        _alertPoppedPairs.add(key);
+        showAlertOnMap(e);
+      }
     }
     alertsLastPoppedId = newest;
 
