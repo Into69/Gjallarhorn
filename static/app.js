@@ -470,6 +470,36 @@ $("#settings-form").addEventListener("submit", async (e) => {
   }
 });
 
+async function refreshTileCache() {
+  try {
+    const s = await api("/api/tilecache/status");
+    $("#tc-count").textContent = s.count.toLocaleString();
+    $("#tc-size").textContent = formatBytes(s.bytes);
+    $("#tc-dir").textContent = s.dir;
+  } catch (e) {
+    $("#tc-status").textContent = "error: " + e.message;
+  }
+}
+
+$("#tc-refresh").addEventListener("click", refreshTileCache);
+
+$("#tc-clear").addEventListener("click", async () => {
+  if (!confirm("Delete every cached map tile?\n\nReports generated next will re-fetch tiles from OpenStreetMap on demand.")) return;
+  const btn = $("#tc-clear");
+  btn.disabled = true;
+  $("#tc-status").textContent = "clearing…";
+  try {
+    const r = await api("/api/tilecache/clear", { method: "POST" });
+    $("#tc-status").textContent = `removed ${r.removed} tile${r.removed === 1 ? "" : "s"} (${formatBytes(r.freed_bytes)})`;
+    await refreshTileCache();
+    setTimeout(() => ($("#tc-status").textContent = ""), 4000);
+  } catch (e) {
+    $("#tc-status").textContent = "error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $("#discord-test").addEventListener("click", async () => {
   const status = $("#discord-test-status");
   status.textContent = "sending…";
@@ -782,7 +812,10 @@ $("#oui-test").addEventListener("click", async () => {
 });
 
 // ---------- updates ----------
+let lastUpdateStatus = null;
+
 function renderUpdateStatus(s) {
+  lastUpdateStatus = s;
   if (!s.ok) {
     $("#upd-state").textContent = s.error || "unavailable";
     $("#upd-apply").disabled = true;
@@ -813,9 +846,10 @@ function renderUpdateStatus(s) {
   if (showTarget) {
     $("#upd-target-info").textContent =
       `${s.target.short}  ${s.target.subject}\n` +
-      `${s.target.author} · ${formatTime(s.target.date)}` +
-      (s.requirements_changed ? `\n\nrequirements.txt changed — run "pip install -r requirements.txt" before/after restart` : "");
+      `${s.target.author} · ${formatTime(s.target.date)}`;
   }
+  // Dedicated requirements warning, only when there's actually an update pending
+  $("#upd-reqs").hidden = !(showTarget && s.requirements_changed);
 
   // Dirty warning
   $("#upd-dirty").hidden = !s.dirty;
@@ -853,24 +887,76 @@ $("#upd-check").addEventListener("click", async () => {
 });
 
 $("#upd-apply").addEventListener("click", async () => {
-  if (!confirm("Pull the latest commits from origin and restart the app?\n\nIn-flight requests will fail briefly during the restart.")) return;
   const btn = $("#upd-apply");
-  btn.disabled = true; btn.textContent = "Updating…";
+  const restoreBtn = () => { btn.disabled = false; btn.textContent = "Download & restart"; };
+
+  // Re-fetch status so the requirements flag reflects what we're actually
+  // about to pull, not whatever was visible when the panel last loaded.
+  btn.disabled = true; btn.textContent = "Checking…";
+  $("#upd-status").textContent = "checking…";
+  let s;
+  try {
+    s = await api("/api/system/update/check", { method: "POST" });
+    renderUpdateStatus(s);
+  } catch (e) {
+    $("#upd-status").textContent = "error: " + e.message;
+    restoreBtn();
+    return;
+  }
+  if (!s.ok || s.behind === 0) {
+    $("#upd-status").textContent = s.behind === 0 ? "already up to date" : "";
+    restoreBtn();
+    return;
+  }
+
+  let msg;
+  if (s.requirements_changed) {
+    msg =
+      "Dependency change detected.\n\n" +
+      "requirements.txt is changing in this update. After the restart you " +
+      "must run:\n\n" +
+      "    pip install -r requirements.txt\n\n" +
+      "If you skip this, the app may fail to start because of missing or " +
+      "outdated dependencies.\n\n" +
+      "Continue with the pull and restart anyway?";
+  } else {
+    msg =
+      "Pull the latest commits from origin and restart the app?\n\n" +
+      "In-flight requests will fail briefly during the restart.";
+  }
+  if (!confirm(msg)) {
+    $("#upd-status").textContent = "cancelled";
+    setTimeout(() => ($("#upd-status").textContent = ""), 1500);
+    restoreBtn();
+    return;
+  }
+
+  btn.textContent = "Updating…";
   $("#upd-status").textContent = "pulling…";
   try {
-    const r = await api("/api/system/update/apply", { method: "POST", body: JSON.stringify({ restart: true }) });
+    const r = await api("/api/system/update/apply", {
+      method: "POST",
+      body: JSON.stringify({
+        restart: true,
+        acknowledge_requirements_change: !!s.requirements_changed,
+      }),
+    });
     if (r.updated) {
-      $("#upd-status").textContent = r.restarting ? "updated — restarting…" : "updated";
+      $("#upd-status").textContent = r.restarting
+        ? (s.requirements_changed
+            ? "updated — restarting (run pip install after)…"
+            : "updated — restarting…")
+        : "updated";
       if (r.restarting) waitForRestart();
     } else {
       $("#upd-status").textContent = "already up to date";
       await loadUpdateStatus();
+      restoreBtn();
     }
   } catch (e) {
     $("#upd-status").textContent = "error: " + e.message;
-    btn.disabled = false;
+    restoreBtn();
   }
-  btn.textContent = "Download & restart";
 });
 
 $("#upd-restart").addEventListener("click", async () => {
@@ -922,6 +1008,7 @@ function formatTime(iso) {
   refreshLocationMarkers();
   refreshOuiStatus();
   loadUpdateStatus();
+  refreshTileCache();
   setInterval(pollGps, 1500);
   setInterval(refreshLocationMarkers, 5000);
   setInterval(refreshOuiStatus, 10000);

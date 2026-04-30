@@ -23,6 +23,11 @@ class GitError(RuntimeError):
     pass
 
 
+class RequirementsChangedError(GitError):
+    """Pulling would modify requirements.txt; caller must explicitly
+    acknowledge before we proceed."""
+
+
 async def _git(*args: str, check: bool = True) -> tuple[int, str, str]:
     """Run `git` in the repo root. Returns (returncode, stdout, stderr)."""
     proc = await asyncio.create_subprocess_exec(
@@ -123,8 +128,9 @@ async def get_status(*, do_fetch: bool = False) -> dict[str, Any]:
     }
 
 
-async def apply_update() -> dict[str, Any]:
-    """Fast-forward pull. Refuses on dirty trees or non-FF histories."""
+async def apply_update(*, acknowledge_requirements_change: bool = False) -> dict[str, Any]:
+    """Fast-forward pull. Refuses on dirty trees, non-FF histories, or
+    unacknowledged requirements.txt changes."""
     status = await get_status(do_fetch=True)
     if not status.get("ok"):
         raise GitError(status.get("error", "update unavailable"))
@@ -134,6 +140,12 @@ async def apply_update() -> dict[str, Any]:
         raise GitError("No upstream branch configured.")
     if status["behind"] == 0:
         return {"ok": True, "updated": False, "status": status}
+
+    if status["requirements_changed"] and not acknowledge_requirements_change:
+        raise RequirementsChangedError(
+            "requirements.txt is changing in this pull — caller must "
+            "acknowledge by setting acknowledge_requirements_change=true."
+        )
 
     code, out, err = await _git("pull", "--ff-only", check=False)
     if code != 0:

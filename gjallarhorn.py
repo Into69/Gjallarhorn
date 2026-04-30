@@ -131,11 +131,27 @@ async def api_update_check():
 
 @app.post("/api/system/update/apply")
 async def api_update_apply(payload: dict | None = None):
-    """Fast-forward pull from origin and (by default) restart the process."""
+    """Fast-forward pull from origin and (by default) restart the process.
+
+    If the pull would change `requirements.txt`, the caller must include
+    `"acknowledge_requirements_change": true` in the payload — otherwise
+    we return 412 so a UI can re-prompt rather than silently breaking
+    deps."""
     from services import updater
-    restart = True if payload is None else bool(payload.get("restart", True))
+    payload = payload or {}
+    restart = bool(payload.get("restart", True))
+    ack = bool(payload.get("acknowledge_requirements_change", False))
     try:
-        result = await updater.apply_update()
+        result = await updater.apply_update(acknowledge_requirements_change=ack)
+    except updater.RequirementsChangedError as e:
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "error": str(e),
+                "requirements_changed": True,
+                "needs_acknowledgement": True,
+            },
+        )
     except updater.GitError as e:
         raise HTTPException(409, str(e))
     if result.get("updated") and restart:
@@ -265,6 +281,18 @@ async def api_label_location(loc_id: int, payload: dict):
 @app.get("/api/locations/{loc_id}/devices")
 async def api_location_devices(loc_id: int, kind: Optional[str] = None):
     return {"devices": await db.devices_at_location(loc_id, kind)}
+
+
+@app.get("/api/tilecache/status")
+async def api_tilecache_status():
+    from services.map_cache import cache_status
+    return cache_status()
+
+
+@app.post("/api/tilecache/clear")
+async def api_tilecache_clear():
+    from services.map_cache import clear_cache
+    return clear_cache()
 
 
 @app.get("/api/locations/report.pdf")

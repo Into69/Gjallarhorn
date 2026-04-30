@@ -21,11 +21,9 @@ from reportlab.platypus import (
 )
 
 import database as db
+from services.map_cache import render_map as _render_map_png
 
 log = logging.getLogger(__name__)
-
-# OSM tile URL — staticmap fetches at render time.
-_OSM_TILE = "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"
 
 # How many rows of per-location devices and common-device entries to show.
 _TOP_DEVICES_PER_LOCATION = 12
@@ -61,36 +59,30 @@ def _styles() -> dict[str, ParagraphStyle]:
     return out
 
 
-def _render_map_image(
+async def _render_map_image(
     points: list[tuple[float, float, str]],   # (lat, lon, color_hex)
     *,
     width_px: int = 900,
     height_px: int = 540,
     zoom: int | None = None,
 ) -> Image | Paragraph:
-    """Render an OSM static map for the given points. Falls back to a
-    text placeholder if the network or library call fails — a missing
+    """Render an OSM map for the given points using the cached tile store.
+    Falls back to a text placeholder if the renderer raises — a missing
     map shouldn't break a whole report."""
     styles = _styles()
     if not points:
         return Paragraph("<i>No locations to plot.</i>", styles["caption"])
     try:
-        from staticmap import CircleMarker, StaticMap
-        m = StaticMap(width_px, height_px, url_template=_OSM_TILE, padding=(40, 40))
-        for lat, lon, color in points:
-            # outer ring + filled core for contrast against any basemap
-            m.add_marker(CircleMarker((lon, lat), "#ffffff", 14))
-            m.add_marker(CircleMarker((lon, lat), color, 10))
-        img = m.render(zoom=zoom)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        buf.seek(0)
+        png_bytes = await _render_map_png(
+            points, width_px=width_px, height_px=height_px, zoom=zoom,
+        )
+        buf = io.BytesIO(png_bytes)
         # scale to ~6.5 inches wide, preserving aspect
         target_w = 6.5 * inch
         scale = target_w / width_px
         return Image(buf, width=target_w, height=height_px * scale)
     except Exception as e:
-        log.warning("static map render failed: %s", e)
+        log.warning("map render failed: %s", e)
         return Paragraph(
             f"<i>Map unavailable ({type(e).__name__}: {e}).</i>",
             styles["caption"],
@@ -178,7 +170,7 @@ async def build_report_pdf() -> bytes:
     # ── Overview map ──
     flow.append(Paragraph("Overview", s["h1"]))
     points = [(l["lat"], l["lon"], "#ff6b6b") for l in locations if l.get("lat") is not None]
-    flow.append(_render_map_image(points))
+    flow.append(await _render_map_image(points))
     flow.append(Paragraph(
         f"{len(locations)} sensor location{'s' if len(locations) != 1 else ''} plotted.",
         s["caption"],
@@ -270,7 +262,7 @@ async def build_report_pdf() -> bytes:
         flow.append(Spacer(1, 8))
 
         # Mini-map centered on this site
-        flow.append(_render_map_image(
+        flow.append(await _render_map_image(
             [(loc["lat"], loc["lon"], "#ff6b6b")],
             width_px=820, height_px=440, zoom=16,
         ))

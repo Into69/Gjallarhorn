@@ -18,6 +18,7 @@ env/
 *.db-shm
 *.db-wal
 oui-cache/
+tile-cache/
 
 # Editor / OS
 .vscode/

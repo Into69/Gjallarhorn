@@ -192,6 +192,17 @@
           <label>Tile provider
             <select name="map_provider" id="set-map-provider"></select>
           </label>
+          <p class="muted" style="margin-top: 12px;">PDF reports render maps from a local OSM tile cache. Tiles are fetched on first use and reused thereafter.</p>
+          <dl id="tilecache-stats">
+            <dt>Cached tiles</dt><dd id="tc-count">—</dd>
+            <dt>On-disk size</dt><dd id="tc-size">—</dd>
+            <dt>Cache directory</dt><dd id="tc-dir" class="mono">—</dd>
+          </dl>
+          <div class="toolbar">
+            <button type="button" id="tc-refresh" class="secondary">Refresh</button>
+            <button type="button" id="tc-clear" class="danger">Clear cache</button>
+            <span id="tc-status" class="muted"></span>
+          </div>
         </fieldset>
 
         <fieldset>
@@ -274,6 +285,11 @@
         <div id="upd-target" hidden>
           <p class="muted">Available update:</p>
           <pre id="upd-target-info" class="mono"></pre>
+        </div>
+        <div id="upd-reqs" class="warn-box" hidden>
+          <strong>Dependency change detected</strong> — <code>requirements.txt</code> is being updated. After the restart you must run:
+          <pre class="mono">pip install -r requirements.txt</pre>
+          The app may fail to start if you skip this step.
         </div>
         <div id="upd-dirty" class="warn-box" hidden>
           <strong>Local changes present</strong> — refusing to update. Commit, stash, or discard:
