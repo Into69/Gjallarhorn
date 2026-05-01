@@ -475,14 +475,30 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .alert-device { font-family: ui-monospace, Consolas, monospace; color: var(--fg); }
 .alert-rssi { color: var(--warn); font-family: ui-monospace, Consolas, monospace; }
 
-#settings-form { display: grid; gap: 12px; max-width: 720px; }
+/* Settings: auto-fitting fieldset grid so panels flow into multiple columns
+   on wide displays (auto-fit collapses to one column on narrow viewports
+   without needing a media query). */
+#settings-form {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  align-items: start;
+}
+.form-actions {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 12px;
+}
+#tab-settings > #update-panel,
+#tab-settings > #oui-panel {
+  /* Side panels span full width below the form. */
+  margin-top: 16px;
+}
 fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--panel); }
 legend { color: var(--muted); padding: 0 6px; }
 fieldset label { display: grid; gap: 4px; margin-bottom: 8px; }
 fieldset label.check { grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
-#save-status { margin-left: 12px; color: var(--muted); }
+#save-status { color: var(--muted); }
 .muted { color: var(--muted); }
-#oui-panel { max-width: 720px; margin-top: 16px; }
 #oui-panel p { margin: 0 0 10px; }
 #oui-test-mac { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; min-width: 200px; }
 #oui-stats { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px;
@@ -582,9 +598,9 @@ select option:disabled { color: var(--muted); }
   }
   .feed-filters input[type="search"] { min-width: 0; flex: 1 1 100%; }
 
-  /* Settings: drop the desktop max-width caps so the form fills the viewport. */
-  #settings-form { max-width: none; gap: 10px; }
-  #oui-panel, #update-panel { max-width: none; }
+  /* Settings: tighten gaps for narrow viewports (auto-fit grid already
+     collapses to a single column when no two ≥360px columns fit). */
+  #settings-form { gap: 10px; }
   fieldset { padding: 8px 10px; }
 
   /* Larger tap targets on primary controls. */
