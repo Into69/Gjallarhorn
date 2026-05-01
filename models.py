@@ -86,7 +86,10 @@ class AppSettings(BaseModel):
     ] = "osm"
 
     # interfaces
-    wifi_interface: Optional[str] = None  # e.g. wlan0; null = auto-pick
+    # wifi_interface: null = disabled (no scanning); "auto" = pick first
+    # non-associated wireless interface at scan time; otherwise the literal
+    # interface name (e.g. "wlan0").
+    wifi_interface: Optional[str] = None
     bluetooth_adapter: Optional[str] = None  # e.g. hci0; null = system default
 
     # scan cadence

@@ -38,6 +38,19 @@ async def list_wifi_interfaces() -> list[str]:
     return [info["name"] for info in await list_wifi_interface_info()]
 
 
+async def pick_wifi_interface() -> str | None:
+    """Auto-pick a wireless interface suitable for scanning. Prefers
+    interfaces not currently associated with an AP, since associated
+    interfaces typically can't scan without disrupting the connection.
+    Returns None when no candidate is available."""
+    infos = await list_wifi_interface_info()
+    if not infos:
+        return None
+    unassociated = [i for i in infos if not i.get("ssid")]
+    chosen = unassociated[0] if unassociated else infos[0]
+    return chosen.get("name")
+
+
 async def list_wifi_interface_info() -> list[dict]:
     """Return rich info per wireless interface from `iw dev`.
 

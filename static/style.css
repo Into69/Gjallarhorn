@@ -505,3 +505,106 @@ fieldset label.check { grid-template-columns: auto 1fr; align-items: center; gap
 .iface-card dt { color: var(--muted); }
 .iface-card dd { margin: 0; font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
 select option:disabled { color: var(--muted); }
+
+/* ── mobile / narrow viewports (≤ 768px) ─────────────
+   Pure responsive layer — no UA sniffing, no second template. The
+   viewport meta tag is already in place; this block adapts the
+   existing layouts so the same UI is usable on a phone.
+*/
+@media (max-width: 768px) {
+  /* Header: title shrinks, tabs become a horizontally-scrollable strip,
+     status pills wrap below the nav so they don't squeeze the tabs. */
+  header {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  header h1 { font-size: 15px; flex: 0 0 auto; }
+  nav {
+    order: 3;
+    flex: 1 0 100%;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tab-btn {
+    flex: 0 0 auto;
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+  #status { flex-wrap: wrap; }
+  .pill { font-size: 11px; padding: 3px 8px; }
+
+  main { height: auto; min-height: calc(100vh - 90px); }
+  .tab { padding: 8px; }
+
+  /* Map tab: stack the map over the side panel instead of side-by-side. */
+  #tab-map.active {
+    grid-template-columns: 1fr;
+    grid-template-rows: 55vh auto;
+    height: auto;
+  }
+  #map-side {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    max-height: 45vh;
+    padding: 10px;
+  }
+
+  /* Toast stack: keep within the screen, smaller padding. */
+  .alert-toasts {
+    top: 8px; right: 8px;
+    max-width: calc(100vw - 16px);
+  }
+  .alert-popup { min-width: 0; padding: 8px 10px; padding-right: 24px; }
+
+  /* Wide tables (devices, locations, rules) — let them keep their natural
+     width and scroll horizontally inside the tab. .tab already has
+     overflow:auto so this gives a sideways drag on phones. */
+  .tab table {
+    width: max-content;
+    min-width: 100%;
+    font-size: 11px;
+  }
+  th, td { padding: 4px 6px; }
+  pre { font-size: 10px; }
+
+  /* Toolbar rows wrap and let inputs go full width. */
+  .toolbar { gap: 8px; }
+  .toolbar select, .toolbar input { min-width: 0; }
+
+  /* Alerts tab: stack the rules table and the live feed vertically. */
+  .alerts-top {
+    grid-template-columns: 1fr;
+  }
+  .rule-form {
+    grid-template-columns: 1fr;
+  }
+  .feed-filters input[type="search"] { min-width: 0; flex: 1 1 100%; }
+
+  /* Settings: drop the desktop max-width caps so the form fills the viewport. */
+  #settings-form { max-width: none; gap: 10px; }
+  #oui-panel, #update-panel { max-width: none; }
+  fieldset { padding: 8px 10px; }
+
+  /* Larger tap targets on primary controls. */
+  button {
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+  button.secondary, button.danger { padding: 10px 14px; }
+  input[type="text"], input[type="number"], input[type="search"], input[type="url"], select {
+    font-size: 14px;          /* >=14px keeps iOS Safari from auto-zooming on focus */
+    padding: 8px 10px;
+  }
+
+  /* Fix card: keep two-column grids if room, but allow them to collapse. */
+  .fix-grid { grid-template-columns: 1fr 1fr; gap: 4px; }
+}
+
+/* Very narrow phones (≤ 380px) — collapse stat grids further. */
+@media (max-width: 380px) {
+  .fix-grid { grid-template-columns: 1fr; }
+  header h1 { display: none; }   /* claw back space; the tabs are obvious */
+  .tab-btn { padding: 8px 10px; font-size: 12px; }
+}

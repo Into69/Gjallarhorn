@@ -7,7 +7,7 @@ from typing import Optional
 from config import settings_store
 from services.location_manager import location_manager
 from services.gps_service import GPSService
-from services.wifi_scanner import scan_wifi
+from services.wifi_scanner import scan_wifi, pick_wifi_interface
 from services.bluetooth_scanner import scan_bluetooth
 from services.alert_service import alert_service
 from services.probe_scanner import probe_scanner
@@ -71,6 +71,11 @@ class ScanOrchestrator:
             try:
                 s = await settings_store.load()
                 iface = s.wifi_interface
+                # "auto" → resolve to the first non-associated wireless interface;
+                # falls through as None if no candidate exists, which is the same
+                # as "none" — silently skip the scan this tick.
+                if iface == "auto":
+                    iface = await pick_wifi_interface()
                 loc_id = location_manager.active_id
                 if iface and loc_id is not None:
                     devs = await scan_wifi(iface)

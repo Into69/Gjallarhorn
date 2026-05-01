@@ -411,7 +411,10 @@ async function loadInterfaces() {
   // WiFi
   const wifi = await api("/api/interfaces/wifi");
   const wsel = $("#set-wifi-iface");
-  wsel.innerHTML = `<option value="">(none / auto)</option>`;
+  wsel.innerHTML = `
+    <option value="">(none — disabled)</option>
+    <option value="auto">(auto — pick first available)</option>
+  `;
   for (const iface of wifi.interfaces) {
     const o = document.createElement("option");
     o.value = iface.name;
