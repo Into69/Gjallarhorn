@@ -378,8 +378,9 @@ async def api_create_rule(payload: dict):
         except (TypeError, ValueError):
             raise HTTPException(400, "location_id must be an integer")
     notify_discord = bool(payload.get("notify_discord"))
+    audible = bool(payload.get("audible"))
     rule_id = await db.create_alert_rule(
-        name, kind, match_type, match_value, location_id, notify_discord
+        name, kind, match_type, match_value, location_id, notify_discord, audible
     )
     await alert_service.reload()
     return {"id": rule_id}
@@ -420,6 +421,8 @@ async def api_update_rule(rule_id: int, payload: dict):
                 raise HTTPException(400, "location_id must be int or null")
     if "notify_discord" in payload:
         fields["notify_discord"] = 1 if payload["notify_discord"] else 0
+    if "audible" in payload:
+        fields["audible"] = 1 if payload["audible"] else 0
     await db.update_alert_rule(rule_id, fields)
     await alert_service.reload()
     return {"ok": True}

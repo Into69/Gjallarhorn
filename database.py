@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS alert_rules (
     match_value TEXT NOT NULL,
     location_id INTEGER,                    -- NULL = any location
     notify_discord INTEGER NOT NULL DEFAULT 0,
+    audible INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
@@ -109,6 +110,10 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     if "notify_discord" not in cols:
         await db.execute(
             "ALTER TABLE alert_rules ADD COLUMN notify_discord INTEGER NOT NULL DEFAULT 0"
+        )
+    if "audible" not in cols:
+        await db.execute(
+            "ALTER TABLE alert_rules ADD COLUMN audible INTEGER NOT NULL DEFAULT 0"
         )
 
 
@@ -284,14 +289,16 @@ async def list_alert_rules() -> list[dict]:
 async def create_alert_rule(
     name: str, kind: str | None, match_type: str, match_value: str,
     location_id: int | None, notify_discord: bool = False,
+    audible: bool = False,
 ) -> int:
     now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "INSERT INTO alert_rules(name,enabled,kind,match_type,match_value,"
-            "location_id,notify_discord,created_at) VALUES(?,1,?,?,?,?,?,?)",
+            "location_id,notify_discord,audible,created_at) "
+            "VALUES(?,1,?,?,?,?,?,?,?)",
             (name, kind, match_type, match_value, location_id,
-             1 if notify_discord else 0, now),
+             1 if notify_discord else 0, 1 if audible else 0, now),
         )
         await db.commit()
         return cur.lastrowid
@@ -331,7 +338,8 @@ async def insert_alert_event(
 
 async def list_alert_events(limit: int = 100, since_id: int | None = None) -> list[dict]:
     sql = (
-        "SELECT e.*, r.name AS rule_name, r.match_type AS rule_match_type "
+        "SELECT e.*, r.name AS rule_name, r.match_type AS rule_match_type, "
+        "       r.audible AS rule_audible "
         "FROM alert_events e LEFT JOIN alert_rules r ON r.id = e.rule_id "
     )
     args: list = []

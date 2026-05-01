@@ -132,7 +132,10 @@
             <thead>
               <tr>
                 <th>On</th><th>Name</th><th>Kind</th><th>Match</th><th>Value</th>
-                <th>Location</th><th title="Send to Discord on match">Discord</th><th>Created</th><th></th>
+                <th>Location</th>
+                <th title="Send to Discord on match">Discord</th>
+                <th title="Play an alarm tone when this rule's popup fires">Audible</th>
+                <th>Created</th><th></th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -166,6 +169,9 @@
             </label>
             <label class="check">
               <input type="checkbox" name="notify_discord" /> Send to Discord on match
+            </label>
+            <label class="check">
+              <input type="checkbox" name="audible" /> Play audible alarm on match
             </label>
             <button type="submit" id="rule-form-submit">Add rule</button>
             <button type="button" id="rule-form-cancel" class="secondary" hidden>Cancel</button>

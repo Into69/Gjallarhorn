@@ -553,6 +553,7 @@ async function refreshAlertRules() {
       <td class="mono">${escapeHtml(r.match_value)}</td>
       <td>${r.location_id ?? "any"}</td>
       <td><input type="checkbox" class="rule-discord" data-id="${r.id}" ${r.notify_discord ? "checked" : ""}></td>
+      <td><input type="checkbox" class="rule-audible" data-id="${r.id}" ${r.audible ? "checked" : ""}></td>
       <td class="mono">${formatTime(r.created_at)}</td>
       <td><button class="danger rule-delete" data-id="${r.id}">Delete</button></td>
     `;
@@ -575,6 +576,16 @@ async function refreshAlertRules() {
       await api(`/api/alerts/rules/${cb.dataset.id}`, {
         method: "PATCH", body: JSON.stringify({ notify_discord: cb.checked }),
       });
+    })
+  );
+  $$(".rule-audible").forEach(cb =>
+    cb.addEventListener("change", async () => {
+      await api(`/api/alerts/rules/${cb.dataset.id}`, {
+        method: "PATCH", body: JSON.stringify({ audible: cb.checked }),
+      });
+      // Resume the audio context on this user gesture so future alarms
+      // aren't blocked by browser autoplay policy.
+      if (cb.checked) primeAudio();
     })
   );
   $$(".rule-delete").forEach(b =>
@@ -751,6 +762,53 @@ function _alertPairKey(e) { return `${e.rule_id}|${e.device_id}`; }
 const ALERT_TOAST_TTL_MS = 8000;
 const ALERT_TOAST_MAX = 5;
 
+// ── audible alarm ────────────────────────────────────────────────
+let _audioCtx = null;
+function getAudioCtx() {
+  if (_audioCtx) return _audioCtx;
+  try {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch { return null; }
+  return _audioCtx;
+}
+// Browsers block AudioContext.start until a user gesture. Call this from
+// any click handler to "prime" the context so subsequent alarms can play
+// even when the user isn't actively interacting.
+function primeAudio() {
+  const ctx = getAudioCtx();
+  if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
+}
+document.addEventListener("click", primeAudio, { once: true, capture: true });
+
+function playAlarm() {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === "suspended") {
+    // Best-effort resume; if it fails the alarm is silently skipped this turn.
+    ctx.resume().catch(() => {});
+    if (ctx.state === "suspended") return;
+  }
+  const now = ctx.currentTime;
+  // Three-tone alarm: high-low-high, ~600ms total
+  const tones = [
+    { f: 880, t: 0.00, dur: 0.18 },
+    { f: 660, t: 0.20, dur: 0.18 },
+    { f: 880, t: 0.40, dur: 0.22 },
+  ];
+  for (const tone of tones) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "square";
+    osc.frequency.value = tone.f;
+    gain.gain.setValueAtTime(0.0001, now + tone.t);
+    gain.gain.exponentialRampToValueAtTime(0.18, now + tone.t + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + tone.t + tone.dur);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now + tone.t);
+    osc.stop(now + tone.t + tone.dur + 0.02);
+  }
+}
+
 function showAlertOnMap(e) {
   // Render as a floating toast in the map's corner — no longer pinned to
   // any location bubble, so the popup shows even if the marker isn't on
@@ -796,6 +854,11 @@ function showAlertOnMap(e) {
       oldest.remove();
     }
   }
+
+  // Audible alarm if the rule asked for one. The flag is joined onto the
+  // event by the events query (rule_audible) so we don't depend on the
+  // rules cache being loaded.
+  if (e.rule_audible) playAlarm();
 }
 
 async function pollAlertsBadge() {
@@ -852,6 +915,7 @@ function enterEditRuleMode(rule) {
   form.elements["match_value"].value = rule.match_value || "";
   form.elements["location_id"].value = rule.location_id != null ? String(rule.location_id) : "";
   form.elements["notify_discord"].checked = !!rule.notify_discord;
+  form.elements["audible"].checked = !!rule.audible;
   // Update placeholder for the new match_type without clobbering the value.
   $("#rule-match-value").placeholder = MATCH_TYPE_PLACEHOLDERS[rule.match_type] || "";
   $("#rule-form-title").textContent = `Edit rule #${rule.id}`;
@@ -886,6 +950,7 @@ $("#rule-form").addEventListener("submit", async (e) => {
     match_value: fd.get("match_value"),
     location_id: fd.get("location_id") || null,
     notify_discord: fd.get("notify_discord") === "on",
+    audible: fd.get("audible") === "on",
   };
   $("#rule-form-status").textContent = "saving…";
   try {
