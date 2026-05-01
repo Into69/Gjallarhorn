@@ -495,20 +495,24 @@ async function refreshProbeStatus() {
     const s = await api("/api/probe/status");
     const stateEl = $("#probe-state");
     if (!stateEl) return;
-    if (!s.tshark_available) {
-      stateEl.innerHTML = `<span class="pill err">tshark not installed</span>`;
-    } else if (s.running) {
+    if (s.running) {
       stateEl.innerHTML = `<span class="pill ok">running on ${escapeHtml(s.interface || "")}</span>`;
     } else if (s.last_error) {
       stateEl.innerHTML = `<span class="pill err">${escapeHtml(s.last_error)}</span>`;
     } else {
       stateEl.innerHTML = `<span class="pill">disabled</span>`;
     }
+    $("#probe-backend").textContent = s.backend || "—";
     $("#probe-count").textContent = (s.probe_count || 0).toLocaleString();
     $("#probe-last").textContent = s.last_probe_at
       ? new Date(s.last_probe_at * 1000).toLocaleString()
       : "—";
-    $("#probe-tshark").textContent = s.tshark_available ? "available" : "missing";
+    $("#probe-tshark").innerHTML = s.tshark_available
+      ? `<span class="pill ok">available</span>`
+      : `<span class="pill warn">missing — apt install tshark</span>`;
+    $("#probe-scapy").innerHTML = s.scapy_available
+      ? `<span class="pill ok">available</span>`
+      : `<span class="pill warn">missing — pip install scapy</span>`;
   } catch (e) {
     const el = $("#probe-state");
     if (el) el.textContent = "error: " + e.message;
