@@ -239,7 +239,17 @@ async function refreshDevices() {
   tbody.innerHTML = "";
   for (const d of devices) {
     const det = d.details || {};
-    const nameOrSsid = det.ssid ?? det.name ?? "";
+    // For wifi_client probes, the device doesn't have a single SSID — it has
+    // a list of networks it's been searching for. Show those instead.
+    let nameOrSsid;
+    if (d.kind === "wifi_client" && Array.isArray(det.ssids)) {
+      const named = det.ssids.filter(Boolean);
+      nameOrSsid = named.length
+        ? named.slice(0, 3).join(", ") + (named.length > 3 ? `, +${named.length - 3}` : "")
+        : "(wildcard)";
+    } else {
+      nameOrSsid = det.ssid ?? det.name ?? "";
+    }
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${d.kind}</td>
@@ -479,6 +489,31 @@ $("#settings-form").addEventListener("submit", async (e) => {
     $("#save-status").textContent = "error: " + err.message;
   }
 });
+
+async function refreshProbeStatus() {
+  try {
+    const s = await api("/api/probe/status");
+    const stateEl = $("#probe-state");
+    if (!stateEl) return;
+    if (!s.tshark_available) {
+      stateEl.innerHTML = `<span class="pill err">tshark not installed</span>`;
+    } else if (s.running) {
+      stateEl.innerHTML = `<span class="pill ok">running on ${escapeHtml(s.interface || "")}</span>`;
+    } else if (s.last_error) {
+      stateEl.innerHTML = `<span class="pill err">${escapeHtml(s.last_error)}</span>`;
+    } else {
+      stateEl.innerHTML = `<span class="pill">disabled</span>`;
+    }
+    $("#probe-count").textContent = (s.probe_count || 0).toLocaleString();
+    $("#probe-last").textContent = s.last_probe_at
+      ? new Date(s.last_probe_at * 1000).toLocaleString()
+      : "—";
+    $("#probe-tshark").textContent = s.tshark_available ? "available" : "missing";
+  } catch (e) {
+    const el = $("#probe-state");
+    if (el) el.textContent = "error: " + e.message;
+  }
+}
 
 async function refreshTileCache() {
   try {
@@ -1263,6 +1298,8 @@ function formatTime(iso) {
   refreshOuiStatus();
   loadUpdateStatus();
   refreshTileCache();
+  refreshProbeStatus();
+  setInterval(refreshProbeStatus, 10000);
   setInterval(pollGps, 1500);
   setInterval(refreshLocationMarkers, 5000);
   setInterval(refreshOuiStatus, 10000);

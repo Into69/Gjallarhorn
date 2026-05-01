@@ -116,6 +116,13 @@ async def api_test_discord_webhook():
     return {"ok": True}
 
 
+# ---------- Probe scanner ----------
+@app.get("/api/probe/status")
+async def api_probe_status():
+    from services.probe_scanner import probe_scanner
+    return probe_scanner.status()
+
+
 # ---------- Self-update ----------
 @app.get("/api/system/update/status")
 async def api_update_status():
@@ -347,7 +354,7 @@ ALLOWED_MATCH_TYPES = {
     "device_id", "name_contains", "vendor_contains", "rssi_above",
     "new_device", "cross_location",
 }
-ALLOWED_KINDS = {None, "wifi", "bluetooth"}
+ALLOWED_KINDS = {None, "wifi", "bluetooth", "wifi_client"}
 
 
 @app.get("/api/alerts/rules")

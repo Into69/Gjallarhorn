@@ -248,6 +248,23 @@ async def upsert_device(
         return False
 
 
+async def get_device_details(location_id: int, kind: str, device_id: str) -> dict | None:
+    """Return just the details_json (parsed) for one device, or None if absent.
+    Cheaper than devices_at_location when you only need to merge with prior."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT details_json FROM devices WHERE location_id=? AND kind=? AND device_id=?",
+            (location_id, kind, device_id),
+        ) as cur:
+            row = await cur.fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row[0] or "{}")
+    except (TypeError, ValueError):
+        return {}
+
+
 async def get_location_created_at(location_id: int) -> str | None:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(

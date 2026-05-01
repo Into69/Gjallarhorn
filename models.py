@@ -113,6 +113,11 @@ class AppSettings(BaseModel):
     gpsd_host: str = "127.0.0.1"
     gpsd_port: int = 2947
 
+    # probe-request scanner (passive WiFi client detection via tshark)
+    probe_interface: Optional[str] = None      # e.g. wlan1mon; null = disabled
+    probe_skip_randomized: bool = True         # drop locally-administered MACs
+    probe_min_rssi: int = -90                  # noisier than AP scans, higher floor
+
     # notifications
     discord_webhook_url: Optional[str] = None
     discord_username: str = "Gjallarhorn"
