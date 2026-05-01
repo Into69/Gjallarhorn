@@ -121,6 +121,16 @@ class AppSettings(BaseModel):
     probe_backend: Literal["tshark", "scapy"] = "tshark"
     probe_skip_randomized: bool = True         # drop locally-administered MACs
     probe_min_rssi: int = -90                  # noisier than AP scans, higher floor
+    # Auto-configure the interface — runs `ip link` + `iw dev set type monitor`
+    # on start and restores the prior mode on stop. Requires CAP_NET_ADMIN
+    # on the python binary (or root). Disabled by default since it disrupts
+    # any existing connectivity on the chosen interface.
+    probe_auto_monitor: bool = False
+    # Comma-separated channel list to cycle through while capturing. Without
+    # hopping, the radio sits on whatever channel the driver happened to
+    # land on and misses probes on every other channel. Default cycles the
+    # 2.4 GHz non-overlapping channels (1, 6, 11). Empty disables hopping.
+    probe_channels: str = "1,6,11"
 
     # notifications
     discord_webhook_url: Optional[str] = None

@@ -262,20 +262,30 @@
         <fieldset>
           <legend>Probe scanner — passive WiFi client detection</legend>
           <p class="muted" style="margin: 0 0 8px;">
-            Captures 802.11 probe-request frames via <code>tshark</code> on a monitor-mode interface.
-            The interface must already be in monitor mode — typical setup:
+            Captures 802.11 probe-request frames on a monitor-mode wireless interface.
+            With <strong>Auto-configure monitor mode</strong> on, Gjallarhorn runs the
+            <code>ip link</code>/<code>iw</code> commands itself and restores the interface
+            on stop — needs <code>CAP_NET_ADMIN</code> on the python binary or root.
+            Otherwise put the interface in monitor mode beforehand:
           </p>
           <pre class="mono" style="background: var(--panel-2); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); font-size: 11px; margin: 0 0 10px;">sudo ip link set wlan1 down
 sudo iw dev wlan1 set type monitor
 sudo ip link set wlan1 up</pre>
-          <label>Monitor-mode interface (blank to disable)
-            <input type="text" name="probe_interface" placeholder="wlan1mon" autocomplete="off" />
+          <label>Wireless interface (blank to disable)
+            <input type="text" name="probe_interface" placeholder="wlan1" autocomplete="off" />
           </label>
           <label>Backend
             <select name="probe_backend">
               <option value="tshark">tshark (system, lower CPU)</option>
               <option value="scapy">scapy (pure Python)</option>
             </select>
+          </label>
+          <label class="check">
+            <input type="checkbox" name="probe_auto_monitor" />
+            Auto-configure monitor mode (sets/restores interface; needs root or CAP_NET_ADMIN)
+          </label>
+          <label>Channels to hop (comma-separated, blank to disable)
+            <input type="text" name="probe_channels" placeholder="1,6,11" autocomplete="off" />
           </label>
           <label>Minimum RSSI (dBm)
             <input type="number" name="probe_min_rssi" min="-110" max="-20" />
@@ -286,6 +296,7 @@ sudo ip link set wlan1 up</pre>
           <dl id="probe-stats" style="margin-top: 8px;">
             <dt>Status</dt><dd id="probe-state">—</dd>
             <dt>Active backend</dt><dd id="probe-backend">—</dd>
+            <dt>Current channel</dt><dd id="probe-channel">—</dd>
             <dt>Probes captured</dt><dd id="probe-count">—</dd>
             <dt>Last probe</dt><dd id="probe-last">—</dd>
             <dt>tshark</dt><dd id="probe-tshark">—</dd>

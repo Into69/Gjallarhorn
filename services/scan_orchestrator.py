@@ -10,7 +10,7 @@ from services.gps_service import GPSService
 from services.wifi_scanner import scan_wifi, pick_wifi_interface
 from services.bluetooth_scanner import scan_bluetooth
 from services.alert_service import alert_service
-from services.probe_scanner import probe_scanner
+from services.probe_scanner import probe_scanner, parse_channels
 from services.oui import oui_service
 import database as db
 
@@ -136,20 +136,32 @@ class ScanOrchestrator:
 
     async def _probe_loop(self) -> None:
         """Watches probe-scanner settings; starts/stops/switches the
-        capture (tshark or scapy backend) as needed. Doesn't poll for
-        probes itself — the scanner pushes them via the callback below."""
+        capture (tshark or scapy backend, optional auto-monitor and
+        channel hopping) as needed. Doesn't poll for probes itself —
+        the scanner pushes them via the callback below."""
         while not self._stop.is_set():
             try:
                 s = await settings_store.load()
                 want_iface = (s.probe_interface or "").strip() or None
                 want_backend = s.probe_backend
-                cur_iface = probe_scanner.interface if probe_scanner.running else None
-                cur_backend = probe_scanner.backend if probe_scanner.running else None
-                if want_iface and (want_iface != cur_iface or want_backend != cur_backend):
-                    await probe_scanner.start(
-                        want_iface, self._on_probe, backend=want_backend,
-                    )
-                elif not want_iface and probe_scanner.running:
+                want_auto = s.probe_auto_monitor
+                want_channels = parse_channels(s.probe_channels)
+                if want_iface:
+                    cur = (
+                        probe_scanner.interface,
+                        probe_scanner.backend,
+                        probe_scanner.auto_monitor,
+                        probe_scanner.channels,
+                    ) if probe_scanner.running else (None, None, None, [])
+                    target = (want_iface, want_backend, want_auto, want_channels)
+                    if cur != target:
+                        await probe_scanner.start(
+                            want_iface, self._on_probe,
+                            backend=want_backend,
+                            auto_monitor=want_auto,
+                            channels=want_channels,
+                        )
+                elif probe_scanner.running:
                     await probe_scanner.stop()
             except Exception as e:
                 log.exception("probe loop error: %s", e)

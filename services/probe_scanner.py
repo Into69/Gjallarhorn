@@ -61,13 +61,18 @@ class ProbeScanner:
         self._stop = asyncio.Event()
         self._iface: Optional[str] = None
         self._backend: str = "tshark"
+        self._auto_monitor: bool = False
+        self._channels: list[int] = []
         self._on_probe: Optional[ProbeCallback] = None
+        # Bookkeeping for restoring the interface on stop.
+        self._restore_type: Optional[str] = None
         # Status surface
         self._running = False
         self._last_error: Optional[str] = None
         self._last_probe_at: Optional[float] = None
         self._probe_count: int = 0
         self._started_at: Optional[float] = None
+        self._current_channel: Optional[int] = None
 
     @property
     def running(self) -> bool:
@@ -81,6 +86,14 @@ class ProbeScanner:
     def backend(self) -> str:
         return self._backend
 
+    @property
+    def auto_monitor(self) -> bool:
+        return self._auto_monitor
+
+    @property
+    def channels(self) -> list[int]:
+        return list(self._channels)
+
     def status(self) -> dict:
         return {
             "running": self._running,
@@ -88,6 +101,9 @@ class ProbeScanner:
             "backend": self._backend,
             "tshark_available": shutil.which("tshark") is not None,
             "scapy_available": scapy_available(),
+            "auto_monitor": self._auto_monitor,
+            "channels": list(self._channels),
+            "current_channel": self._current_channel,
             "last_error": self._last_error,
             "last_probe_at": self._last_probe_at,
             "probe_count": self._probe_count,
@@ -97,21 +113,29 @@ class ProbeScanner:
     async def start(
         self, interface: str, on_probe: ProbeCallback,
         *, backend: str = "tshark",
+        auto_monitor: bool = False,
+        channels: Optional[list[int]] = None,
     ) -> None:
         """Start (or restart) the scanner on the given interface + backend."""
         if backend not in VALID_BACKENDS:
             raise ValueError(f"backend must be one of {VALID_BACKENDS}")
+        channels = list(channels or [])
         if (self._task is not None and self._iface == interface
-                and self._backend == backend):
+                and self._backend == backend
+                and self._auto_monitor == auto_monitor
+                and self._channels == channels):
             self._on_probe = on_probe
             return  # already running with the same config
         await self.stop()
         self._iface = interface
         self._backend = backend
+        self._auto_monitor = auto_monitor
+        self._channels = channels
         self._on_probe = on_probe
         self._stop.clear()
         self._last_error = None
         self._probe_count = 0
+        self._current_channel = None
         self._started_at = time.time()
         self._task = asyncio.create_task(self._run_forever())
 
@@ -152,26 +176,76 @@ class ProbeScanner:
             log.error("probe scanner: %s", self._last_error)
             return
 
-        while not self._stop.is_set():
-            try:
-                if self._backend == "tshark":
-                    await self._run_tshark()
-                elif self._backend == "scapy":
-                    await self._run_scapy()
-                else:
-                    self._last_error = f"unknown backend: {self._backend}"
-                    return
-            except Exception as e:
-                self._last_error = f"{type(e).__name__}: {e}"
-                log.exception("probe scanner crashed: %s", e)
-            self._running = False
-            if self._stop.is_set():
+        # Auto-prep monitor mode if asked. Records the prior type so we can
+        # restore it on stop. If setup fails we bail rather than guessing.
+        self._restore_type = None
+        if self._auto_monitor and self._iface:
+            prior, err = await _setup_monitor_mode(self._iface)
+            if err:
+                self._last_error = f"monitor mode setup failed: {err}"
+                log.error("probe scanner: %s", self._last_error)
                 return
+            self._restore_type = prior or "managed"
+            log.info("probe scanner: %s set to monitor (was %s)", self._iface, self._restore_type)
+
+        # Channel hopper runs in parallel for as long as the scanner does.
+        hop_task: Optional[asyncio.Task] = None
+        if self._channels and self._iface:
+            hop_task = asyncio.create_task(self._channel_hop())
+
+        try:
+            while not self._stop.is_set():
+                try:
+                    if self._backend == "tshark":
+                        await self._run_tshark()
+                    elif self._backend == "scapy":
+                        await self._run_scapy()
+                    else:
+                        self._last_error = f"unknown backend: {self._backend}"
+                        return
+                except Exception as e:
+                    self._last_error = f"{type(e).__name__}: {e}"
+                    log.exception("probe scanner crashed: %s", e)
+                self._running = False
+                if self._stop.is_set():
+                    return
+                try:
+                    await asyncio.wait_for(self._stop.wait(), timeout=_RESTART_BACKOFF_S)
+                    return  # stop() was signalled while we were waiting
+                except asyncio.TimeoutError:
+                    pass  # backoff complete, loop and restart
+        finally:
+            if hop_task is not None:
+                hop_task.cancel()
+                try:
+                    await hop_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if self._restore_type and self._iface:
+                log.info("probe scanner: restoring %s to %s", self._iface, self._restore_type)
+                await _restore_interface(self._iface, self._restore_type)
+                self._restore_type = None
+            self._current_channel = None
+
+    async def _channel_hop(self) -> None:
+        """Cycle the interface through self._channels until stop is signalled."""
+        if not self._channels or not self._iface:
+            return
+        i = 0
+        while not self._stop.is_set():
+            ch = self._channels[i % len(self._channels)]
+            rc, _, err = await _run_cmd(["iw", "dev", self._iface, "set", "channel", str(ch)])
+            if rc == 0:
+                self._current_channel = ch
+            else:
+                # Don't spam logs — log once per failing channel per session.
+                log.debug("channel-hop iw failed for ch=%s: %s", ch, err.strip())
+            i += 1
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=_RESTART_BACKOFF_S)
-                return  # stop() was signalled while we were waiting
+                await asyncio.wait_for(self._stop.wait(), timeout=0.25)
+                return
             except asyncio.TimeoutError:
-                pass  # backoff complete, loop and restart
+                pass
 
     # ── tshark backend ─────────────────────────────────────────────
     async def _run_tshark(self) -> None:
@@ -356,6 +430,82 @@ def _is_randomized_mac(mac: str) -> bool:
     except (ValueError, IndexError):
         return False
     return bool(first & 0b00000010)
+
+
+async def _run_cmd(cmd: list[str]) -> tuple[int, str, str]:
+    """Run a subprocess, capture stdout+stderr. Returns (rc, out, err)."""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    out_b, err_b = await proc.communicate()
+    return (
+        proc.returncode or 0,
+        out_b.decode("utf-8", errors="replace"),
+        err_b.decode("utf-8", errors="replace"),
+    )
+
+
+async def _get_interface_type(iface: str) -> Optional[str]:
+    """Read the current type ('managed', 'monitor', etc.) from `iw dev info`."""
+    rc, out, _ = await _run_cmd(["iw", "dev", iface, "info"])
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("type "):
+            return s.split(None, 1)[1].strip()
+    return None
+
+
+async def _setup_monitor_mode(iface: str) -> tuple[Optional[str], str]:
+    """Put `iface` into monitor mode and bring it up. Returns
+    (prior_type, error). On success error is "". prior_type may be None
+    if we couldn't introspect — in that case we won't try to restore."""
+    prior = await _get_interface_type(iface)
+    if prior == "monitor":
+        # Already there — leave the prior type as None so we won't undo
+        # a setup the user did manually before enabling auto-mode.
+        return None, ""
+    for cmd in (
+        ["ip", "link", "set", iface, "down"],
+        ["iw", "dev", iface, "set", "type", "monitor"],
+        ["ip", "link", "set", iface, "up"],
+    ):
+        rc, out, err = await _run_cmd(cmd)
+        if rc != 0:
+            msg = (err.strip() or out.strip() or f"rc={rc}")
+            return prior, f"{' '.join(cmd)}: {msg}"
+    return prior, ""
+
+
+async def _restore_interface(iface: str, target_type: str) -> None:
+    """Best-effort restore of `iface` to `target_type` (typically 'managed').
+    Failures are logged but don't raise — we don't want stop() to stall."""
+    for cmd in (
+        ["ip", "link", "set", iface, "down"],
+        ["iw", "dev", iface, "set", "type", target_type],
+        ["ip", "link", "set", iface, "up"],
+    ):
+        rc, _, err = await _run_cmd(cmd)
+        if rc != 0:
+            log.warning("interface restore step failed: %s: %s",
+                        " ".join(cmd), err.strip())
+
+
+def parse_channels(spec: str) -> list[int]:
+    """Parse a comma-separated channel list into [int]. Drops invalid entries."""
+    out: list[int] = []
+    for piece in (spec or "").split(","):
+        p = piece.strip()
+        if not p:
+            continue
+        try:
+            n = int(p)
+        except ValueError:
+            continue
+        if 1 <= n <= 196:  # covers 2.4 GHz, 5 GHz, and 6 GHz channel numbers
+            out.append(n)
+    return out
 
 
 def _freq_to_channel(freq_mhz: int) -> Optional[int]:

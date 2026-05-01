@@ -499,13 +499,19 @@ async function refreshProbeStatus() {
     const stateEl = $("#probe-state");
     if (!stateEl) return;
     if (s.running) {
-      stateEl.innerHTML = `<span class="pill ok">running on ${escapeHtml(s.interface || "")}</span>`;
+      const tag = s.auto_monitor ? " · auto-monitor" : "";
+      stateEl.innerHTML = `<span class="pill ok">running on ${escapeHtml(s.interface || "")}${tag}</span>`;
     } else if (s.last_error) {
       stateEl.innerHTML = `<span class="pill err">${escapeHtml(s.last_error)}</span>`;
     } else {
       stateEl.innerHTML = `<span class="pill">disabled</span>`;
     }
     $("#probe-backend").textContent = s.backend || "—";
+    const ch = s.current_channel;
+    const hop = (s.channels || []).join(",");
+    $("#probe-channel").textContent = ch != null
+      ? (hop ? `${ch} (cycling ${hop})` : String(ch))
+      : (hop ? `cycling ${hop}` : "—");
     $("#probe-count").textContent = (s.probe_count || 0).toLocaleString();
     $("#probe-last").textContent = s.last_probe_at
       ? new Date(s.last_probe_at * 1000).toLocaleString()
