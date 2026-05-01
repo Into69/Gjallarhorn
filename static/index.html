@@ -271,8 +271,8 @@
           <pre class="mono" style="background: var(--panel-2); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); font-size: 11px; margin: 0 0 10px;">sudo ip link set wlan1 down
 sudo iw dev wlan1 set type monitor
 sudo ip link set wlan1 up</pre>
-          <label>Wireless interface (blank to disable)
-            <input type="text" name="probe_interface" placeholder="wlan1" autocomplete="off" />
+          <label>Wireless interface
+            <select name="probe_interface" id="set-probe-iface"></select>
           </label>
           <label>Backend
             <select name="probe_backend">

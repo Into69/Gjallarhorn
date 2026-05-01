@@ -430,6 +430,30 @@ async function loadInterfaces() {
     ? wifi.interfaces.map(renderWifiCard).join("")
     : `<div class="muted">No WiFi interfaces detected (requires Linux + <code>iw</code>).</div>`;
 
+  // Probe scanner — same interface list, but associated interfaces stay
+  // selectable (the auto-monitor path will yank them into monitor mode and
+  // drop the existing association on purpose).
+  const psel = $("#set-probe-iface");
+  if (psel) {
+    const prev = psel.value;
+    psel.innerHTML = `<option value="">(none — disabled)</option>`;
+    for (const iface of wifi.interfaces) {
+      const o = document.createElement("option");
+      o.value = iface.name;
+      const tag = iface.type === "monitor"
+        ? " — already monitor mode"
+        : iface.ssid
+          ? ` — connected to ${iface.ssid} (will drop)`
+          : "";
+      o.textContent = `${iface.name}${tag}`;
+      if (iface.ssid) {
+        o.title = "Selecting this interface with auto-monitor on will disconnect it from its current AP.";
+      }
+      psel.appendChild(o);
+    }
+    if (prev) psel.value = prev;  // preserve user's saved selection
+  }
+
   // Bluetooth
   const bt = await api("/api/interfaces/bluetooth");
   const bsel = $("#set-bt-adapter");
