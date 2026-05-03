@@ -311,9 +311,17 @@ sudo ip link set wlan1 up</pre>
             <input type="checkbox" name="probe_auto_monitor" />
             Auto-configure monitor mode (sets/restores interface; needs root or CAP_NET_ADMIN)
           </label>
-          <label>Channels to hop (comma-separated, blank to disable)
-            <input type="text" name="probe_channels" placeholder="1,6,11" autocomplete="off" />
-          </label>
+          <div class="probe-channels-block">
+            <div class="probe-channels-header">
+              <span>Channels to hop</span>
+              <span class="muted" id="probe-channels-summary">none selected</span>
+              <span class="toolbar-spacer"></span>
+              <button type="button" id="probe-channels-defaults" class="secondary">Defaults (1, 6, 11)</button>
+              <button type="button" id="probe-channels-clear" class="secondary">Clear</button>
+            </div>
+            <input type="hidden" name="probe_channels" id="probe-channels-value" value="" />
+            <div id="probe-channels-grid" class="muted">Pick an interface above to see its supported channels.</div>
+          </div>
           <label>Minimum RSSI (dBm)
             <input type="number" name="probe_min_rssi" min="-110" max="-20" />
           </label>

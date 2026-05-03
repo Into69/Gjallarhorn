@@ -619,6 +619,8 @@ async function loadSettings() {
   }
   await applyMapProvider(s.map_provider);
   applyLocDynamicEnabled();
+  // Kick off the probe channel checkbox grid for the saved interface (if any).
+  refreshProbeChannelsForIface((s.probe_interface || "").trim() || null);
 }
 
 function applyLocDynamicEnabled() {
@@ -649,6 +651,126 @@ $("#settings-form").addEventListener("submit", async (e) => {
   } catch (err) {
     $("#save-status").textContent = "error: " + err.message;
   }
+});
+
+// ── probe scanner channel picker ──────────────────────
+let _probeChannelsCache = null;       // most recent fetched channel list
+let _probeChannelsIface = null;       // iface those channels were fetched for
+
+function _parseChannelList(s) {
+  // Tolerant of whitespace and bad entries; mirrors services/probe_scanner.parse_channels.
+  return new Set(
+    (s || "").split(",")
+      .map(p => parseInt(p.trim(), 10))
+      .filter(n => Number.isInteger(n) && n >= 1 && n <= 196)
+  );
+}
+
+function _serializeChannels(set) {
+  return [...set].sort((a, b) => a - b).join(",");
+}
+
+function renderProbeChannels(channels, selected) {
+  const grid = $("#probe-channels-grid");
+  if (!grid) return;
+  if (!channels || !channels.length) {
+    grid.className = "muted";
+    grid.textContent = _probeChannelsIface
+      ? `No supported channels reported for ${_probeChannelsIface} (iw not available, or interface offline?).`
+      : "Pick an interface above to see its supported channels.";
+    updateProbeChannelsSummary(selected);
+    return;
+  }
+  grid.className = "";
+  grid.innerHTML = "";
+  // Group by band; render each band as its own grid.
+  const bands = {};
+  for (const c of channels) {
+    (bands[c.band] = bands[c.band] || []).push(c);
+  }
+  // Stable order: 2.4 → 5 → 6 → other
+  const ORDER = ["2.4GHz", "5GHz", "6GHz"];
+  const bandKeys = Object.keys(bands).sort((a, b) => {
+    const ai = ORDER.indexOf(a), bi = ORDER.indexOf(b);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+  for (const band of bandKeys) {
+    const wrap = document.createElement("div");
+    wrap.className = "probe-channels-band";
+    wrap.innerHTML = `<div class="probe-channels-band-title">${escapeHtml(band)}</div>`;
+    const inner = document.createElement("div");
+    inner.className = "probe-channels-grid";
+    for (const c of bands[band]) {
+      const checked = selected.has(c.channel);
+      const flags = [];
+      if (c.no_ir)    flags.push("no-IR");
+      if (c.disabled) flags.push("disabled");
+      const flagStr = flags.length ? ` (${flags.join(", ")})` : "";
+      const label = document.createElement("label");
+      label.title = `${c.freq_mhz} MHz${flagStr}`;
+      if (c.disabled) label.classList.add("disabled");
+      if (c.no_ir)    label.classList.add("no-ir");
+      label.innerHTML = `
+        <input type="checkbox" value="${c.channel}" ${checked ? "checked" : ""} />
+        <span>${c.channel}</span>
+      `;
+      label.querySelector("input").addEventListener("change", () => {
+        const cur = _parseChannelList($("#probe-channels-value").value);
+        const ch = c.channel;
+        if (label.querySelector("input").checked) cur.add(ch); else cur.delete(ch);
+        $("#probe-channels-value").value = _serializeChannels(cur);
+        updateProbeChannelsSummary(cur);
+      });
+      inner.appendChild(label);
+    }
+    wrap.appendChild(inner);
+    grid.appendChild(wrap);
+  }
+  updateProbeChannelsSummary(selected);
+}
+
+function updateProbeChannelsSummary(selected) {
+  const out = $("#probe-channels-summary");
+  if (!out) return;
+  if (!selected || !selected.size) {
+    out.textContent = "none selected — hopping disabled";
+    return;
+  }
+  const list = _serializeChannels(selected);
+  out.textContent = `${selected.size} selected: ${list}`;
+}
+
+async function refreshProbeChannelsForIface(iface) {
+  const selected = _parseChannelList($("#probe-channels-value").value);
+  if (!iface) {
+    _probeChannelsCache = null;
+    _probeChannelsIface = null;
+    renderProbeChannels(null, selected);
+    return;
+  }
+  try {
+    const r = await api(`/api/interfaces/wifi/${encodeURIComponent(iface)}/channels`);
+    _probeChannelsCache = r.channels || [];
+    _probeChannelsIface = iface;
+    renderProbeChannels(_probeChannelsCache, selected);
+  } catch (e) {
+    _probeChannelsCache = [];
+    _probeChannelsIface = iface;
+    renderProbeChannels([], selected);
+  }
+}
+
+$("#set-probe-iface")?.addEventListener("change", (e) => {
+  refreshProbeChannelsForIface(e.target.value || null);
+});
+$("#probe-channels-defaults")?.addEventListener("click", () => {
+  $("#probe-channels-value").value = "1,6,11";
+  // Re-render to reflect the new state in the checkboxes.
+  renderProbeChannels(_probeChannelsCache, _parseChannelList("1,6,11"));
+});
+$("#probe-channels-clear")?.addEventListener("click", () => {
+  $("#probe-channels-value").value = "";
+  renderProbeChannels(_probeChannelsCache, new Set());
 });
 
 async function refreshProbeStatus() {

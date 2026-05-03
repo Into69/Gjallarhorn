@@ -273,6 +273,13 @@ async def api_wifi_interface_names():
     return {"interfaces": await list_wifi_interfaces()}
 
 
+@app.get("/api/interfaces/wifi/{iface}/channels")
+async def api_wifi_interface_channels(iface: str):
+    """Channels supported by a wireless interface, derived from `iw phy info`."""
+    from services.wifi_scanner import list_interface_channels
+    return {"channels": await list_interface_channels(iface)}
+
+
 @app.get("/api/interfaces/bluetooth")
 async def api_bt_adapters():
     """Rich info per BlueZ adapter (address, powered, discovering, etc.)."""

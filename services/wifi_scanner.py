@@ -38,6 +38,65 @@ async def list_wifi_interfaces() -> list[str]:
     return [info["name"] for info in await list_wifi_interface_info()]
 
 
+async def list_interface_channels(iface: str) -> list[dict]:
+    """Return the channels supported by `iface`, parsed out of `iw phy info`.
+    Each entry: {channel, freq_mhz, band, disabled, no_ir}. Empty list when
+    iw isn't installed or the interface isn't found."""
+    if not iface or not shutil.which("iw"):
+        return []
+    # Find the wiphy index for this interface (line: "wiphy N").
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "iw", "dev", iface, "info",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await proc.communicate()
+    except Exception as e:
+        log.warning("iw dev %s info failed: %s", iface, e)
+        return []
+    m = re.search(r"^\s*wiphy\s+(\d+)", out.decode(errors="ignore"), re.MULTILINE)
+    if not m:
+        return []
+    phy = f"phy{m.group(1)}"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "iw", "phy", phy, "info",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        out, _ = await proc.communicate()
+    except Exception as e:
+        log.warning("iw phy %s info failed: %s", phy, e)
+        return []
+    return _parse_iw_phy_channels(out.decode(errors="ignore"))
+
+
+def _parse_iw_phy_channels(text: str) -> list[dict]:
+    """Pull every channel entry out of an `iw phy info` blob. Lines look like
+    `* 2412 MHz [1] (20.0 dBm)` or `* 5320 MHz [64] (disabled)`. Same channel
+    listed under multiple bands is deduped."""
+    channels: list[dict] = []
+    seen: set[int] = set()
+    for raw in text.splitlines():
+        m = re.match(r"\s*\*\s+(\d+)\s+MHz\s+\[(\d+)\](.*)", raw)
+        if not m:
+            continue
+        freq = int(m.group(1))
+        ch = int(m.group(2))
+        if ch in seen:
+            continue
+        seen.add(ch)
+        rest = m.group(3) or ""
+        channels.append({
+            "channel": ch,
+            "freq_mhz": freq,
+            "band": _band_from_freq(freq),
+            "disabled": "(disabled)" in rest,
+            "no_ir": "(no IR)" in rest,
+        })
+    channels.sort(key=lambda c: c["freq_mhz"])
+    return channels
+
+
 async def pick_wifi_interface() -> str | None:
     """Auto-pick a wireless interface suitable for scanning. Prefers
     interfaces not currently associated with an AP, since associated
