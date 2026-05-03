@@ -828,10 +828,17 @@ async function refreshProbeStatus() {
       }
       $("#probe-backend").textContent = s.backend || "—";
       const ch = s.current_channel;
-      const hop = (s.channels || []).join(",");
-      $("#probe-channel").textContent = ch != null
-        ? (hop ? `${ch} (cycling ${hop})` : String(ch))
-        : (hop ? `cycling ${hop}` : "—");
+      const hopStr = (s.channels || []).join(",");
+      // When the scanner isn't running, "cycling …" is misleading — it's a
+      // configured-but-inactive list. Show "—" instead so the Status row
+      // remains the single source of truth.
+      if (!s.running) {
+        $("#probe-channel").textContent = hopStr ? `(configured: ${hopStr})` : "—";
+      } else {
+        $("#probe-channel").textContent = ch != null
+          ? (hopStr ? `${ch} (cycling ${hopStr})` : String(ch))
+          : (hopStr ? `cycling ${hopStr}` : "—");
+      }
       $("#probe-count").textContent = count.toLocaleString();
       $("#probe-last").textContent = s.last_probe_at
         ? new Date(s.last_probe_at * 1000).toLocaleString()
