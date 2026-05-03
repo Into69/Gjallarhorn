@@ -184,6 +184,31 @@ async def list_locations() -> list[dict]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+async def delete_location(location_id: int) -> dict:
+    """Delete one sensor location and its devices + observations.
+    Returns the row counts removed (0 across the board if the location
+    didn't exist)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM sensor_locations WHERE id=?", (location_id,)
+        ) as cur:
+            if await cur.fetchone() is None:
+                return {"locations": 0, "devices": 0, "observations": 0}
+        async with db.execute(
+            "SELECT COUNT(*) FROM devices WHERE location_id=?", (location_id,)
+        ) as cur:
+            n_dev = (await cur.fetchone())[0]
+        async with db.execute(
+            "SELECT COUNT(*) FROM observations WHERE location_id=?", (location_id,)
+        ) as cur:
+            n_obs = (await cur.fetchone())[0]
+        await db.execute("DELETE FROM observations WHERE location_id=?", (location_id,))
+        await db.execute("DELETE FROM devices WHERE location_id=?", (location_id,))
+        await db.execute("DELETE FROM sensor_locations WHERE id=?", (location_id,))
+        await db.commit()
+    return {"locations": 1, "devices": n_dev, "observations": n_obs}
+
+
 async def delete_all_locations() -> dict:
     """Delete every sensor location and all associated devices/observations.
     Returns the row counts that were removed."""

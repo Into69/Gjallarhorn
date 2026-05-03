@@ -217,6 +217,41 @@ async def build_report_pdf() -> bytes:
             col_widths=[0.45 * inch, 2.4 * inch, 0.6 * inch, 0.55 * inch, 0.7 * inch, 1.3 * inch, 1.3 * inch],
         ))
 
+    # ── Top 10 by location coverage ──
+    # Headline summary of the devices showing up at the most distinct
+    # sensor locations. `common` is already ordered by n_locations DESC,
+    # so the first 10 are the right set.
+    if common:
+        flow.append(Spacer(1, 14))
+        flow.append(Paragraph("Top 10 devices by location coverage", s["h1"]))
+        flow.append(Paragraph(
+            "Devices observed at the largest number of distinct sensor locations. "
+            "Strong candidates for &quot;follows the operator&quot; (a phone, a watch) or "
+            "&quot;ubiquitous infrastructure&quot; (carrier hardware, common IoT) depending "
+            "on vendor and kind.",
+            s["caption"],
+        ))
+        top_rows = []
+        for i, d in enumerate(common[:10], start=1):
+            det = d.get("details") or {}
+            name = det.get("ssid") or det.get("name") or ""
+            vendor = det.get("vendor") or ""
+            top_rows.append((
+                str(i),
+                d.get("kind", ""),
+                _cell(d.get("device_id", ""), mono=True),
+                _cell(name),
+                _cell(vendor),
+                str(d.get("n_locations", "")),
+                f"{d.get('max_rssi', '')} dBm",
+                str(d.get("total_seen", "")),
+            ))
+        flow.append(_table(
+            ["#", "Kind", "Device ID", "Name / SSID", "Vendor", "Locations", "Best RSSI", "Total seen"],
+            top_rows,
+            col_widths=[0.30 * inch, 0.55 * inch, 1.30 * inch, 1.40 * inch, 1.30 * inch, 0.70 * inch, 0.85 * inch, 0.90 * inch],
+        ))
+
     # ── Common devices ──
     if common:
         flow.append(PageBreak())

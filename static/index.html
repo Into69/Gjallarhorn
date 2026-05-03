@@ -27,6 +27,20 @@
   <main>
     <section id="tab-map" class="tab active">
       <div id="map">
+        <div class="map-controls">
+          <button id="map-pause" type="button" class="icon-btn" title="Pause scanning, alerts, and new locations">
+            <span id="map-pause-icon" aria-hidden="true"></span>
+          </button>
+          <button id="map-track-sensor" type="button" class="icon-btn map-toggle" title="Sensor tracking — pan to the GPS fix on every update">
+            <span id="map-track-sensor-icon" aria-hidden="true"></span>
+          </button>
+          <button id="map-smart-track" type="button" class="icon-btn map-toggle" title="Smart tracking — pan only when the fix nears the viewport edge, so you can explore without the map fighting you">
+            <span id="map-smart-track-icon" aria-hidden="true"></span>
+          </button>
+          <button id="map-autozoom" type="button" class="icon-btn map-toggle" title="Auto-zoom — fit the view to include the sensor and all locations">
+            <span id="map-autozoom-icon" aria-hidden="true"></span>
+          </button>
+        </div>
         <div id="alert-toasts" class="alert-toasts" aria-live="polite"></div>
       </div>
       <aside id="map-side">
@@ -91,6 +105,9 @@
             <option value="bluetooth">bluetooth</option>
             <option value="wifi_client">wifi client (probe)</option>
           </select>
+        </label>
+        <label class="check" title="Merge wifi BSSIDs that share the same first 5 octets — these are typically the same physical AP advertising on multiple bands or SSIDs.">
+          <input type="checkbox" id="dev-group-bssid" checked /> Group multi-BSSID APs
         </label>
         <button id="dev-refresh">Refresh</button>
       </div>

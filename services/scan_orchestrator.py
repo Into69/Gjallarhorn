@@ -24,6 +24,22 @@ class ScanOrchestrator:
         self.gps = gps
         self._tasks: list[asyncio.Task] = []
         self._stop = asyncio.Event()
+        # Runtime pause flag. When true, the scan loops and the probe
+        # callback stay alive and tick on schedule but skip their work
+        # — no new device upserts, no alert evaluation, and the GPS
+        # clustering doesn't open new locations. Not persisted: a fresh
+        # process always starts unpaused.
+        self._paused: bool = False
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    def set_paused(self, paused: bool) -> None:
+        if self._paused == paused:
+            return
+        self._paused = paused
+        log.info("orchestrator %s", "PAUSED" if paused else "resumed")
 
     async def start(self) -> None:
         self._stop.clear()
@@ -53,14 +69,15 @@ class ScanOrchestrator:
         while not self._stop.is_set():
             try:
                 s = await settings_store.load()
-                fix = self.gps.fix
-                await location_manager.update_with_fix(
-                    fix,
-                    static_threshold_m=s.new_location_distance_m,
-                    label_template=s.location_label_template,
-                    dynamic_enabled=s.new_location_dynamic,
-                    dynamic_t_s=s.new_location_dynamic_t_s,
-                )
+                if not self._paused:
+                    fix = self.gps.fix
+                    await location_manager.update_with_fix(
+                        fix,
+                        static_threshold_m=s.new_location_distance_m,
+                        label_template=s.location_label_template,
+                        dynamic_enabled=s.new_location_dynamic,
+                        dynamic_t_s=s.new_location_dynamic_t_s,
+                    )
             except Exception as e:
                 log.exception("gps loop error: %s", e)
             if not await self._sleep((await settings_store.load()).gps_poll_interval_s):
@@ -77,7 +94,7 @@ class ScanOrchestrator:
                 if iface == "auto":
                     iface = await pick_wifi_interface()
                 loc_id = location_manager.active_id
-                if iface and loc_id is not None:
+                if not self._paused and iface and loc_id is not None:
                     devs = await scan_wifi(iface)
                     fix = self.gps.fix
                     for d in devs:
@@ -107,7 +124,7 @@ class ScanOrchestrator:
             try:
                 s = await settings_store.load()
                 loc_id = location_manager.active_id
-                if loc_id is not None:
+                if not self._paused and loc_id is not None:
                     devs = await scan_bluetooth(s.bluetooth_adapter, s.bluetooth_scan_duration_s)
                     fix = self.gps.fix
                     for d in devs:
@@ -174,6 +191,8 @@ class ScanOrchestrator:
         into devices and runs alert evaluation. Probed SSIDs accumulate
         in the device's details so we can see which networks a client is
         chasing."""
+        if self._paused:
+            return
         s = await settings_store.load()
         loc_id = location_manager.active_id
         if loc_id is None:

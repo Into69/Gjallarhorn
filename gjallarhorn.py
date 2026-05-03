@@ -155,6 +155,26 @@ async def api_probe_status():
     return probe_scanner.status()
 
 
+# ---------- Pause / resume ----------
+@app.get("/api/system/pause")
+async def api_pause_status():
+    return {"paused": orchestrator.paused if orchestrator else False}
+
+
+@app.post("/api/system/pause")
+async def api_set_pause(payload: dict | None = None):
+    """Toggle or set the pause flag. Body may contain {paused: bool};
+    if absent, toggles the current state."""
+    if orchestrator is None:
+        raise HTTPException(503, "orchestrator not running")
+    if payload is None or "paused" not in payload:
+        target = not orchestrator.paused
+    else:
+        target = bool(payload.get("paused"))
+    orchestrator.set_paused(target)
+    return {"paused": orchestrator.paused}
+
+
 # ---------- Self-update ----------
 @app.get("/api/system/update/status")
 async def api_update_status():
@@ -320,6 +340,22 @@ async def api_label_location(loc_id: int, payload: dict):
 @app.get("/api/locations/{loc_id}/devices")
 async def api_location_devices(loc_id: int, kind: Optional[str] = None):
     return {"devices": await db.devices_at_location(loc_id, kind)}
+
+
+@app.delete("/api/locations/{loc_id}")
+async def api_delete_location(loc_id: int):
+    """Delete one location and its associated devices/observations.
+    If it's the active location, clear the location_manager pointer so
+    the next GPS fix opens a fresh one."""
+    counts = await db.delete_location(loc_id)
+    if counts.get("locations", 0) == 0:
+        raise HTTPException(404, "location not found")
+    if location_manager.active_id == loc_id:
+        location_manager._active_id = None  # type: ignore[attr-defined]
+        location_manager._active_lat = None  # type: ignore[attr-defined]
+        location_manager._active_lon = None  # type: ignore[attr-defined]
+    log.info("Deleted location %d: %s", loc_id, counts)
+    return {"ok": True, "deleted": counts}
 
 
 @app.get("/api/tilecache/status")

@@ -138,9 +138,13 @@ async function pollGps() {
 
     if (fix.lat != null && fix.lon != null) {
       const ll = [fix.lat, fix.lon];
-      if (!sensorMarker) {
+      const firstFix = !sensorMarker;
+      if (firstFix) {
         sensorMarker = L.circleMarker(ll, { radius: 8, color: "#5cd1ff", fillColor: "#5cd1ff", fillOpacity: 0.8 }).addTo(map);
-        map.setView(ll, 17);
+        // One-shot center on first fix only when no toggle will do it for us.
+        if (!mapToggles.trackSensor && !mapToggles.smartTrack && !mapToggles.autoZoom) {
+          map.setView(ll, 17);
+        }
       } else {
         sensorMarker.setLatLng(ll);
       }
@@ -151,6 +155,7 @@ async function pollGps() {
           accuracyCircle.setLatLng(ll); accuracyCircle.setRadius(fix.error_h);
         }
       }
+      applyMapView(ll);
     }
   } catch (e) {
     $("#gps-status").textContent = "GPS: error";
@@ -219,6 +224,7 @@ async function refreshLocationMarkers() {
 async function loadLocationOptions() {
   const { locations, active_id } = await api("/api/locations");
   const sel = $("#dev-location");
+  const previous = sel.value;
   sel.innerHTML = "";
   for (const loc of locations) {
     const o = document.createElement("option");
@@ -226,7 +232,15 @@ async function loadLocationOptions() {
     o.textContent = `${loc.label || `Loc ${loc.id}`}${loc.id === active_id ? " (active)" : ""}`;
     sel.appendChild(o);
   }
-  if (active_id) sel.value = active_id;
+  // Preserve the user's prior selection if it still exists; otherwise
+  // default to the active location (only really used on first load,
+  // since this function gets re-called from refreshDevices on change).
+  const ids = new Set(locations.map(l => String(l.id)));
+  if (previous && ids.has(previous)) {
+    sel.value = previous;
+  } else if (active_id != null) {
+    sel.value = String(active_id);
+  }
 }
 
 async function refreshDevices() {
@@ -238,41 +252,125 @@ async function refreshDevices() {
   const { devices } = await api(`/api/locations/${id}/devices${q}`);
   const tbody = $("#dev-table tbody");
   tbody.innerHTML = "";
-  for (const d of devices) {
-    const det = d.details || {};
-    // For wifi_client probes, the device doesn't have a single SSID — it has
-    // a list of networks it's been searching for. Show those instead.
-    let nameOrSsid;
-    if (d.kind === "wifi_client" && Array.isArray(det.ssids)) {
-      const named = det.ssids.filter(Boolean);
-      nameOrSsid = named.length
-        ? named.slice(0, 3).join(", ") + (named.length > 3 ? `, +${named.length - 3}` : "")
-        : "(wildcard)";
-    } else {
-      nameOrSsid = det.ssid ?? det.name ?? "";
-    }
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${d.kind}</td>
-      <td class="mono">${d.device_id}</td>
-      <td>${escapeHtml(nameOrSsid)}</td>
-      <td>${escapeHtml(det.vendor || "")}</td>
-      <td>${d.best_rssi}</td>
-      <td>${d.last_rssi}</td>
-      <td>${d.seen_count}</td>
-      <td class="mono">${formatTime(d.first_seen)}</td>
-      <td class="mono">${formatTime(d.last_seen)}</td>
-      <td><details><summary>JSON</summary><pre>${escapeHtml(JSON.stringify(det, null, 2))}</pre></details></td>
-    `;
-    tbody.appendChild(tr);
+
+  // Optionally collapse wifi BSSIDs that share the same first 5 octets
+  // (multi-BSSID radios on the same physical AP). Other kinds pass through.
+  const groupBssid = $("#dev-group-bssid")?.checked;
+  const rows = groupBssid ? groupWifiByApPrefix(devices) : devices;
+
+  for (const d of rows) {
+    tbody.appendChild(renderDeviceRow(d));
   }
+}
+
+function renderDeviceRow(d) {
+  const det = d.details || {};
+  // For wifi_client probes, the device doesn't have a single SSID — it has
+  // a list of networks it's been searching for. Show those instead.
+  let nameOrSsid;
+  if (d.kind === "wifi_client" && Array.isArray(det.ssids)) {
+    const named = det.ssids.filter(Boolean);
+    nameOrSsid = named.length
+      ? named.slice(0, 3).join(", ") + (named.length > 3 ? `, +${named.length - 3}` : "")
+      : "(wildcard)";
+  } else if (d._merged_ssids) {
+    // Grouped row: show all distinct SSIDs that the merged BSSIDs broadcast.
+    nameOrSsid = d._merged_ssids.join(", ");
+  } else {
+    nameOrSsid = det.ssid ?? det.name ?? "";
+  }
+  const tr = document.createElement("tr");
+  // Mark merged rows visually so it's obvious they represent multiple BSSIDs.
+  if (d._merged_count > 1) tr.classList.add("merged-ap");
+  const idCell = d._merged_count > 1
+    ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>`
+    : `<span class="mono">${escapeHtml(d.device_id)}</span>`;
+  tr.innerHTML = `
+    <td>${escapeHtml(d.kind)}</td>
+    <td>${idCell}</td>
+    <td>${escapeHtml(nameOrSsid)}</td>
+    <td>${escapeHtml(det.vendor || "")}</td>
+    <td>${d.best_rssi}</td>
+    <td>${d.last_rssi ?? ""}</td>
+    <td>${d.seen_count}</td>
+    <td class="mono">${formatTime(d.first_seen)}</td>
+    <td class="mono">${formatTime(d.last_seen)}</td>
+    <td><details><summary>${d._merged_count > 1 ? "members + JSON" : "JSON"}</summary><pre>${escapeHtml(JSON.stringify(d._merged_count > 1 ? { members: d._members, details: det } : det, null, 2))}</pre></details></td>
+  `;
+  return tr;
+}
+
+function groupWifiByApPrefix(devices) {
+  const groups = new Map();   // prefix -> aggregated row
+  const out = [];
+  for (const d of devices) {
+    if (d.kind !== "wifi" || !d.device_id || d.device_id.length < 17) {
+      out.push(d);
+      continue;
+    }
+    const prefix = d.device_id.slice(0, 14).toLowerCase();   // "aa:bb:cc:dd:ee"
+    let g = groups.get(prefix);
+    if (!g) {
+      // Seed with a shallow clone so we can mutate aggregate fields freely.
+      g = {
+        ...d,
+        details: { ...(d.details || {}) },
+        _members: [d.device_id],
+        _merged_count: 1,
+        _merged_ssids: [],
+        _merged_vendors: [],
+      };
+      // Track SSIDs/vendors as deduped lists from the start.
+      const det0 = d.details || {};
+      if (det0.ssid) g._merged_ssids.push(det0.ssid);
+      if (det0.vendor) g._merged_vendors.push(det0.vendor);
+      groups.set(prefix, g);
+      out.push(g);
+      continue;
+    }
+    // Merge a new BSSID into the existing group.
+    g._members.push(d.device_id);
+    g._merged_count++;
+    g.seen_count = (g.seen_count || 0) + (d.seen_count || 0);
+    if (d.best_rssi != null && (g.best_rssi == null || d.best_rssi > g.best_rssi)) {
+      g.best_rssi = d.best_rssi;
+    }
+    // last_rssi / last_seen come from the most recently-seen member.
+    if (d.last_seen && (!g.last_seen || d.last_seen > g.last_seen)) {
+      g.last_seen = d.last_seen;
+      g.last_rssi = d.last_rssi;
+    }
+    if (d.first_seen && (!g.first_seen || d.first_seen < g.first_seen)) {
+      g.first_seen = d.first_seen;
+    }
+    // Use the lowest BSSID as the canonical id so the grouping is stable.
+    if (d.device_id < g.device_id) g.device_id = d.device_id;
+    const det = d.details || {};
+    if (det.ssid && !g._merged_ssids.includes(det.ssid)) g._merged_ssids.push(det.ssid);
+    if (det.vendor && !g._merged_vendors.includes(det.vendor)) g._merged_vendors.push(det.vendor);
+    if (!g.details.vendor && det.vendor) g.details.vendor = det.vendor;
+  }
+  return out;
 }
 
 $("#dev-refresh").addEventListener("click", refreshDevices);
 $("#dev-location").addEventListener("change", refreshDevices);
 $("#dev-kind").addEventListener("change", refreshDevices);
+$("#dev-group-bssid").addEventListener("change", refreshDevices);
 
 // ---------- locations tab ----------
+// Inline SVG icons — small currentColor glyphs so they pick up button text colour.
+const ICON_FLOPPY = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2h9l3 3v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z"/><path d="M4 2v4h7V2"/><path d="M5 10h6v4H5z"/></svg>`;
+const ICON_TRASH  = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10"/><path d="M5 4V2.5A.5.5 0 0 1 5.5 2h5a.5.5 0 0 1 .5.5V4"/><path d="M4 4l1 9.5a1 1 0 0 0 1 .9h4a1 1 0 0 0 1-.9L12 4"/><path d="M6.5 7v5M9.5 7v5"/></svg>`;
+const ICON_PAUSE  = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><rect x="3.5" y="2" width="3" height="12" rx="0.5"/><rect x="9.5" y="2" width="3" height="12" rx="0.5"/></svg>`;
+const ICON_PLAY   = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M3.5 2.5v11a.5.5 0 0 0 .77.42l8.5-5.5a.5.5 0 0 0 0-.84l-8.5-5.5A.5.5 0 0 0 3.5 2.5z"/></svg>`;
+// Sensor tracking — crosshair / target.
+const ICON_CROSSHAIR = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="6.5"/><circle cx="8" cy="8" r="2" fill="currentColor"/><line x1="8" y1="0.5" x2="8" y2="2.5"/><line x1="8" y1="13.5" x2="8" y2="15.5"/><line x1="0.5" y1="8" x2="2.5" y2="8"/><line x1="13.5" y1="8" x2="15.5" y2="8"/></svg>`;
+// Smart tracking — navigation arrow (think "follow but smart").
+const ICON_NAV = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M14 2 L2 7 L7 9 L9 14 Z" fill="currentColor" fill-opacity="0.4"/></svg>`;
+// Auto-zoom — four corner brackets ("fit to view").
+const ICON_FIT = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.5V2.5h3"/><path d="M14 5.5V2.5h-3"/><path d="M2 10.5v3h3"/><path d="M14 10.5v3h-3"/></svg>`;
+
 async function refreshLocations() {
   const { locations, active_id } = await api("/api/locations");
   const tbody = $("#loc-table tbody");
@@ -288,7 +386,10 @@ async function refreshLocations() {
       <td>${loc.fix_count}</td>
       <td class="mono">${formatTime(loc.created_at)}</td>
       <td class="mono">${formatTime(loc.last_seen_at)}</td>
-      <td><button class="secondary save-label" data-id="${loc.id}">Save</button></td>
+      <td class="row-actions">
+        <button type="button" class="icon-btn save-label" data-id="${loc.id}" title="Save label changes" aria-label="Save label">${ICON_FLOPPY}</button>
+        <button type="button" class="icon-btn danger delete-loc" data-id="${loc.id}" title="Delete this location and all of its devices/observations" aria-label="Delete location">${ICON_TRASH}</button>
+      </td>
     `;
     tbody.appendChild(tr);
   }
@@ -298,6 +399,20 @@ async function refreshLocations() {
       const input = $(`.loc-label[data-id="${id}"]`);
       await api(`/api/locations/${id}`, { method: "PATCH", body: JSON.stringify({ label: input.value }) });
       refreshLocations();
+    })
+  );
+  $$(".delete-loc").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const id = b.dataset.id;
+      if (!confirm(`Delete location #${id}?\n\nThis permanently removes its devices and observations. This cannot be undone.`)) return;
+      try {
+        await api(`/api/locations/${id}`, { method: "DELETE" });
+        await refreshLocations();
+        await refreshLocationMarkers();
+        await loadLocationOptions();
+      } catch (e) {
+        alert("Delete failed: " + e.message);
+      }
     })
   );
 }
@@ -1314,6 +1429,129 @@ async function waitForRestart() {
   $("#upd-status").textContent = "timed out waiting for restart — reload manually";
 }
 
+// ---------- pause toggle (map tab floating control) ----------
+let _pausedState = false;
+
+function renderPauseButton(paused) {
+  _pausedState = paused;
+  const btn = $("#map-pause");
+  const icon = $("#map-pause-icon");
+  if (!btn || !icon) return;
+  if (paused) {
+    btn.classList.add("paused");
+    btn.title = "PAUSED — scanning, alerts, and new locations are suspended. Click to resume.";
+    btn.setAttribute("aria-label", "Resume scanning");
+    icon.innerHTML = ICON_PLAY;
+  } else {
+    btn.classList.remove("paused");
+    btn.title = "Pause scanning, alerts, and new-location creation";
+    btn.setAttribute("aria-label", "Pause scanning");
+    icon.innerHTML = ICON_PAUSE;
+  }
+}
+
+async function refreshPauseStatus() {
+  try {
+    const r = await api("/api/system/pause");
+    renderPauseButton(!!r.paused);
+  } catch { /* leave whatever was last shown */ }
+}
+
+$("#map-pause").addEventListener("click", async () => {
+  // Optimistic: flip the icon immediately so it feels responsive, then
+  // confirm against the server's response.
+  const next = !_pausedState;
+  renderPauseButton(next);
+  try {
+    const r = await api("/api/system/pause", {
+      method: "POST", body: JSON.stringify({ paused: next }),
+    });
+    renderPauseButton(!!r.paused);
+  } catch (e) {
+    // Roll back the optimistic flip on failure.
+    renderPauseButton(!next);
+    alert("Pause toggle failed: " + e.message);
+  }
+});
+
+// ---------- map view toggles ----------
+// Per-browser preferences (no server state). All three default to off.
+const mapToggles = {
+  trackSensor: localStorage.getItem("mapTrackSensor") === "1",
+  smartTrack:  localStorage.getItem("mapSmartTrack")  === "1",
+  autoZoom:    localStorage.getItem("mapAutoZoom")    === "1",
+};
+
+function persistMapToggles() {
+  localStorage.setItem("mapTrackSensor", mapToggles.trackSensor ? "1" : "0");
+  localStorage.setItem("mapSmartTrack",  mapToggles.smartTrack  ? "1" : "0");
+  localStorage.setItem("mapAutoZoom",    mapToggles.autoZoom    ? "1" : "0");
+}
+
+function renderMapToggles() {
+  const set = (id, on) => $(id)?.classList.toggle("active", on);
+  set("#map-track-sensor", mapToggles.trackSensor);
+  set("#map-smart-track",  mapToggles.smartTrack);
+  set("#map-autozoom",     mapToggles.autoZoom);
+}
+
+function setupMapToggleIcons() {
+  const inject = (id, html) => { const el = $(id); if (el) el.innerHTML = html; };
+  inject("#map-track-sensor-icon", ICON_CROSSHAIR);
+  inject("#map-smart-track-icon",  ICON_NAV);
+  inject("#map-autozoom-icon",     ICON_FIT);
+  renderMapToggles();
+}
+
+function bindMapToggle(btnId, key) {
+  $(btnId)?.addEventListener("click", () => {
+    mapToggles[key] = !mapToggles[key];
+    persistMapToggles();
+    renderMapToggles();
+    // Apply immediately so the click feels responsive — don't wait for the
+    // next GPS poll.
+    if (sensorMarker) applyMapView(sensorMarker.getLatLng());
+  });
+}
+bindMapToggle("#map-track-sensor", "trackSensor");
+bindMapToggle("#map-smart-track",  "smartTrack");
+bindMapToggle("#map-autozoom",     "autoZoom");
+
+function applyMapView(latlng) {
+  // Called every GPS poll (and on toggle clicks). All branches are no-ops
+  // when nothing's enabled, so the user keeps full manual control.
+  if (!latlng) return;
+  const ll = latlng.lat !== undefined ? latlng : L.latLng(latlng[0], latlng[1]);
+
+  // Comfort zone for "smart" mode: inner 50% of the current viewport.
+  const inComfortZone = () => {
+    const b = map.getBounds();
+    return b.pad(-0.25).contains(ll);
+  };
+
+  if (mapToggles.autoZoom) {
+    // Smart + auto-zoom: only re-fit when sensor's drifted out of view.
+    if (mapToggles.smartTrack && inComfortZone()) return;
+    const bounds = L.latLngBounds([ll]);
+    for (const m of locationMarkers.values()) {
+      try { bounds.extend(m.getLatLng()); } catch {}
+    }
+    if (bounds.isValid()) {
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 18, animate: true });
+    }
+    return;
+  }
+
+  if (mapToggles.smartTrack) {
+    if (!inComfortZone()) map.panTo(ll, { animate: true });
+    return;
+  }
+
+  if (mapToggles.trackSensor) {
+    map.panTo(ll, { animate: true });
+  }
+}
+
 // ---------- logs ----------
 let logsLastSeenId = 0;
 let logsRendered = [];      // mirror of what the DOM shows; capped at 1000
@@ -1455,6 +1693,9 @@ function formatTime(iso) {
   refreshTileCache();
   refreshProbeStatus();
   setInterval(refreshProbeStatus, 10000);
+  refreshPauseStatus();
+  setInterval(refreshPauseStatus, 15000);
+  setupMapToggleIcons();
   startLogsPolling();
   setInterval(pollGps, 1500);
   setInterval(refreshLocationMarkers, 5000);
