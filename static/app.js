@@ -894,21 +894,33 @@ function updateProbeMapCard(s) {
     }
   }
 
-  // Error banner: only when there is an error and the scanner isn't running
+  // Error banner: scanner-level error when stopped, or a channel-set
+  // failure while running (channel-hop iw calls being denied is a common
+  // silent-failure mode — surfacing it here saves a trip to the Logs tab).
   const errEl = $("#probe-map-error");
   if (errEl) {
-    if (s.last_error && !s.running) {
+    let msg = null;
+    if (s.last_error && !s.running) msg = s.last_error;
+    else if (s.running && s.last_channel_error) msg = `channel-set failing: ${s.last_channel_error}`;
+    if (msg) {
       errEl.hidden = false;
-      errEl.textContent = s.last_error;
+      errEl.textContent = msg;
     } else {
       errEl.hidden = true;
     }
   }
 
-  // Channel
+  // Channel: prefer the live current_channel; if unknown but a hop list is
+  // configured and we're running, show "cycling" so the card matches what
+  // the Settings tab reports.
   const ch = s.current_channel;
+  const hop = s.channels || [];
   const chEl = $("#probe-map-channel");
-  if (chEl) chEl.textContent = ch != null ? String(ch) : "—";
+  if (chEl) {
+    if (ch != null) chEl.textContent = String(ch);
+    else if (hop.length && s.running) chEl.textContent = "cycling…";
+    else chEl.textContent = "—";
+  }
 
   // Probes captured
   const countEl = $("#probe-map-count");
@@ -918,10 +930,9 @@ function updateProbeMapCard(s) {
   const rateEl = $("#probe-map-rate");
   if (rateEl) rateEl.textContent = _probeRateText;
 
-  // Channel-hop summary in footer
+  // Channel-hop summary in footer (uses `hop` from earlier in the function)
   const hopEl = $("#probe-map-hop");
   if (hopEl) {
-    const hop = s.channels || [];
     if (hop.length) hopEl.textContent = `Hopping ${hop.join(",")}`;
     else hopEl.textContent = "No channel hop";
   }

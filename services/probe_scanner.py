@@ -73,6 +73,10 @@ class ProbeScanner:
         self._probe_count: int = 0
         self._started_at: Optional[float] = None
         self._current_channel: Optional[int] = None
+        self._last_channel_error: Optional[str] = None
+        self._channel_set_count: int = 0
+        # Channels we've already warned about so we don't spam logs.
+        self._warned_channels: set[int] = set()
 
     @property
     def running(self) -> bool:
@@ -105,6 +109,8 @@ class ProbeScanner:
             "channels": list(self._channels),
             "current_channel": self._current_channel,
             "last_error": self._last_error,
+            "last_channel_error": self._last_channel_error,
+            "channel_set_count": self._channel_set_count,
             "last_probe_at": self._last_probe_at,
             "probe_count": self._probe_count,
             "started_at": self._started_at,
@@ -231,15 +237,25 @@ class ProbeScanner:
         """Cycle the interface through self._channels until stop is signalled."""
         if not self._channels or not self._iface:
             return
+        self._warned_channels.clear()
+        self._last_channel_error = None
         i = 0
         while not self._stop.is_set():
             ch = self._channels[i % len(self._channels)]
             rc, _, err = await _run_cmd(["iw", "dev", self._iface, "set", "channel", str(ch)])
             if rc == 0:
                 self._current_channel = ch
+                self._channel_set_count += 1
+                self._last_channel_error = None
             else:
-                # Don't spam logs — log once per failing channel per session.
-                log.debug("channel-hop iw failed for ch=%s: %s", ch, err.strip())
+                msg = (err.strip() or f"rc={rc}")
+                self._last_channel_error = f"ch{ch}: {msg}"
+                # Warn once per failing channel per session so logs aren't spammed
+                # but the user can see *why* current_channel isn't advancing.
+                if ch not in self._warned_channels:
+                    self._warned_channels.add(ch)
+                    log.warning("probe scanner: iw set channel %s failed on %s: %s",
+                                ch, self._iface, msg)
             i += 1
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=0.25)
