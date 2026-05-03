@@ -566,23 +566,34 @@ async function loadInterfaces() {
 
   // Probe scanner — same interface list, but associated interfaces stay
   // selectable (the auto-monitor path will yank them into monitor mode and
-  // drop the existing association on purpose).
+  // drop the existing association on purpose). Each option's current iw
+  // type is surfaced in the label so monitor-ready interfaces are obvious;
+  // they're also sorted to the top.
   const psel = $("#set-probe-iface");
   if (psel) {
     const prev = psel.value;
     psel.innerHTML = `<option value="">(none — disabled)</option>`;
-    for (const iface of wifi.interfaces) {
+    const rankIface = (i) => {
+      if (i.type === "monitor") return 0;
+      if (!i.ssid) return 1;
+      return 2;
+    };
+    const ranked = [...wifi.interfaces].sort((a, b) => rankIface(a) - rankIface(b));
+    for (const iface of ranked) {
       const o = document.createElement("option");
       o.value = iface.name;
-      const tag = iface.type === "monitor"
-        ? " — already monitor mode"
-        : iface.ssid
-          ? ` — connected to ${iface.ssid} (will drop)`
-          : "";
-      o.textContent = `${iface.name}${tag}`;
-      if (iface.ssid) {
+      let tag;
+      if (iface.type === "monitor") {
+        tag = " — monitor mode ✓";
+        o.title = "Already in monitor mode — probe scanner can capture immediately.";
+      } else if (iface.ssid) {
+        tag = ` — ${iface.type || "managed"}, connected to ${iface.ssid} (auto-monitor will disconnect)`;
         o.title = "Selecting this interface with auto-monitor on will disconnect it from its current AP.";
+      } else {
+        tag = ` — ${iface.type || "managed"}`;
+        o.title = "Not in monitor mode. Enable auto-monitor, or set monitor mode manually before starting the scanner.";
       }
+      o.textContent = `${iface.name}${tag}`;
       psel.appendChild(o);
     }
     if (prev) psel.value = prev;  // preserve user's saved selection
