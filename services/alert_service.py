@@ -34,14 +34,31 @@ class AlertService:
         self._cooldown: dict[tuple[int, str], float] = {}
         # location_id -> created_at epoch seconds (cached; created_at never changes)
         self._location_created: dict[int, float] = {}
+        # Cached whitelist as (kind, lowercased target). Targets match either
+        # exactly or as a prefix (so "aa:bb:cc" whitelists the whole OUI).
+        self._whitelist: list[tuple[str, str]] = []
 
     async def load_rules(self) -> None:
         self._rules = await db.list_alert_rules()
         self._rules_loaded = True
 
+    async def load_whitelist(self) -> None:
+        rows = await db.list_whitelist()
+        self._whitelist = [(r["kind"], (r["device_id"] or "").lower()) for r in rows]
+
     async def reload(self) -> None:
-        """Call after any rule mutation so the next scan uses fresh rules."""
+        """Call after any rule or whitelist mutation so the next scan
+        uses fresh state."""
         await self.load_rules()
+        await self.load_whitelist()
+
+    def is_whitelisted(self, kind: str, device_id_l: str) -> bool:
+        for k, target in self._whitelist:
+            if k != kind or not target:
+                continue
+            if device_id_l == target or device_id_l.startswith(target):
+                return True
+        return False
 
     async def evaluate(
         self,
@@ -56,6 +73,10 @@ class AlertService:
         a list of newly-inserted alert_events ids (after cooldown filtering)."""
         if not self._rules_loaded:
             await self.load_rules()
+            await self.load_whitelist()
+        # Whitelist gate: silently skip every rule for whitelisted devices.
+        if self.is_whitelisted(device_kind, (device_id or "").lower()):
+            return []
         if not self._rules:
             return []
 
@@ -103,6 +124,17 @@ class AlertService:
                 # Stash the count so it lands in the alert's stored details for context.
                 details = {**details, "_cross_location_count": count, "_cross_location_n": n_locs}
             elif not _matches(rule, device_id_l, ssid_or_name, vendor, rssi):
+                continue
+
+            # Compound rule: every extra condition must also match. Conditions
+            # are passed straight through to _matches since they share the
+            # match_type/match_value shape; types here are restricted at the
+            # API to the simple value-based four (no stateful types).
+            extras = rule.get("extra_conditions") or []
+            if extras and not all(
+                _matches(c, device_id_l, ssid_or_name, vendor, rssi)
+                for c in extras
+            ):
                 continue
 
             key = (rule["id"], device_id_l)

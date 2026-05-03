@@ -48,6 +48,7 @@ async def lifespan(app: FastAPI):
     await gps.start()
     await oui_service.ensure_loaded()
     await alert_service.load_rules()
+    await alert_service.load_whitelist()
     orchestrator = ScanOrchestrator(gps)
     await orchestrator.start()
     log.info("Gjallarhorn started")
@@ -146,6 +147,40 @@ async def api_logs(since_id: int = 0, level: str = "INFO", limit: int = 500):
 async def api_logs_clear():
     from services.log_buffer import log_buffer
     return {"cleared": log_buffer.clear()}
+
+
+# ---------- Device whitelist ----------
+@app.get("/api/whitelist")
+async def api_list_whitelist():
+    return {"entries": await db.list_whitelist()}
+
+
+@app.post("/api/whitelist")
+async def api_add_whitelist(payload: dict):
+    """Add (or upsert) a whitelist entry. Body: {kind, device_id, note?}.
+    The device_id is matched as either an exact value or a prefix at
+    evaluation time, so 'aa:bb:cc' silences a whole OUI."""
+    kind = payload.get("kind")
+    if kind not in ALLOWED_KINDS or kind is None:
+        raise HTTPException(400, "kind must be wifi, bluetooth, or wifi_client")
+    device_id = (payload.get("device_id") or "").strip()
+    if not device_id:
+        raise HTTPException(400, "device_id required")
+    note = payload.get("note")
+    if note is not None:
+        note = str(note).strip() or None
+    entry_id = await db.add_whitelist(kind, device_id, note)
+    await alert_service.reload()
+    return {"id": entry_id}
+
+
+@app.delete("/api/whitelist/{entry_id}")
+async def api_delete_whitelist(entry_id: int):
+    ok = await db.delete_whitelist(entry_id)
+    if not ok:
+        raise HTTPException(404, "entry not found")
+    await alert_service.reload()
+    return {"ok": True}
 
 
 # ---------- Probe scanner ----------
@@ -422,7 +457,38 @@ ALLOWED_MATCH_TYPES = {
     "device_id", "name_contains", "vendor_contains", "rssi_above",
     "new_device", "cross_location",
 }
+# Compound (AND) conditions only support the simple value-based types — the
+# stateful ones (new_device, cross_location) only make sense as the primary
+# match.
+COMPOUND_MATCH_TYPES = {
+    "device_id", "name_contains", "vendor_contains", "rssi_above",
+}
 ALLOWED_KINDS = {None, "wifi", "bluetooth", "wifi_client"}
+
+
+def _validate_extra_conditions(raw) -> list[dict]:
+    """Normalise + validate the extra_conditions list for create/update.
+    Raises HTTPException on bad input."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise HTTPException(400, "extra_conditions must be a list")
+    out: list[dict] = []
+    for i, c in enumerate(raw):
+        if not isinstance(c, dict):
+            raise HTTPException(400, f"extra_conditions[{i}] must be an object")
+        mt = c.get("match_type")
+        if mt not in COMPOUND_MATCH_TYPES:
+            raise HTTPException(
+                400,
+                f"extra_conditions[{i}].match_type must be one of "
+                f"{sorted(COMPOUND_MATCH_TYPES)}",
+            )
+        mv = (c.get("match_value") or "").strip()
+        if not mv:
+            raise HTTPException(400, f"extra_conditions[{i}].match_value required")
+        out.append({"match_type": mt, "match_value": mv})
+    return out
 
 
 @app.get("/api/alerts/rules")
@@ -454,8 +520,10 @@ async def api_create_rule(payload: dict):
             raise HTTPException(400, "location_id must be an integer")
     notify_discord = bool(payload.get("notify_discord"))
     audible = bool(payload.get("audible"))
+    extra_conditions = _validate_extra_conditions(payload.get("extra_conditions"))
     rule_id = await db.create_alert_rule(
-        name, kind, match_type, match_value, location_id, notify_discord, audible
+        name, kind, match_type, match_value, location_id,
+        notify_discord, audible, extra_conditions,
     )
     await alert_service.reload()
     return {"id": rule_id}
@@ -498,6 +566,11 @@ async def api_update_rule(rule_id: int, payload: dict):
         fields["notify_discord"] = 1 if payload["notify_discord"] else 0
     if "audible" in payload:
         fields["audible"] = 1 if payload["audible"] else 0
+    if "extra_conditions" in payload:
+        import json as _json
+        fields["extra_conditions"] = _json.dumps(
+            _validate_extra_conditions(payload["extra_conditions"])
+        )
     await db.update_alert_rule(rule_id, fields)
     await alert_service.reload()
     return {"ok": True}

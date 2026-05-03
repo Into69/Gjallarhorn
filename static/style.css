@@ -552,6 +552,57 @@ select option:disabled { color: var(--muted); }
 }
 .map-controls .icon-btn.map-toggle.active:hover { background: rgba(92, 209, 255, 0.16); }
 
+/* Whitelist panel form. */
+.wl-form {
+  display: grid;
+  grid-template-columns: 1fr 2fr 2fr auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+.wl-form label { display: grid; gap: 4px; font-size: 11px; color: var(--muted); margin-bottom: 0; }
+.wl-form #wl-form-status { grid-column: 1 / -1; }
+#wl-table { font-size: 12px; }
+#wl-table .mono { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
+
+/* Compound rule extras inside the rule form. */
+.rule-extras {
+  grid-column: 1 / -1;
+  background: rgba(92, 209, 255, 0.04);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.rule-extras-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 6px;
+}
+.rule-extras-header .secondary { padding: 4px 10px; font-size: 12px; }
+.rule-extra-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr) auto;
+  gap: 6px;
+  margin-top: 6px;
+}
+.rule-extra-row select,
+.rule-extra-row input {
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 4px 8px; font: inherit;
+}
+.rule-extra-remove { padding: 0 8px; min-width: 28px; line-height: 1; }
+.rule-extra-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--accent);
+  cursor: help;
+}
+
 /* Compact icon buttons (used in tables for per-row actions). */
 .icon-btn {
   background: var(--panel-2);
@@ -570,6 +621,12 @@ select option:disabled { color: var(--muted); }
 .icon-btn.danger { color: var(--err); border-color: #5a2828; background: transparent; }
 .icon-btn.danger:hover { background: rgba(255, 107, 107, 0.1); border-color: var(--err); color: var(--err); }
 .row-actions { display: flex; gap: 4px; }
+
+/* Devices tab: whitelist toggle and row marker. */
+.dev-wl { padding: 4px 8px; font-size: 14px; line-height: 1; }
+.dev-wl.active { color: var(--accent); border-color: var(--accent); }
+#dev-table tr.whitelisted td { opacity: 0.55; }
+#dev-table tr.whitelisted .dev-wl { opacity: 1; }
 
 /* Devices tab: visual cue for merged multi-BSSID rows. */
 #dev-table tr.merged-ap td:first-child::after {

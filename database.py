@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS alert_rules (
     location_id INTEGER,                    -- NULL = any location
     notify_discord INTEGER NOT NULL DEFAULT 0,
     audible INTEGER NOT NULL DEFAULT 0,
+    extra_conditions TEXT NOT NULL DEFAULT '[]',  -- JSON list of {match_type,match_value}; AND-combined with the primary match
     created_at TEXT NOT NULL
 );
 
@@ -92,6 +93,15 @@ CREATE TABLE IF NOT EXISTS alert_events (
 
 CREATE INDEX IF NOT EXISTS idx_alert_events_time ON alert_events(triggered_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alert_events_rule ON alert_events(rule_id);
+
+CREATE TABLE IF NOT EXISTS device_whitelist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,             -- 'wifi' | 'bluetooth' | 'wifi_client'
+    device_id TEXT NOT NULL,        -- exact id, or a prefix (matches like the device_id rule)
+    note TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(kind, device_id)
+);
 """
 
 
@@ -114,6 +124,10 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     if "audible" not in cols:
         await db.execute(
             "ALTER TABLE alert_rules ADD COLUMN audible INTEGER NOT NULL DEFAULT 0"
+        )
+    if "extra_conditions" not in cols:
+        await db.execute(
+            "ALTER TABLE alert_rules ADD COLUMN extra_conditions TEXT NOT NULL DEFAULT '[]'"
         )
 
 
@@ -325,22 +339,33 @@ async def list_alert_rules() -> list[dict]:
         async with db.execute(
             "SELECT * FROM alert_rules ORDER BY id DESC"
         ) as cur:
-            return [dict(r) for r in await cur.fetchall()]
+            rows = [dict(r) for r in await cur.fetchall()]
+    # Inflate the extra_conditions JSON so callers (alert_service, API)
+    # can use it as a list directly without parsing each time.
+    for r in rows:
+        raw = r.get("extra_conditions") or "[]"
+        try:
+            r["extra_conditions"] = json.loads(raw)
+        except (TypeError, ValueError):
+            r["extra_conditions"] = []
+    return rows
 
 
 async def create_alert_rule(
     name: str, kind: str | None, match_type: str, match_value: str,
     location_id: int | None, notify_discord: bool = False,
-    audible: bool = False,
+    audible: bool = False, extra_conditions: list | None = None,
 ) -> int:
     now = datetime.utcnow().isoformat()
+    extra_json = json.dumps(extra_conditions or [])
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "INSERT INTO alert_rules(name,enabled,kind,match_type,match_value,"
-            "location_id,notify_discord,audible,created_at) "
-            "VALUES(?,1,?,?,?,?,?,?,?)",
+            "location_id,notify_discord,audible,extra_conditions,created_at) "
+            "VALUES(?,1,?,?,?,?,?,?,?,?)",
             (name, kind, match_type, match_value, location_id,
-             1 if notify_discord else 0, 1 if audible else 0, now),
+             1 if notify_discord else 0, 1 if audible else 0,
+             extra_json, now),
         )
         await db.commit()
         return cur.lastrowid
@@ -511,6 +536,43 @@ async def list_common_devices(min_locations: int = 2, limit: int = 50) -> list[d
         r["locations"] = sorted({int(x) for x in ids.split(",") if x})
         r.pop("location_ids", None)
     return rows
+
+
+# ---------- whitelist ----------
+async def list_whitelist() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM device_whitelist ORDER BY kind, device_id"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def add_whitelist(kind: str, device_id: str, note: str | None = None) -> int:
+    """Insert a whitelist entry (or update its note if the (kind, device_id)
+    pair already exists). Returns the row id."""
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO device_whitelist(kind, device_id, note, created_at) "
+            "VALUES(?,?,?,?) "
+            "ON CONFLICT(kind, device_id) DO UPDATE SET note=excluded.note",
+            (kind, device_id.lower(), note, now),
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT id FROM device_whitelist WHERE kind=? AND device_id=?",
+            (kind, device_id.lower()),
+        ) as cur:
+            row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def delete_whitelist(entry_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM device_whitelist WHERE id=?", (entry_id,))
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def devices_at_location(location_id: int, kind: str | None = None) -> list[dict]:

@@ -157,16 +157,48 @@ def _table(headers: list[str], rows: list[tuple], col_widths: list[float] | None
 _KIND_COLORS = {"wifi": "#1f78b4", "bluetooth": "#8b5cf6"}
 
 
+def _whitelist_matcher(entries: list[dict]):
+    """Build a fast (kind, device_id_lower) -> bool matcher from whitelist
+    entries, with prefix matching."""
+    norm = [(e["kind"], (e["device_id"] or "").lower()) for e in entries]
+    def match(kind: str, device_id: str) -> bool:
+        d = (device_id or "").lower()
+        for k, target in norm:
+            if k != kind or not target:
+                continue
+            if d == target or d.startswith(target):
+                return True
+        return False
+    return match
+
+
 async def build_report_pdf() -> bytes:
     locations = await db.list_locations()
     locations = sorted(locations, key=lambda l: l["id"])
     common = await db.list_common_devices(min_locations=2, limit=_MAX_COMMON_DEVICES)
 
+    # Whitelist filtering — drop matching entries from per-location device
+    # lists, recompute counts to match, and prune the common-devices table.
+    whitelist = await db.list_whitelist()
+    is_wl = _whitelist_matcher(whitelist)
+
     # Per-location device pulls in parallel-ish (sequentially since aiosqlite
     # serializes anyway, but the volume is small).
     per_loc_devices: dict[int, list[dict]] = {}
     for loc in locations:
-        per_loc_devices[loc["id"]] = await db.devices_at_location(loc["id"])
+        devs = await db.devices_at_location(loc["id"])
+        per_loc_devices[loc["id"]] = [
+            d for d in devs if not is_wl(d.get("kind", ""), d.get("device_id", ""))
+        ]
+        # Recompute the per-location counts so the comparison table reflects
+        # the post-whitelist totals (the SQL aggregate from list_locations
+        # was unaware of the whitelist).
+        kept = per_loc_devices[loc["id"]]
+        loc["wifi_count"] = sum(1 for d in kept if d.get("kind") == "wifi")
+        loc["bt_count"] = sum(1 for d in kept if d.get("kind") == "bluetooth")
+        loc["total_observations"] = sum(int(d.get("seen_count") or 0) for d in kept)
+
+    common = [c for c in common if not is_wl(c.get("kind", ""), c.get("device_id", ""))]
 
     s = _styles()
     flow: list[Any] = []
@@ -176,6 +208,12 @@ async def build_report_pdf() -> bytes:
     flow.append(Paragraph(
         f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", s["subtitle"],
     ))
+    if whitelist:
+        flow.append(Paragraph(
+            f"<i>{len(whitelist)} whitelisted "
+            f"{'entry' if len(whitelist) == 1 else 'entries'} excluded from this report.</i>",
+            s["caption"],
+        ))
 
     total_wifi = sum(int(l.get("wifi_count") or 0) for l in locations)
     total_bt = sum(int(l.get("bt_count") or 0) for l in locations)

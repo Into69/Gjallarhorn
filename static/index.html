@@ -116,7 +116,9 @@
           <tr>
             <th>Kind</th><th>ID</th><th>Name/SSID</th><th>Vendor</th>
             <th>Best RSSI</th><th>Last RSSI</th><th>Seen</th>
-            <th>First</th><th>Last</th><th>Details</th>
+            <th>First</th><th>Last</th>
+            <th title="Whitelist this device (silences alerts and excludes from reports)">WL</th>
+            <th>Details</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -187,6 +189,13 @@
                 <option value="">any</option>
               </select>
             </label>
+            <div id="rule-extra-conditions" class="rule-extras">
+              <div class="rule-extras-header">
+                <span class="muted">Additional conditions (all must also match)</span>
+                <button type="button" id="rule-add-extra" class="secondary">+ Add condition</button>
+              </div>
+              <div id="rule-extra-list"></div>
+            </div>
             <label class="check">
               <input type="checkbox" name="notify_discord" /> Send to Discord on match
             </label>
@@ -406,6 +415,38 @@ sudo ip link set wlan1 up</pre>
           <button id="upd-restart" class="danger">Restart now</button>
           <span id="upd-status" class="muted"></span>
         </div>
+      </fieldset>
+
+      <fieldset id="whitelist-panel">
+        <legend>Device whitelist</legend>
+        <p class="muted">
+          Whitelisted devices are excluded from PDF reports and never trigger alerts.
+          The <code>device id</code> matches either exactly or as a prefix — entering
+          <code>aa:bb:cc</code> silences a whole OUI.
+        </p>
+        <form id="wl-form" class="wl-form">
+          <label>Kind
+            <select name="kind">
+              <option value="wifi">wifi</option>
+              <option value="bluetooth">bluetooth</option>
+              <option value="wifi_client">wifi client</option>
+            </select>
+          </label>
+          <label>Device id (or prefix)
+            <input type="text" name="device_id" placeholder="aa:bb:cc:dd:ee:ff or aa:bb:cc" required />
+          </label>
+          <label>Note
+            <input type="text" name="note" placeholder="my phone, work AP, …" />
+          </label>
+          <button type="submit">Add</button>
+          <span id="wl-form-status" class="muted"></span>
+        </form>
+        <table id="wl-table">
+          <thead>
+            <tr><th>Kind</th><th>Device id</th><th>Note</th><th>Added</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </fieldset>
 
       <fieldset id="oui-panel">

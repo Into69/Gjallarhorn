@@ -144,9 +144,19 @@ class GPSService:
     def _handle_sky(self, msg: dict) -> None:
         f = self._fix.model_copy()
         sats = msg.get("satellites") or []
-        f.sats_visible = msg.get("nSat", len(sats) if sats else None)
-        used = msg.get("uSat")
-        if used is None and sats:
-            used = sum(1 for s in sats if s.get("used"))
-        f.sats_used = used
+        # Prefer the per-sat array when present — it's the most authoritative
+        # source (we can see exactly which sats are 'used'). Fall back to
+        # gpsd 3.20+ summary fields nSat/uSat. Older gpsd builds with no
+        # satellite info at all leave the prior counts intact via model_copy
+        # rather than wiping them.
+        if sats:
+            f.sats_visible = len(sats)
+            f.sats_used = sum(1 for s in sats if s.get("used"))
+        elif "nSat" in msg or "uSat" in msg:
+            if "nSat" in msg:
+                f.sats_visible = msg["nSat"]
+            if "uSat" in msg:
+                f.sats_used = msg["uSat"]
+        else:
+            log.debug("SKY without satellite counts (will rely on prior values): %s", msg)
         self._fix = f

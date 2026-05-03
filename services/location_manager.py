@@ -24,8 +24,9 @@ def effective_radius_m(
     grows linearly with speed: at constant speed v, the sensor reaches the
     bubble edge t_s seconds after the bubble opened."""
     if not dynamic_enabled or speed_mps is None or speed_mps <= 0:
-        return static_min_m
-    return min(static_min_m + speed_mps * max(0.0, dynamic_t_s), DYNAMIC_RADIUS_MAX_M)
+        return round(static_min_m, 2)
+    raw = min(static_min_m + speed_mps * max(0.0, dynamic_t_s), DYNAMIC_RADIUS_MAX_M)
+    return round(raw, 2)
 
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

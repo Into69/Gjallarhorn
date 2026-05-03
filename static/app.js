@@ -121,10 +121,16 @@ async function pollGps() {
     const fix = data.fix;
     const gpsPill = $("#gps-status");
     if (data.connected && fix.mode >= 2) {
-      gpsPill.textContent = `GPS: ${fix.mode}D fix · ${fix.sats_used ?? "?"}/${fix.sats_visible ?? "?"} sats`;
+      const used = fix.sats_used, vis = fix.sats_visible;
+      let satStr;
+      if (used != null && vis != null) satStr = `${used}/${vis} sats`;
+      else if (vis != null) satStr = `${vis} visible`;
+      else satStr = "no sat info";
+      gpsPill.textContent = `GPS: ${fix.mode}D fix · ${satStr}`;
       gpsPill.className = "pill ok";
     } else if (data.connected) {
-      gpsPill.textContent = `GPS: searching (${fix.sats_visible ?? "?"} visible)`;
+      const vis = fix.sats_visible;
+      gpsPill.textContent = `GPS: searching (${vis != null ? vis + " visible" : "no sat info"})`;
       gpsPill.className = "pill warn";
     } else {
       gpsPill.textContent = "GPS: gpsd unreachable";
@@ -282,9 +288,14 @@ function renderDeviceRow(d) {
   const tr = document.createElement("tr");
   // Mark merged rows visually so it's obvious they represent multiple BSSIDs.
   if (d._merged_count > 1) tr.classList.add("merged-ap");
+  const wl = isWhitelisted(d.kind, d.device_id);
+  if (wl) tr.classList.add("whitelisted");
   const idCell = d._merged_count > 1
     ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>`
     : `<span class="mono">${escapeHtml(d.device_id)}</span>`;
+  const wlBtn = wl
+    ? `<button type="button" class="icon-btn dev-wl active" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelisted — click to remove from whitelist" aria-label="Remove from whitelist">★</button>`
+    : `<button type="button" class="icon-btn dev-wl" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelist this device (silences alerts and excludes from reports)" aria-label="Add to whitelist">☆</button>`;
   tr.innerHTML = `
     <td>${escapeHtml(d.kind)}</td>
     <td>${idCell}</td>
@@ -295,8 +306,15 @@ function renderDeviceRow(d) {
     <td>${d.seen_count}</td>
     <td class="mono">${formatTime(d.first_seen)}</td>
     <td class="mono">${formatTime(d.last_seen)}</td>
+    <td>${wlBtn}</td>
     <td><details><summary>${d._merged_count > 1 ? "members + JSON" : "JSON"}</summary><pre>${escapeHtml(JSON.stringify(d._merged_count > 1 ? { members: d._members, details: det } : det, null, 2))}</pre></details></td>
   `;
+  // Wire the whitelist button — done here so each row keeps its own
+  // event listener bound to the right (kind, id) pair.
+  tr.querySelector(".dev-wl").addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    quickWhitelistToggle(d.kind, d.device_id);
+  });
   return tr;
 }
 
@@ -733,11 +751,18 @@ async function refreshAlertRules() {
     const tr = document.createElement("tr");
     tr.dataset.id = r.id;
     tr.title = "Double-click to edit";
+    const extras = Array.isArray(r.extra_conditions) ? r.extra_conditions : [];
+    const extraTip = extras.length
+      ? extras.map(c => `${MATCH_TYPE_LABEL[c.match_type] || c.match_type} = ${c.match_value}`).join(" AND ")
+      : "";
+    const extraBadge = extras.length
+      ? ` <span class="rule-extra-badge" title="${escapeAttr("AND " + extraTip)}">+${extras.length} AND</span>`
+      : "";
     tr.innerHTML = `
       <td><input type="checkbox" class="rule-toggle" data-id="${r.id}" ${r.enabled ? "checked" : ""}></td>
       <td>${escapeHtml(r.name)}</td>
       <td>${escapeHtml(r.kind || "any")}</td>
-      <td>${escapeHtml(MATCH_TYPE_LABEL[r.match_type] || r.match_type)}</td>
+      <td>${escapeHtml(MATCH_TYPE_LABEL[r.match_type] || r.match_type)}${extraBadge}</td>
       <td class="mono">${escapeHtml(r.match_value)}</td>
       <td>${r.location_id ?? "any"}</td>
       <td><input type="checkbox" class="rule-discord" data-id="${r.id}" ${r.notify_discord ? "checked" : ""}></td>
@@ -1093,6 +1118,61 @@ async function refreshAlerts() {
   setBadge(0);
 }
 
+// ── compound rule conditions ──────────────────────────
+// Only the simple value-based types are valid as additional conditions —
+// stateful types (new_device, cross_location) only make sense as the
+// primary match.
+const COMPOUND_TYPES = [
+  ["device_id",       "device id (exact / prefix)"],
+  ["name_contains",   "name / SSID contains"],
+  ["vendor_contains", "vendor contains"],
+  ["rssi_above",      "RSSI ≥ dBm"],
+];
+
+function buildExtraConditionRow(initial = { match_type: "device_id", match_value: "" }) {
+  const row = document.createElement("div");
+  row.className = "rule-extra-row";
+  const opts = COMPOUND_TYPES
+    .map(([v, label]) => `<option value="${v}"${v === initial.match_type ? " selected" : ""}>${escapeHtml(label)}</option>`)
+    .join("");
+  row.innerHTML = `
+    <select class="rule-extra-type">${opts}</select>
+    <input type="text" class="rule-extra-value mono"
+           value="${escapeAttr(initial.match_value || "")}"
+           placeholder="${escapeAttr(MATCH_TYPE_PLACEHOLDERS[initial.match_type] || "")}" />
+    <button type="button" class="icon-btn danger rule-extra-remove" title="Remove this condition" aria-label="Remove condition">×</button>
+  `;
+  // Update placeholder when the type changes.
+  row.querySelector(".rule-extra-type").addEventListener("change", (e) => {
+    row.querySelector(".rule-extra-value").placeholder =
+      MATCH_TYPE_PLACEHOLDERS[e.target.value] || "";
+  });
+  row.querySelector(".rule-extra-remove").addEventListener("click", () => row.remove());
+  return row;
+}
+
+function readExtraConditions() {
+  const out = [];
+  for (const row of $$("#rule-extra-list .rule-extra-row")) {
+    const mt = row.querySelector(".rule-extra-type").value;
+    const mv = (row.querySelector(".rule-extra-value").value || "").trim();
+    if (!mv) continue;  // silently drop blank rows
+    out.push({ match_type: mt, match_value: mv });
+  }
+  return out;
+}
+
+function setExtraConditions(list) {
+  const container = $("#rule-extra-list");
+  if (!container) return;
+  container.innerHTML = "";
+  for (const c of (list || [])) container.appendChild(buildExtraConditionRow(c));
+}
+
+$("#rule-add-extra")?.addEventListener("click", () => {
+  $("#rule-extra-list").appendChild(buildExtraConditionRow());
+});
+
 function enterEditRuleMode(rule) {
   if (!rule) return;
   const form = $("#rule-form");
@@ -1104,6 +1184,7 @@ function enterEditRuleMode(rule) {
   form.elements["location_id"].value = rule.location_id != null ? String(rule.location_id) : "";
   form.elements["notify_discord"].checked = !!rule.notify_discord;
   form.elements["audible"].checked = !!rule.audible;
+  setExtraConditions(rule.extra_conditions || []);
   // Update placeholder for the new match_type without clobbering the value.
   $("#rule-match-value").placeholder = MATCH_TYPE_PLACEHOLDERS[rule.match_type] || "";
   $("#rule-form-title").textContent = `Edit rule #${rule.id}`;
@@ -1119,6 +1200,7 @@ function exitEditRuleMode() {
   form.dataset.editingId = "";
   form.reset();
   applyMatchTypeUI($("#rule-match-type").value);
+  setExtraConditions([]);
   $("#rule-form-title").textContent = "New rule";
   $("#rule-form-submit").textContent = "Add rule";
   $("#rule-form-cancel").hidden = true;
@@ -1139,6 +1221,7 @@ $("#rule-form").addEventListener("submit", async (e) => {
     location_id: fd.get("location_id") || null,
     notify_discord: fd.get("notify_discord") === "on",
     audible: fd.get("audible") === "on",
+    extra_conditions: readExtraConditions(),
   };
   $("#rule-form-status").textContent = "saving…";
   try {
@@ -1252,6 +1335,89 @@ $("#oui-test").addEventListener("click", async () => {
     $("#oui-test-result").textContent = "error: " + e.message;
   }
 });
+
+// ---------- whitelist ----------
+let _whitelistCache = [];
+
+function buildWhitelistMatcher(entries) {
+  // Mirror of services/alert_service.is_whitelisted — used to render the
+  // Devices tab toggle without needing a server round-trip per row.
+  const norm = entries.map(e => [e.kind, (e.device_id || "").toLowerCase()]);
+  return (kind, deviceId) => {
+    const d = (deviceId || "").toLowerCase();
+    return norm.some(([k, target]) =>
+      k === kind && target && (d === target || d.startsWith(target))
+    );
+  };
+}
+let isWhitelisted = (_k, _d) => false;
+
+async function refreshWhitelist() {
+  const tbody = $("#wl-table tbody");
+  if (!tbody) return;
+  try {
+    const r = await api("/api/whitelist");
+    _whitelistCache = r.entries || [];
+    isWhitelisted = buildWhitelistMatcher(_whitelistCache);
+    tbody.innerHTML = "";
+    for (const e of _whitelistCache) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(e.kind)}</td>
+        <td class="mono">${escapeHtml(e.device_id)}</td>
+        <td>${escapeHtml(e.note || "")}</td>
+        <td class="mono">${formatTime(e.created_at)}</td>
+        <td><button type="button" class="icon-btn danger wl-delete" data-id="${e.id}" title="Remove from whitelist" aria-label="Remove">×</button></td>
+      `;
+      tbody.appendChild(tr);
+    }
+    $$(".wl-delete").forEach(b => b.addEventListener("click", async () => {
+      await api(`/api/whitelist/${b.dataset.id}`, { method: "DELETE" });
+      await refreshWhitelist();
+    }));
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" class="muted">error: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+$("#wl-form")?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const form = ev.target;
+  const fd = new FormData(form);
+  const payload = {
+    kind: fd.get("kind"),
+    device_id: (fd.get("device_id") || "").toString().trim(),
+    note: (fd.get("note") || "").toString().trim() || null,
+  };
+  $("#wl-form-status").textContent = "saving…";
+  try {
+    await api("/api/whitelist", { method: "POST", body: JSON.stringify(payload) });
+    form.reset();
+    $("#wl-form-status").textContent = "added";
+    setTimeout(() => $("#wl-form-status").textContent = "", 1500);
+    await refreshWhitelist();
+  } catch (err) {
+    $("#wl-form-status").textContent = "error: " + err.message;
+  }
+});
+
+async function quickWhitelistToggle(kind, deviceId) {
+  // Find an existing entry that exactly matches; if found, delete it.
+  // Otherwise add a new entry.
+  const exact = _whitelistCache.find(
+    e => e.kind === kind && (e.device_id || "").toLowerCase() === deviceId.toLowerCase()
+  );
+  if (exact) {
+    if (!confirm(`Remove ${kind} ${deviceId} from the whitelist?`)) return;
+    await api(`/api/whitelist/${exact.id}`, { method: "DELETE" });
+  } else {
+    await api("/api/whitelist", { method: "POST", body: JSON.stringify({
+      kind, device_id: deviceId, note: null,
+    }) });
+  }
+  await refreshWhitelist();
+  await refreshDevices();
+}
 
 // ---------- updates ----------
 let lastUpdateStatus = null;
@@ -1696,6 +1862,7 @@ function formatTime(iso) {
   refreshPauseStatus();
   setInterval(refreshPauseStatus, 15000);
   setupMapToggleIcons();
+  refreshWhitelist();
   startLogsPolling();
   setInterval(pollGps, 1500);
   setInterval(refreshLocationMarkers, 5000);
