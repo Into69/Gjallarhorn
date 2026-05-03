@@ -16,6 +16,7 @@
       <button class="tab-btn" data-tab="locations">Locations</button>
       <button class="tab-btn" data-tab="alerts">Alerts <span id="alerts-badge" class="tab-badge" hidden>0</span></button>
       <button class="tab-btn" data-tab="settings">Settings</button>
+      <button class="tab-btn" data-tab="logs">Logs</button>
     </nav>
     <div id="status">
       <span id="gps-status" class="pill">GPS: …</span>
@@ -411,6 +412,33 @@ sudo ip link set wlan1 up</pre>
           <span id="oui-test-result" class="muted"></span>
         </div>
       </fieldset>
+    </section>
+
+    <section id="tab-logs" class="tab">
+      <div class="toolbar">
+        <label>Level:
+          <select id="log-level">
+            <option value="DEBUG">debug+</option>
+            <option value="INFO" selected>info+</option>
+            <option value="WARNING">warning+</option>
+            <option value="ERROR">error+</option>
+            <option value="CRITICAL">critical</option>
+          </select>
+        </label>
+        <input type="search" id="log-search" placeholder="search logger / message…" autocomplete="off" />
+        <label class="check">
+          <input type="checkbox" id="log-autoscroll" checked /> Auto-scroll
+        </label>
+        <label class="check">
+          <input type="checkbox" id="log-pause" /> Pause polling
+        </label>
+        <span class="toolbar-spacer"></span>
+        <span id="log-count" class="muted"></span>
+        <button id="log-clear" class="danger">Clear</button>
+      </div>
+      <div id="log-list" class="log-list">
+        <div class="muted">Loading…</div>
+      </div>
     </section>
   </main>
 

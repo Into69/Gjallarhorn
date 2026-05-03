@@ -522,6 +522,39 @@ fieldset label.check { grid-template-columns: auto 1fr; align-items: center; gap
 .iface-card dd { margin: 0; font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
 select option:disabled { color: var(--muted); }
 
+/* ── Logs tab ────────────────────────────────────────── */
+.log-list {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  height: calc(100vh - 160px);
+  overflow-y: auto;
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.log-row {
+  display: grid;
+  grid-template-columns: 130px 64px 160px 1fr;
+  gap: 8px;
+  padding: 2px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.log-row:hover { background: rgba(255,255,255,0.02); }
+.log-row .ts     { color: var(--muted); }
+.log-row .level  { font-weight: 600; }
+.log-row .logger { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-row .msg    { white-space: pre-wrap; word-break: break-word; color: var(--fg); }
+.log-row.lvl-DEBUG    .level { color: var(--muted); }
+.log-row.lvl-INFO     .level { color: var(--accent); }
+.log-row.lvl-WARNING  .level { color: var(--warn); }
+.log-row.lvl-ERROR    .level { color: var(--err); }
+.log-row.lvl-CRITICAL .level { color: var(--err); }
+.log-row.lvl-WARNING  { background: rgba(255, 184, 107, 0.04); }
+.log-row.lvl-ERROR,
+.log-row.lvl-CRITICAL { background: rgba(255, 107, 107, 0.06); }
+
 /* ── mobile / narrow viewports (≤ 768px) ─────────────
    Pure responsive layer — no UA sniffing, no second template. The
    viewport meta tag is already in place; this block adapts the

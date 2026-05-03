@@ -21,6 +21,7 @@ $$(".tab-btn").forEach((btn) => {
     if (id === "devices") refreshDevices();
     if (id === "locations") refreshLocations();
     if (id === "alerts") refreshAlerts();
+    if (id === "logs") refreshLogs();
   });
 });
 
@@ -1313,6 +1314,123 @@ async function waitForRestart() {
   $("#upd-status").textContent = "timed out waiting for restart — reload manually";
 }
 
+// ---------- logs ----------
+let logsLastSeenId = 0;
+let logsRendered = [];      // mirror of what the DOM shows; capped at 1000
+const LOGS_DOM_CAP = 1000;
+let _logsTimer = null;
+
+async function refreshLogs({ reset = false } = {}) {
+  const list = $("#log-list");
+  if (!list) return;
+  if (reset) {
+    logsLastSeenId = 0;
+    logsRendered = [];
+    list.innerHTML = "";
+  }
+  const level = $("#log-level").value || "INFO";
+  const url = `/api/logs?since_id=${logsLastSeenId}&level=${encodeURIComponent(level)}&limit=500`;
+  let res;
+  try {
+    res = await api(url);
+  } catch (e) {
+    if (!list.children.length) list.innerHTML = `<div class="muted">error: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const entries = res.entries || [];
+  if (!entries.length && !logsRendered.length) {
+    list.innerHTML = `<div class="muted">No log entries yet.</div>`;
+    updateLogCount(res.stats);
+    return;
+  }
+  if (entries.length) {
+    if (!logsRendered.length) list.innerHTML = "";
+    const q = ($("#log-search").value || "").trim().toLowerCase();
+    const frag = document.createDocumentFragment();
+    for (const e of entries) {
+      logsLastSeenId = Math.max(logsLastSeenId, e.id);
+      logsRendered.push(e);
+      if (q && !logEntryMatches(e, q)) continue;
+      frag.appendChild(renderLogRow(e));
+    }
+    list.appendChild(frag);
+    // Trim DOM + mirror so memory stays bounded over long sessions.
+    while (list.children.length > LOGS_DOM_CAP) list.firstElementChild.remove();
+    if (logsRendered.length > LOGS_DOM_CAP) {
+      logsRendered = logsRendered.slice(-LOGS_DOM_CAP);
+    }
+    if ($("#log-autoscroll").checked) {
+      list.scrollTop = list.scrollHeight;
+    }
+  }
+  updateLogCount(res.stats);
+}
+
+function renderLogRow(e) {
+  const tr = document.createElement("div");
+  tr.className = `log-row lvl-${e.level || "INFO"}`;
+  const ts = new Date((e.ts || 0) * 1000);
+  const tsStr = ts.toLocaleTimeString(undefined, { hour12: false }) +
+    "." + String(ts.getMilliseconds()).padStart(3, "0");
+  tr.innerHTML = `
+    <span class="ts">${escapeHtml(tsStr)}</span>
+    <span class="level">${escapeHtml(e.level || "")}</span>
+    <span class="logger" title="${escapeAttr(e.logger || "")}">${escapeHtml(e.logger || "")}</span>
+    <span class="msg">${escapeHtml(e.message || "")}</span>
+  `;
+  return tr;
+}
+
+function logEntryMatches(e, q) {
+  return ((e.logger || "").toLowerCase().includes(q)
+       || (e.message || "").toLowerCase().includes(q)
+       || (e.level || "").toLowerCase().includes(q));
+}
+
+function updateLogCount(stats) {
+  if (!stats) return;
+  $("#log-count").textContent = `${stats.count} / ${stats.capacity} buffered`;
+}
+
+function applyLogsFilter() {
+  // Level/search change re-fetches from scratch since the filter is server-
+  // side for level and we want the level filter to drop already-rendered rows.
+  refreshLogs({ reset: true });
+}
+
+let _logSearchTimer = null;
+$("#log-level").addEventListener("change", applyLogsFilter);
+$("#log-search").addEventListener("input", () => {
+  if (_logSearchTimer) clearTimeout(_logSearchTimer);
+  _logSearchTimer = setTimeout(() => {
+    // Search is client-side: just re-render the mirror with the new query.
+    const list = $("#log-list");
+    const q = ($("#log-search").value || "").trim().toLowerCase();
+    list.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    for (const e of logsRendered) {
+      if (q && !logEntryMatches(e, q)) continue;
+      frag.appendChild(renderLogRow(e));
+    }
+    list.appendChild(frag);
+    if ($("#log-autoscroll").checked) list.scrollTop = list.scrollHeight;
+  }, 120);
+});
+$("#log-clear").addEventListener("click", async () => {
+  if (!confirm("Clear the in-memory log buffer? Records already on disk (journal/syslog) are not affected.")) return;
+  await api("/api/logs", { method: "DELETE" });
+  await refreshLogs({ reset: true });
+});
+
+function startLogsPolling() {
+  if (_logsTimer) return;
+  _logsTimer = setInterval(() => {
+    if ($("#log-pause").checked) return;
+    if (!$("#tab-logs").classList.contains("active")) return;
+    refreshLogs();
+  }, 2000);
+}
+
 // ---------- utils ----------
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -1337,6 +1455,7 @@ function formatTime(iso) {
   refreshTileCache();
   refreshProbeStatus();
   setInterval(refreshProbeStatus, 10000);
+  startLogsPolling();
   setInterval(pollGps, 1500);
   setInterval(refreshLocationMarkers, 5000);
   setInterval(refreshOuiStatus, 10000);

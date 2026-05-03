@@ -24,6 +24,12 @@ from services.alert_service import alert_service
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 for _noisy in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"):
     logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+# In-memory log capture for the Logs tab. Installed before any module-level
+# logging happens so we don't lose the first few "service starting" lines.
+from services.log_buffer import install as _install_log_buffer  # noqa: E402
+_install_log_buffer()
+
 log = logging.getLogger("gjallarhorn")
 
 ROOT = Path(__file__).parent
@@ -114,6 +120,32 @@ async def api_test_discord_webhook():
     except Exception as e:
         raise HTTPException(502, f"Webhook delivery failed: {e}")
     return {"ok": True}
+
+
+# ---------- Logs ----------
+_LEVEL_NAME_TO_NO = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+
+
+@app.get("/api/logs")
+async def api_logs(since_id: int = 0, level: str = "INFO", limit: int = 500):
+    from services.log_buffer import log_buffer
+    level_no = _LEVEL_NAME_TO_NO.get(level.upper(), logging.INFO)
+    return {
+        "entries": log_buffer.get(since_id=since_id, min_level_no=level_no, limit=limit),
+        "stats": log_buffer.stats(),
+    }
+
+
+@app.delete("/api/logs")
+async def api_logs_clear():
+    from services.log_buffer import log_buffer
+    return {"cleared": log_buffer.clear()}
 
 
 # ---------- Probe scanner ----------
