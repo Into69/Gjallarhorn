@@ -161,6 +161,91 @@ main { height: calc(100vh - 53px); }
 }
 .fix-footer strong { color: var(--fg); font-weight: 500; }
 
+/* ── probe scanner card (map sidebar) ───────────────── */
+.probe-card {
+  margin-top: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px;
+  background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 12px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset, 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+.probe-header { display: flex; justify-content: space-between; align-items: center; }
+.probe-title {
+  font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--muted);
+}
+.probe-state-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+}
+.probe-state-pill::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; box-shadow: 0 0 8px currentColor;
+}
+.probe-state-pill.running { color: var(--ok);    border-color: #2e5a35; background: rgba(121, 224, 140, 0.08); }
+.probe-state-pill.running::before { animation: fix-pulse 1.6s ease-in-out infinite; }
+.probe-state-pill.stopped { color: var(--muted); }
+.probe-state-pill.error   { color: var(--err);   border-color: #5a2828; background: rgba(255, 107, 107, 0.08); }
+.probe-state-pill.starting { color: var(--warn); border-color: #5a4424; background: rgba(255, 184, 107, 0.08); }
+
+.probe-meta {
+  font-size: 11px; color: var(--muted);
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  word-break: break-word;
+}
+.probe-error {
+  font-size: 11px;
+  color: var(--err);
+  background: rgba(255, 107, 107, 0.06);
+  border: 1px solid #5a2828;
+  border-radius: 6px;
+  padding: 6px 8px;
+  word-break: break-word;
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+}
+.probe-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.probe-stat {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-height: 56px;
+}
+.probe-stat label {
+  display: block;
+  font-size: 9px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 1.5px;
+  margin-bottom: 2px;
+}
+.probe-stat-value {
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-size: 14px;
+  color: var(--fg);
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+.probe-stat-value .unit { color: var(--muted); font-size: 11px; }
+.probe-footer {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 10px; color: var(--muted);
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.probe-footer strong { color: var(--fg); font-weight: 500; }
+.probe-footer #probe-map-hop {
+  text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 60%;
+}
+
 /* ── leaflet location tooltip (themed) ─────────────── */
 .leaflet-tooltip.gj-tip {
   background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%);

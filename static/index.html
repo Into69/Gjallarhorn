@@ -90,6 +90,37 @@
             <span class="fix-updated">Updated <span id="fix-updated">—</span></span>
           </div>
         </div>
+
+        <div class="probe-card" id="probe-card">
+          <div class="probe-header">
+            <span class="probe-title">Probe scanner</span>
+            <span id="probe-map-state" class="probe-state-pill stopped">stopped</span>
+          </div>
+          <div id="probe-map-meta" class="probe-meta">—</div>
+          <div id="probe-map-error" class="probe-error" hidden></div>
+          <div class="probe-grid">
+            <div class="probe-stat">
+              <label>Channel</label>
+              <div id="probe-map-channel" class="probe-stat-value">—</div>
+            </div>
+            <div class="probe-stat">
+              <label>Probes</label>
+              <div id="probe-map-count" class="probe-stat-value">—</div>
+            </div>
+            <div class="probe-stat">
+              <label>Rate</label>
+              <div id="probe-map-rate" class="probe-stat-value">—</div>
+            </div>
+            <div class="probe-stat">
+              <label>Last probe</label>
+              <div id="probe-map-last" class="probe-stat-value">—</div>
+            </div>
+          </div>
+          <div class="probe-footer">
+            <span>Uptime <strong id="probe-map-uptime">—</strong></span>
+            <span id="probe-map-hop">—</span>
+          </div>
+        </div>
       </aside>
     </section>
 

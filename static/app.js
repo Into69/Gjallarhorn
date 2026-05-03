@@ -773,39 +773,184 @@ $("#probe-channels-clear")?.addEventListener("click", () => {
   renderProbeChannels(_probeChannelsCache, new Set());
 });
 
+// Cached for the per-second relative-time ticker, and for rate computation
+// across successive /api/probe/status polls.
+let _probeLastStatus = null;
+let _probePrevCount = null;
+let _probePrevAt = null;
+let _probeRateText = "—";
+
 async function refreshProbeStatus() {
   try {
     const s = await api("/api/probe/status");
-    const stateEl = $("#probe-state");
-    if (!stateEl) return;
-    if (s.running) {
-      const tag = s.auto_monitor ? " · auto-monitor" : "";
-      stateEl.innerHTML = `<span class="pill ok">running on ${escapeHtml(s.interface || "")}${tag}</span>`;
-    } else if (s.last_error) {
-      stateEl.innerHTML = `<span class="pill err">${escapeHtml(s.last_error)}</span>`;
-    } else {
-      stateEl.innerHTML = `<span class="pill">disabled</span>`;
+    _probeLastStatus = s;
+
+    // Compute rate (probes/min) from the delta since the previous poll.
+    const now = Date.now() / 1000;
+    const count = s.probe_count || 0;
+    if (_probePrevCount !== null && _probePrevAt !== null && s.running) {
+      const dt = now - _probePrevAt;
+      const dn = count - _probePrevCount;
+      if (dt > 0 && dn >= 0) {
+        const perMin = (dn / dt) * 60;
+        if (perMin >= 100) _probeRateText = `${perMin.toFixed(0)}/min`;
+        else if (perMin >= 10) _probeRateText = `${perMin.toFixed(1)}/min`;
+        else if (perMin > 0) _probeRateText = `${perMin.toFixed(2)}/min`;
+        else _probeRateText = "0/min";
+      }
+    } else if (!s.running) {
+      _probeRateText = "—";
     }
-    $("#probe-backend").textContent = s.backend || "—";
-    const ch = s.current_channel;
-    const hop = (s.channels || []).join(",");
-    $("#probe-channel").textContent = ch != null
-      ? (hop ? `${ch} (cycling ${hop})` : String(ch))
-      : (hop ? `cycling ${hop}` : "—");
-    $("#probe-count").textContent = (s.probe_count || 0).toLocaleString();
-    $("#probe-last").textContent = s.last_probe_at
-      ? new Date(s.last_probe_at * 1000).toLocaleString()
-      : "—";
-    $("#probe-tshark").innerHTML = s.tshark_available
-      ? `<span class="pill ok">available</span>`
-      : `<span class="pill warn">missing — apt install tshark</span>`;
-    $("#probe-scapy").innerHTML = s.scapy_available
-      ? `<span class="pill ok">available</span>`
-      : `<span class="pill warn">missing — pip install scapy</span>`;
+    _probePrevCount = count;
+    _probePrevAt = now;
+
+    // ---- Settings-tab panel (existing) ----
+    const stateEl = $("#probe-state");
+    if (stateEl) {
+      if (s.running) {
+        const tag = s.auto_monitor ? " · auto-monitor" : "";
+        stateEl.innerHTML = `<span class="pill ok">running on ${escapeHtml(s.interface || "")}${tag}</span>`;
+      } else if (s.last_error) {
+        stateEl.innerHTML = `<span class="pill err">${escapeHtml(s.last_error)}</span>`;
+      } else {
+        stateEl.innerHTML = `<span class="pill">disabled</span>`;
+      }
+      $("#probe-backend").textContent = s.backend || "—";
+      const ch = s.current_channel;
+      const hop = (s.channels || []).join(",");
+      $("#probe-channel").textContent = ch != null
+        ? (hop ? `${ch} (cycling ${hop})` : String(ch))
+        : (hop ? `cycling ${hop}` : "—");
+      $("#probe-count").textContent = count.toLocaleString();
+      $("#probe-last").textContent = s.last_probe_at
+        ? new Date(s.last_probe_at * 1000).toLocaleString()
+        : "—";
+      $("#probe-tshark").innerHTML = s.tshark_available
+        ? `<span class="pill ok">available</span>`
+        : `<span class="pill warn">missing — apt install tshark</span>`;
+      $("#probe-scapy").innerHTML = s.scapy_available
+        ? `<span class="pill ok">available</span>`
+        : `<span class="pill warn">missing — pip install scapy</span>`;
+    }
+
+    // ---- Map-sidebar card ----
+    updateProbeMapCard(s);
   } catch (e) {
-    const el = $("#probe-state");
-    if (el) el.textContent = "error: " + e.message;
+    const stateEl = $("#probe-state");
+    if (stateEl) stateEl.textContent = "error: " + e.message;
+    const mapErr = $("#probe-map-error");
+    const mapState = $("#probe-map-state");
+    if (mapState) {
+      mapState.className = "probe-state-pill error";
+      mapState.textContent = "error";
+    }
+    if (mapErr) {
+      mapErr.hidden = false;
+      mapErr.textContent = "status fetch failed: " + e.message;
+    }
   }
+}
+
+function updateProbeMapCard(s) {
+  const stateEl = $("#probe-map-state");
+  if (!stateEl) return;
+
+  // Status pill
+  if (s.running) {
+    stateEl.className = "probe-state-pill running";
+    stateEl.textContent = "running";
+  } else if (s.last_error) {
+    stateEl.className = "probe-state-pill error";
+    stateEl.textContent = "error";
+  } else {
+    stateEl.className = "probe-state-pill stopped";
+    stateEl.textContent = "stopped";
+  }
+
+  // Meta line: iface · backend · auto-monitor (or hint when not configured)
+  const metaEl = $("#probe-map-meta");
+  if (metaEl) {
+    if (s.running) {
+      const parts = [];
+      if (s.interface) parts.push(s.interface);
+      if (s.backend) parts.push(s.backend);
+      if (s.auto_monitor) parts.push("auto-monitor");
+      metaEl.textContent = parts.join(" · ") || "—";
+    } else if (s.interface) {
+      metaEl.textContent = `${s.interface} · ${s.backend || ""} · idle`;
+    } else {
+      metaEl.textContent = "Not configured — set interface in Settings";
+    }
+  }
+
+  // Error banner: only when there is an error and the scanner isn't running
+  const errEl = $("#probe-map-error");
+  if (errEl) {
+    if (s.last_error && !s.running) {
+      errEl.hidden = false;
+      errEl.textContent = s.last_error;
+    } else {
+      errEl.hidden = true;
+    }
+  }
+
+  // Channel
+  const ch = s.current_channel;
+  const chEl = $("#probe-map-channel");
+  if (chEl) chEl.textContent = ch != null ? String(ch) : "—";
+
+  // Probes captured
+  const countEl = $("#probe-map-count");
+  if (countEl) countEl.textContent = (s.probe_count || 0).toLocaleString();
+
+  // Rate (cached, recomputed on each poll)
+  const rateEl = $("#probe-map-rate");
+  if (rateEl) rateEl.textContent = _probeRateText;
+
+  // Channel-hop summary in footer
+  const hopEl = $("#probe-map-hop");
+  if (hopEl) {
+    const hop = s.channels || [];
+    if (hop.length) hopEl.textContent = `Hopping ${hop.join(",")}`;
+    else hopEl.textContent = "No channel hop";
+  }
+
+  // Relative-time fields are rendered immediately, then re-rendered every
+  // second by tickProbeRelativeTimes() so they don't go stale between polls.
+  tickProbeRelativeTimes();
+}
+
+function tickProbeRelativeTimes() {
+  const s = _probeLastStatus;
+  const lastEl = $("#probe-map-last");
+  const upEl = $("#probe-map-uptime");
+  if (!lastEl || !upEl) return;
+  if (!s) {
+    lastEl.textContent = "—";
+    upEl.textContent = "—";
+    return;
+  }
+  const now = Date.now() / 1000;
+  lastEl.textContent = s.last_probe_at ? formatProbeAgo(now - s.last_probe_at) : "never";
+  upEl.textContent = (s.started_at && s.running) ? formatProbeDuration(now - s.started_at) : "—";
+}
+
+function formatProbeAgo(seconds) {
+  if (!isFinite(seconds) || seconds < 0) return "—";
+  if (seconds < 1) return "now";
+  return formatProbeDuration(seconds) + " ago";
+}
+
+function formatProbeDuration(seconds) {
+  if (!isFinite(seconds) || seconds < 0) return "—";
+  const s = Math.floor(seconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
 }
 
 async function refreshTileCache() {
@@ -1980,7 +2125,8 @@ function formatTime(iso) {
   loadUpdateStatus();
   refreshTileCache();
   refreshProbeStatus();
-  setInterval(refreshProbeStatus, 10000);
+  setInterval(refreshProbeStatus, 3000);
+  setInterval(tickProbeRelativeTimes, 1000);
   refreshPauseStatus();
   setInterval(refreshPauseStatus, 15000);
   setupMapToggleIcons();
