@@ -299,7 +299,14 @@ class ProbeScanner:
             if not text:
                 continue
             low = text.lower()
+            # tshark's normal "Capturing on …" / drop-stats summary.
             if "capturing on" in low or "packets dropped" in low:
+                continue
+            # Wireshark extcap / SDR (UHD) libraries log a banner at startup
+            # at [INFO]/[DEBUG]/[NOTE] level — benign, just noise. Keep them
+            # at debug so the Logs tab can still show them if needed.
+            if low.startswith(("[info]", "[debug]", "[note]")):
+                log.debug("tshark stderr: %s", text)
                 continue
             self._last_error = text
             log.warning("tshark stderr: %s", text)
