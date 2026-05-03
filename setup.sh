@@ -99,13 +99,29 @@ if [[ "$DEV" -eq 1 ]]; then
     pip install pytest ruff
 fi
 
-# ---- 3. capabilities for WiFi scan ------------------------------------------
+# ---- 3. capabilities for WiFi scan / probe capture --------------------------
+# Linux file caps don't propagate from a launcher (python) to its subprocess
+# (iw, tshark) unless the *child* binary also has matching file inheritable
+# bits or ambient caps are set. So setcap goes on the privileged tools
+# themselves, which is what actually makes `iw scan` and probe capture work
+# without root.
 
 PY_BIN="$(readlink -f .venv/bin/python3)"
 if have setcap; then
-    log "granting cap_net_admin,cap_net_raw to $PY_BIN"
-    run_sudo setcap cap_net_admin,cap_net_raw+eip "$PY_BIN" || \
-        warn "setcap failed — you'll need to run gjallarhorn.py as root for WiFi scans"
+    grant_cap() {
+        local what="$1" path="$2"
+        if [[ -z "$path" ]]; then
+            warn "$what not found in PATH; skipping (install it if you need this feature)"
+            return
+        fi
+        local resolved
+        resolved="$(readlink -f "$path")"
+        log "granting cap_net_admin,cap_net_raw to $what ($resolved)"
+        run_sudo setcap cap_net_admin,cap_net_raw+eip "$resolved" || \
+            warn "setcap failed for $resolved — you'll need to run gjallarhorn.py as root"
+    }
+    grant_cap iw     "$(command -v iw     || true)"
+    grant_cap tshark "$(command -v tshark || true)"
 else
     warn "setcap not found (libcap2-bin / libcap missing); skipping capability grant"
 fi

@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import shutil
-import sys
 from datetime import datetime
 from typing import Iterable
 
@@ -190,13 +189,14 @@ async def scan_wifi(interface: str) -> list[WifiDevice]:
 
     if iw_err and "not permitted" in iw_err.lower():
         if not _warned_iw_perm:
-            py = os.path.realpath(sys.executable)
+            iw_path = os.path.realpath(shutil.which("iw") or "/usr/sbin/iw")
             log.warning(
                 "iw scan denied (CAP_NET_ADMIN required). "
-                "Either run as root, or grant the cap to the running interpreter: "
+                "Either run as root, or grant the cap to the iw binary itself "
+                "(file caps don't propagate from python to subprocesses): "
                 "sudo setcap cap_net_admin,cap_net_raw+eip %s. "
                 "Falling back to nmcli where available.",
-                py,
+                iw_path,
             )
             _warned_iw_perm = True
     elif iw_err:
