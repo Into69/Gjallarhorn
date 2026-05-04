@@ -227,6 +227,8 @@ async function refreshLocationMarkers() {
 }
 
 // ---------- devices tab ----------
+const PRESERVED_SENTINEL = "__preserved__";
+
 async function loadLocationOptions() {
   const { locations, active_id } = await api("/api/locations");
   const sel = $("#dev-location");
@@ -238,11 +240,23 @@ async function loadLocationOptions() {
     o.textContent = `${loc.label || `Loc ${loc.id}`}${loc.id === active_id ? " (active)" : ""}`;
     sel.appendChild(o);
   }
+  // Pseudo-location for whitelisted devices archived from deleted locations.
+  // Only shown when there's something in it, so it doesn't clutter the
+  // dropdown for fresh installs.
+  try {
+    const pres = await api("/api/preserved-devices");
+    if ((pres.devices || []).length) {
+      const opt = document.createElement("option");
+      opt.value = PRESERVED_SENTINEL;
+      opt.textContent = `★ Preserved (whitelist) — ${pres.devices.length}`;
+      sel.appendChild(opt);
+    }
+  } catch { /* preserved endpoint may not be available; ignore */ }
   // Preserve the user's prior selection if it still exists; otherwise
   // default to the active location (only really used on first load,
   // since this function gets re-called from refreshDevices on change).
   const ids = new Set(locations.map(l => String(l.id)));
-  if (previous && ids.has(previous)) {
+  if (previous && (ids.has(previous) || previous === PRESERVED_SENTINEL)) {
     sel.value = previous;
   } else if (active_id != null) {
     sel.value = String(active_id);
@@ -255,7 +269,9 @@ async function refreshDevices() {
   if (!id) return;
   const kind = $("#dev-kind").value;
   const q = kind ? `?kind=${kind}` : "";
-  const { devices } = await api(`/api/locations/${id}/devices${q}`);
+  const { devices } = id === PRESERVED_SENTINEL
+    ? await api(`/api/preserved-devices${q}`)
+    : await api(`/api/locations/${id}/devices${q}`);
   const tbody = $("#dev-table tbody");
   tbody.innerHTML = "";
 
@@ -375,6 +391,21 @@ $("#dev-refresh").addEventListener("click", refreshDevices);
 $("#dev-location").addEventListener("change", refreshDevices);
 $("#dev-kind").addEventListener("change", refreshDevices);
 $("#dev-group-bssid").addEventListener("change", refreshDevices);
+
+// Quick jump from the Devices tab to the whitelist editor in Settings.
+$("#dev-manage-whitelist")?.addEventListener("click", () => {
+  const settingsBtn = $$(".tab-btn").find(b => b.dataset.tab === "settings");
+  if (settingsBtn) settingsBtn.click();
+  // The Settings tab needs a tick to become display:block before scrollIntoView
+  // can compute a real offset.
+  setTimeout(() => {
+    const panel = $("#whitelist-panel");
+    if (panel) {
+      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      panel.querySelector("input[name='device_id']")?.focus();
+    }
+  }, 50);
+});
 
 // ---------- locations tab ----------
 // Inline SVG icons — small currentColor glyphs so they pick up button text colour.

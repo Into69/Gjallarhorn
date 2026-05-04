@@ -103,6 +103,24 @@ CREATE TABLE IF NOT EXISTS device_whitelist (
     created_at TEXT NOT NULL,
     UNIQUE(kind, device_id)
 );
+
+-- Whitelisted devices' sightings get copied here before the parent
+-- sensor_location is deleted, so the historic record survives. Same
+-- shape as `devices` minus the location FK; combined on collisions
+-- (sum seen_count, max best_rssi, min first_seen, max last_seen).
+CREATE TABLE IF NOT EXISTS preserved_devices (
+    kind TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    best_rssi INTEGER NOT NULL,
+    last_rssi INTEGER NOT NULL,
+    seen_count INTEGER NOT NULL,
+    details_json TEXT NOT NULL,
+    archived_from_location_id INTEGER,
+    archived_at TEXT NOT NULL,
+    PRIMARY KEY (kind, device_id)
+);
 """
 
 
@@ -199,16 +217,84 @@ async def list_locations() -> list[dict]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+def _match_whitelist(wl: list[tuple[str, str]], kind: str, device_id: str) -> bool:
+    """Mirror of services.alert_service.is_whitelisted: a row matches when
+    its (kind, target) pair has the same kind, and the device_id either
+    equals or starts with the target (target acts as a prefix)."""
+    d = (device_id or "").lower()
+    return any(k == kind and t and (d == t or d.startswith(t)) for k, t in wl)
+
+
+async def _preserve_whitelisted_devices(db, location_ids: list[int]) -> int:
+    """Copy whitelisted devices in `location_ids` into preserved_devices,
+    combining stats on collision. Caller owns the transaction.
+    Returns the number of device rows preserved."""
+    if not location_ids:
+        return 0
+    async with db.execute("SELECT kind, device_id FROM device_whitelist") as cur:
+        wl = [(r[0], (r[1] or "").lower()) for r in await cur.fetchall()]
+    if not wl:
+        return 0
+
+    placeholders = ",".join("?" * len(location_ids))
+    async with db.execute(
+        f"SELECT location_id, kind, device_id, first_seen, last_seen, "
+        f"best_rssi, last_rssi, seen_count, details_json "
+        f"FROM devices WHERE location_id IN ({placeholders})",
+        tuple(location_ids),
+    ) as cur:
+        rows = await cur.fetchall()
+
+    now = datetime.utcnow().isoformat()
+    preserved = 0
+    for loc_id, k, did, first_seen, last_seen, best_rssi, last_rssi, seen, details in rows:
+        if not _match_whitelist(wl, k, did):
+            continue
+        async with db.execute(
+            "SELECT first_seen, last_seen, best_rssi, last_rssi, seen_count, details_json "
+            "FROM preserved_devices WHERE kind=? AND device_id=?",
+            (k, did),
+        ) as c:
+            existing = await c.fetchone()
+        if existing is None:
+            await db.execute(
+                "INSERT INTO preserved_devices(kind, device_id, first_seen, last_seen, "
+                "best_rssi, last_rssi, seen_count, details_json, "
+                "archived_from_location_id, archived_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (k, did, first_seen, last_seen, best_rssi, last_rssi, seen,
+                 details, loc_id, now),
+            )
+        else:
+            e_first, e_last, e_best, e_last_rssi, e_seen, e_details = existing
+            merged_best = max(best_rssi, e_best)
+            merged_first = min(first_seen, e_first)
+            merged_last = max(last_seen, e_last)
+            merged_last_rssi = last_rssi if last_seen >= e_last else e_last_rssi
+            merged_details = details if last_seen >= e_last else e_details
+            merged_seen = (seen or 0) + (e_seen or 0)
+            await db.execute(
+                "UPDATE preserved_devices SET first_seen=?, last_seen=?, "
+                "best_rssi=?, last_rssi=?, seen_count=?, details_json=?, "
+                "archived_from_location_id=?, archived_at=? "
+                "WHERE kind=? AND device_id=?",
+                (merged_first, merged_last, merged_best, merged_last_rssi,
+                 merged_seen, merged_details, loc_id, now, k, did),
+            )
+        preserved += 1
+    return preserved
+
+
 async def delete_location(location_id: int) -> dict:
-    """Delete one sensor location and its devices + observations.
-    Returns the row counts removed (0 across the board if the location
-    didn't exist)."""
+    """Delete one sensor location and its devices + observations. Whitelisted
+    devices' sightings get copied to preserved_devices first so they survive
+    the cascade. Returns the row counts removed (0 across the board if the
+    location didn't exist)."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT 1 FROM sensor_locations WHERE id=?", (location_id,)
         ) as cur:
             if await cur.fetchone() is None:
-                return {"locations": 0, "devices": 0, "observations": 0}
+                return {"locations": 0, "devices": 0, "observations": 0, "preserved": 0}
         async with db.execute(
             "SELECT COUNT(*) FROM devices WHERE location_id=?", (location_id,)
         ) as cur:
@@ -217,11 +303,15 @@ async def delete_location(location_id: int) -> dict:
             "SELECT COUNT(*) FROM observations WHERE location_id=?", (location_id,)
         ) as cur:
             n_obs = (await cur.fetchone())[0]
+        n_preserved = await _preserve_whitelisted_devices(db, [location_id])
         await db.execute("DELETE FROM observations WHERE location_id=?", (location_id,))
         await db.execute("DELETE FROM devices WHERE location_id=?", (location_id,))
         await db.execute("DELETE FROM sensor_locations WHERE id=?", (location_id,))
         await db.commit()
-    return {"locations": 1, "devices": n_dev, "observations": n_obs}
+    return {
+        "locations": 1, "devices": n_dev, "observations": n_obs,
+        "preserved": n_preserved,
+    }
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -408,6 +498,7 @@ async def auto_merge_contained(*, max_iterations: int = 1000) -> dict:
 
 async def delete_all_locations() -> dict:
     """Delete every sensor location and all associated devices/observations.
+    Whitelisted devices get archived into preserved_devices first.
     Returns the row counts that were removed."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT COUNT(*) FROM sensor_locations") as cur:
@@ -416,6 +507,9 @@ async def delete_all_locations() -> dict:
             n_dev = (await cur.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM observations") as cur:
             n_obs = (await cur.fetchone())[0]
+        async with db.execute("SELECT id FROM sensor_locations") as cur:
+            all_ids = [r[0] for r in await cur.fetchall()]
+        n_preserved = await _preserve_whitelisted_devices(db, all_ids)
         await db.execute("DELETE FROM observations")
         await db.execute("DELETE FROM devices")
         await db.execute("DELETE FROM sensor_locations")
@@ -424,7 +518,10 @@ async def delete_all_locations() -> dict:
             "DELETE FROM sqlite_sequence WHERE name IN ('sensor_locations','observations')"
         )
         await db.commit()
-    return {"locations": n_loc, "devices": n_dev, "observations": n_obs}
+    return {
+        "locations": n_loc, "devices": n_dev, "observations": n_obs,
+        "preserved": n_preserved,
+    }
 
 
 async def update_location_label(location_id: int, label: str) -> None:
@@ -756,6 +853,28 @@ async def delete_whitelist(entry_id: int) -> bool:
         cur = await db.execute("DELETE FROM device_whitelist WHERE id=?", (entry_id,))
         await db.commit()
         return cur.rowcount > 0
+
+
+async def list_preserved_devices(kind: str | None = None) -> list[dict]:
+    """Whitelisted devices archived from deleted locations. Shape mirrors
+    devices_at_location for easy reuse on the Devices tab."""
+    sql = "SELECT * FROM preserved_devices"
+    args: tuple = ()
+    if kind:
+        sql += " WHERE kind=?"
+        args = (kind,)
+    sql += " ORDER BY last_seen DESC"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(sql, args) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def clear_preserved_devices() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM preserved_devices")
+        await db.commit()
+        return cur.rowcount or 0
 
 
 async def devices_at_location(location_id: int, kind: str | None = None) -> list[dict]:

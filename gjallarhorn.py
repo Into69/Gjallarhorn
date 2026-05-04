@@ -183,6 +183,18 @@ async def api_delete_whitelist(entry_id: int):
     return {"ok": True}
 
 
+@app.get("/api/preserved-devices")
+async def api_list_preserved_devices(kind: Optional[str] = None):
+    """Whitelisted device sightings archived from deleted locations."""
+    return {"devices": await db.list_preserved_devices(kind)}
+
+
+@app.delete("/api/preserved-devices")
+async def api_clear_preserved_devices():
+    n = await db.clear_preserved_devices()
+    return {"ok": True, "cleared": n}
+
+
 # ---------- Probe scanner ----------
 @app.get("/api/probe/status")
 async def api_probe_status():
