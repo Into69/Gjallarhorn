@@ -919,29 +919,22 @@ async function refreshProbeStatus() {
       } else {
         stateEl.innerHTML = `<span class="pill">disabled</span>`;
       }
-      $("#probe-backend").textContent = s.backend || "—";
-      const ch = s.current_channel;
-      const hopStr = (s.channels || []).join(",");
-      // When the scanner isn't running, "cycling …" is misleading — it's a
-      // configured-but-inactive list. Show "—" instead so the Status row
-      // remains the single source of truth.
-      if (!s.running) {
-        $("#probe-channel").textContent = hopStr ? `(configured: ${hopStr})` : "—";
-      } else {
-        $("#probe-channel").textContent = ch != null
-          ? (hopStr ? `${ch} (cycling ${hopStr})` : String(ch))
-          : (hopStr ? `cycling ${hopStr}` : "—");
+      // Live stats (channel, probe count, last-probe time, rate, uptime)
+      // live on the Map sidebar card now — no need to duplicate them in
+      // the Settings dl. Tshark/scapy availability is configuration info
+      // and stays here.
+      const tsharkEl = $("#probe-tshark");
+      if (tsharkEl) {
+        tsharkEl.innerHTML = s.tshark_available
+          ? `<span class="pill ok">available</span>`
+          : `<span class="pill warn">missing — apt install tshark</span>`;
       }
-      $("#probe-count").textContent = count.toLocaleString();
-      $("#probe-last").textContent = s.last_probe_at
-        ? new Date(s.last_probe_at * 1000).toLocaleString()
-        : "—";
-      $("#probe-tshark").innerHTML = s.tshark_available
-        ? `<span class="pill ok">available</span>`
-        : `<span class="pill warn">missing — apt install tshark</span>`;
-      $("#probe-scapy").innerHTML = s.scapy_available
-        ? `<span class="pill ok">available</span>`
-        : `<span class="pill warn">missing — pip install scapy</span>`;
+      const scapyEl = $("#probe-scapy");
+      if (scapyEl) {
+        scapyEl.innerHTML = s.scapy_available
+          ? `<span class="pill ok">available</span>`
+          : `<span class="pill warn">missing — pip install scapy</span>`;
+      }
     }
 
     // ---- Map-sidebar card ----

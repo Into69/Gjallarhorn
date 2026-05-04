@@ -286,7 +286,7 @@
           <label>Tile provider
             <select name="map_provider" id="set-map-provider"></select>
           </label>
-          <p class="muted" style="margin-top: 12px;">PDF reports render maps from a local OSM tile cache. Tiles are fetched on first use and reused thereafter.</p>
+          <p class="hint">PDF reports render maps from a local OSM tile cache; tiles are fetched on first use and reused thereafter.</p>
           <dl id="tilecache-stats">
             <dt>Cached tiles</dt><dd id="tc-count">—</dd>
             <dt>On-disk size</dt><dd id="tc-size">—</dd>
@@ -318,23 +318,30 @@
           <label>Bluetooth scan duration (s)
             <input type="number" name="bluetooth_scan_duration_s" min="2" max="60" />
           </label>
-          <label>GPS poll interval (s)
+        </fieldset>
+
+        <fieldset>
+          <legend>GPS</legend>
+          <label>gpsd host <input type="text" name="gpsd_host" /></label>
+          <label>gpsd port <input type="number" name="gpsd_port" min="1" max="65535" /></label>
+          <label>Poll interval (s)
             <input type="number" step="0.1" name="gps_poll_interval_s" min="0.2" max="10" />
           </label>
         </fieldset>
 
         <fieldset>
           <legend>Probe scanner — passive WiFi client detection</legend>
-          <p class="muted" style="margin: 0 0 8px;">
+          <p class="hint">
             Captures 802.11 probe-request frames on a monitor-mode wireless interface.
-            With <strong>Auto-configure monitor mode</strong> on, Gjallarhorn runs the
-            <code>ip link</code>/<code>iw</code> commands itself and restores the interface
-            on stop — needs <code>CAP_NET_ADMIN</code> on the python binary or root.
-            Otherwise put the interface in monitor mode beforehand:
+            File caps don't propagate from python to subprocesses, so the scanner needs
+            <code>CAP_NET_ADMIN</code> on the binaries it spawns:
           </p>
-          <pre class="mono" style="background: var(--panel-2); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); font-size: 11px; margin: 0 0 10px;">sudo ip link set wlan1 down
-sudo iw dev wlan1 set type monitor
-sudo ip link set wlan1 up</pre>
+          <pre class="code-block">sudo setcap cap_net_admin,cap_net_raw+eip $(which iw)
+sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
+          <p class="hint">
+            <code>setup.sh</code> does this automatically. Live status (current channel,
+            probe rate, last probe) is on the Map tab's sidebar card.
+          </p>
           <label>Wireless interface
             <select name="probe_interface" id="set-probe-iface"></select>
           </label>
@@ -346,7 +353,8 @@ sudo ip link set wlan1 up</pre>
           </label>
           <label class="check">
             <input type="checkbox" name="probe_auto_monitor" />
-            Auto-configure monitor mode (sets/restores interface; needs root or CAP_NET_ADMIN)
+            Auto-configure monitor mode (Gjallarhorn runs the ip link / iw set type
+            commands and restores on stop)
           </label>
           <div class="probe-channels-block">
             <div class="probe-channels-header">
@@ -365,12 +373,8 @@ sudo ip link set wlan1 up</pre>
           <label class="check">
             <input type="checkbox" name="probe_skip_randomized" /> Skip randomized MACs (modern phone privacy MACs)
           </label>
-          <dl id="probe-stats" style="margin-top: 8px;">
+          <dl id="probe-stats">
             <dt>Status</dt><dd id="probe-state">—</dd>
-            <dt>Active backend</dt><dd id="probe-backend">—</dd>
-            <dt>Current channel</dt><dd id="probe-channel">—</dd>
-            <dt>Probes captured</dt><dd id="probe-count">—</dd>
-            <dt>Last probe</dt><dd id="probe-last">—</dd>
             <dt>tshark</dt><dd id="probe-tshark">—</dd>
             <dt>scapy</dt><dd id="probe-scapy">—</dd>
           </dl>
@@ -388,8 +392,12 @@ sudo ip link set wlan1 up</pre>
           <label>Reach edge after (s) at constant speed
             <input type="number" step="1" name="new_location_dynamic_t_s" id="set-loc-dynamic-t" min="5" max="600" />
           </label>
-          <p class="muted" style="margin: 4px 0 0; font-size: 11px;">
-            Effective radius = static threshold + (current speed × t). At rest the static threshold applies. At 10&nbsp;m/s with t=60&nbsp;s, the bubble is ~625&nbsp;m and the sensor reaches its edge after ~1&nbsp;minute. Capped at 5&nbsp;km.
+          <p class="hint">
+            Effective radius = static threshold + (current speed × t). At rest the
+            static threshold applies. At 10&nbsp;m/s with t=60&nbsp;s, the bubble is
+            ~625&nbsp;m and the sensor reaches its edge after ~1&nbsp;minute. Capped
+            at 5&nbsp;km. Drawn geofences are user-authoritative — they're never
+            merged away and keep their drawn radius.
           </p>
           <label>Label template
             <input type="text" name="location_label_template" />
@@ -404,12 +412,6 @@ sudo ip link set wlan1 up</pre>
           <label class="check">
             <input type="checkbox" name="hide_random_bt_addresses" /> Hide BLE random addresses
           </label>
-        </fieldset>
-
-        <fieldset>
-          <legend>gpsd</legend>
-          <label>Host <input type="text" name="gpsd_host" /></label>
-          <label>Port <input type="number" name="gpsd_port" min="1" max="65535" /></label>
         </fieldset>
 
         <fieldset>

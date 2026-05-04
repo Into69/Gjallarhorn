@@ -602,6 +602,35 @@ fieldset label { display: grid; gap: 4px; margin-bottom: 8px; }
 fieldset label.check { grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
 #save-status { color: var(--muted); }
 .muted { color: var(--muted); }
+
+/* Settings-tab small explanatory text. Tighter than .muted on its own. */
+fieldset .hint {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 6px 0 8px;
+  line-height: 1.45;
+}
+fieldset .hint code {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 10.5px;
+}
+/* Inline-CLI snippets used in setup hints. Compact, themed, monospace. */
+fieldset .code-block {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg);
+}
 #oui-panel p { margin: 0 0 10px; }
 #oui-test-mac { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; min-width: 200px; }
 #oui-stats { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px;

@@ -122,9 +122,10 @@ class AppSettings(BaseModel):
     probe_skip_randomized: bool = True         # drop locally-administered MACs
     probe_min_rssi: int = -90                  # noisier than AP scans, higher floor
     # Auto-configure the interface — runs `ip link` + `iw dev set type monitor`
-    # on start and restores the prior mode on stop. Requires CAP_NET_ADMIN
-    # on the python binary (or root). Disabled by default since it disrupts
-    # any existing connectivity on the chosen interface.
+    # on start and restores the prior mode on stop. Requires CAP_NET_ADMIN on
+    # the `iw` binary (and `tshark` for the tshark backend) — file caps don't
+    # propagate from python to subprocesses. setup.sh sets these. Disabled by
+    # default since it disrupts any existing connectivity on the chosen iface.
     probe_auto_monitor: bool = False
     # Comma-separated channel list to cycle through while capturing. Without
     # hopping, the radio sits on whatever channel the driver happened to
