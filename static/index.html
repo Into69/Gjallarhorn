@@ -165,7 +165,7 @@
             <th>Kind</th><th>ID</th><th>Name/SSID</th><th>Vendor</th>
             <th>Best RSSI</th><th>Last RSSI</th><th>Seen</th>
             <th>First</th><th>Last</th>
-            <th title="Whitelist this device (silences alerts and excludes from reports)">WL</th>
+            <th title="Per-device timeline + RSSI history; whitelist toggle">Actions</th>
             <th>Details</th>
           </tr>
         </thead>
@@ -577,6 +577,17 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
       </div>
     </section>
   </main>
+
+  <!-- Reusable modal overlay. Populated by the Devices-tab timeline view. -->
+  <div id="modal-overlay" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal</h3>
+        <button type="button" id="modal-close" class="icon-btn" aria-label="Close">×</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script src="/static/app.js"></script>

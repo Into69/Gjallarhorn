@@ -394,6 +394,7 @@ function renderDeviceRow(d) {
   const wlBtn = wl
     ? `<button type="button" class="icon-btn dev-wl active" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelisted — click to remove from whitelist" aria-label="Remove from whitelist">★</button>`
     : `<button type="button" class="icon-btn dev-wl" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelist this device (silences alerts and excludes from reports)" aria-label="Add to whitelist">☆</button>`;
+  const timelineBtn = `<button type="button" class="icon-btn dev-timeline" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Per-device timeline (RSSI history, locations seen at)" aria-label="Show timeline">⏱</button>`;
 
   // Build the JSON shown in the expandable details cell. Promote linked
   // aliases to a top-level field so they're easy to spot, and split into
@@ -420,7 +421,7 @@ function renderDeviceRow(d) {
     <td>${d.seen_count}</td>
     <td class="mono">${formatTime(d.first_seen)}</td>
     <td class="mono">${formatTime(d.last_seen)}</td>
-    <td>${wlBtn}</td>
+    <td class="row-actions">${timelineBtn}${wlBtn}</td>
     <td><details><summary>${summaryText}</summary><pre>${escapeHtml(JSON.stringify(detailsPayload, null, 2))}</pre></details></td>
   `;
   // Wire the whitelist button — done here so each row keeps its own
@@ -428,6 +429,10 @@ function renderDeviceRow(d) {
   tr.querySelector(".dev-wl").addEventListener("click", (ev) => {
     ev.stopPropagation();
     quickWhitelistToggle(d.kind, d.device_id);
+  });
+  tr.querySelector(".dev-timeline").addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    showDeviceTimeline(d.kind, d.device_id);
   });
   return tr;
 }
@@ -2549,6 +2554,118 @@ function startLogsPolling() {
     if (!$("#tab-logs").classList.contains("active")) return;
     refreshLogs();
   }, 2000);
+}
+
+// ---------- modal ----------
+function openModal(title, html) {
+  const overlay = $("#modal-overlay");
+  if (!overlay) return;
+  $("#modal-title").textContent = title;
+  $("#modal-body").innerHTML = html;
+  overlay.hidden = false;
+  // Focus the close button so Escape and tab navigation work immediately.
+  $("#modal-close").focus();
+}
+
+function closeModal() {
+  const overlay = $("#modal-overlay");
+  if (overlay) overlay.hidden = true;
+}
+
+$("#modal-close")?.addEventListener("click", closeModal);
+$("#modal-overlay")?.addEventListener("click", (ev) => {
+  if (ev.target.id === "modal-overlay") closeModal();
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && !$("#modal-overlay")?.hidden) closeModal();
+});
+
+// ---------- per-device timeline ----------
+async function showDeviceTimeline(kind, deviceId) {
+  openModal(`${kind} ${deviceId}`, `<div class="muted">Loading timeline…</div>`);
+  let data;
+  try {
+    data = await api(`/api/devices/${encodeURIComponent(kind)}/${encodeURIComponent(deviceId)}/timeline`);
+  } catch (e) {
+    $("#modal-body").innerHTML = `<div class="muted">Error: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  $("#modal-body").innerHTML = renderDeviceTimeline(data);
+}
+
+function renderDeviceTimeline(data) {
+  const det = data.details || {};
+  const name = det.ssid || det.name || "";
+  const vendor = det.vendor || "";
+  const sparkline = renderRssiSparkline(data.observations || []);
+  const locsRows = (data.locations || []).map(l => `
+    <tr>
+      <td>${l.id}</td>
+      <td>${escapeHtml(l.label || "")}</td>
+      <td>${l.best_rssi ?? ""}</td>
+      <td>${l.last_rssi ?? ""}</td>
+      <td>${l.seen_count ?? 0}</td>
+      <td class="mono">${escapeHtml(formatTime(l.first_seen))}</td>
+      <td class="mono">${escapeHtml(formatTime(l.last_seen))}</td>
+    </tr>`).join("");
+  return `
+    <div class="timeline-meta">
+      ${name ? `<div><strong>Name / SSID:</strong> ${escapeHtml(name)}</div>` : ""}
+      ${vendor ? `<div><strong>Vendor:</strong> ${escapeHtml(vendor)}</div>` : ""}
+      <div><strong>Total observations:</strong> ${data.total_observations ?? 0}</div>
+      <div><strong>First seen:</strong> ${escapeHtml(formatTime(data.first_seen))}</div>
+      <div><strong>Last seen:</strong> ${escapeHtml(formatTime(data.last_seen))}</div>
+    </div>
+    <h4 class="section-h">RSSI over time (last ${(data.observations || []).length} observations)</h4>
+    ${sparkline}
+    <h4 class="section-h">Locations seen at (${(data.locations || []).length})</h4>
+    ${locsRows
+      ? `<table class="timeline-locs"><thead><tr><th>ID</th><th>Label</th><th>Best</th><th>Last</th><th>Seen</th><th>First</th><th>Last seen</th></tr></thead><tbody>${locsRows}</tbody></table>`
+      : `<div class="muted">No location attributions.</div>`}
+  `;
+}
+
+function renderRssiSparkline(observations) {
+  // Each observation is {seen_at, rssi}. Map seen_at → x linearly across
+  // [0, W], rssi → y across [-100, -20] inverted. Output a single SVG
+  // <polyline>. RSSI is dBm (negative); stronger = higher (closer to 0)
+  // so we invert before scaling.
+  if (!observations.length) {
+    return `<div class="muted">No observations recorded.</div>`;
+  }
+  const W = 600, H = 120, PAD = 6;
+  const times = observations.map(o => Date.parse(o.seen_at + "Z") || Date.parse(o.seen_at));
+  const t0 = Math.min(...times), t1 = Math.max(...times);
+  const dt = Math.max(1, t1 - t0);
+  const RSSI_MIN = -100, RSSI_MAX = -20;  // typical band
+  const yScale = (rssi) => {
+    const r = Math.max(RSSI_MIN, Math.min(RSSI_MAX, rssi));
+    return PAD + (RSSI_MAX - r) / (RSSI_MAX - RSSI_MIN) * (H - 2 * PAD);
+  };
+  const xScale = (t) => PAD + (t - t0) / dt * (W - 2 * PAD);
+  const points = observations.map((o, i) => {
+    const t = times[i] || t0;
+    return `${xScale(t).toFixed(1)},${yScale(o.rssi).toFixed(1)}`;
+  }).join(" ");
+  // Reference lines at -50, -70, -90
+  const refLines = [-50, -70, -90].map(r => {
+    const y = yScale(r).toFixed(1);
+    return `<line x1="${PAD}" y1="${y}" x2="${W - PAD}" y2="${y}" stroke="#2b313c" stroke-dasharray="2,3" stroke-width="1"/>
+            <text x="${W - PAD - 2}" y="${(parseFloat(y) - 2).toFixed(1)}" fill="#52607a" font-size="9" text-anchor="end">${r} dBm</text>`;
+  }).join("");
+  const tFirst = new Date(t0).toLocaleString();
+  const tLast = new Date(t1).toLocaleString();
+  return `
+    <div class="sparkline-wrap">
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="sparkline">
+        ${refLines}
+        <polyline fill="none" stroke="var(--accent)" stroke-width="1.4" points="${points}" />
+      </svg>
+      <div class="sparkline-axis">
+        <span>${escapeHtml(tFirst)}</span>
+        <span>${escapeHtml(tLast)}</span>
+      </div>
+    </div>`;
 }
 
 // ---------- utils ----------

@@ -213,6 +213,15 @@ async def api_list_preserved_devices(kind: Optional[str] = None):
     return {"devices": await db.list_preserved_devices(kind)}
 
 
+@app.get("/api/devices/{kind}/{device_id}/timeline")
+async def api_device_timeline(kind: str, device_id: str):
+    """Per-device history: location summary, recent observations sample,
+    and aggregate stats. Powers the Devices-tab timeline modal."""
+    if kind not in ALLOWED_KINDS:
+        raise HTTPException(400, "unknown kind")
+    return await db.device_timeline(kind, device_id)
+
+
 @app.delete("/api/preserved-devices")
 async def api_clear_preserved_devices():
     n = await db.clear_preserved_devices()

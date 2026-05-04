@@ -825,6 +825,77 @@ async def get_location_created_at(location_id: int) -> str | None:
             return row[0] if row else None
 
 
+async def device_timeline(kind: str, device_id: str, *, max_points: int = 500) -> dict:
+    """Per-device history: aggregate device-row stats per location, plus a
+    sample of recent observations for the RSSI sparkline. `max_points`
+    caps the observation sample so the response stays small even for a
+    device with months of sightings."""
+    device_id = (device_id or "").lower()
+    out: dict = {
+        "kind": kind, "device_id": device_id,
+        "locations": [], "observations": [],
+        "total_observations": 0, "first_seen": None, "last_seen": None,
+        "details": {},
+    }
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        # Per-location aggregates from the devices table (one row per loc).
+        async with db.execute(
+            """
+            SELECT d.location_id, d.first_seen, d.last_seen, d.best_rssi,
+                   d.last_rssi, d.seen_count, d.details_json,
+                   l.label, l.lat AS loc_lat, l.lon AS loc_lon
+            FROM devices d
+            LEFT JOIN sensor_locations l ON l.id = d.location_id
+            WHERE d.kind=? AND d.device_id=?
+            ORDER BY d.last_seen DESC
+            """,
+            (kind, device_id),
+        ) as cur:
+            for r in await cur.fetchall():
+                row = dict(r)
+                try:
+                    out["details"] = json.loads(row.pop("details_json") or "{}")
+                except (TypeError, ValueError):
+                    pass
+                out["locations"].append({
+                    "id": row["location_id"],
+                    "label": row.get("label"),
+                    "lat": row.get("loc_lat"),
+                    "lon": row.get("loc_lon"),
+                    "first_seen": row.get("first_seen"),
+                    "last_seen": row.get("last_seen"),
+                    "best_rssi": row.get("best_rssi"),
+                    "last_rssi": row.get("last_rssi"),
+                    "seen_count": row.get("seen_count"),
+                })
+        # Total observation count.
+        async with db.execute(
+            "SELECT COUNT(*), MIN(seen_at), MAX(seen_at) "
+            "FROM observations WHERE kind=? AND device_id=?",
+            (kind, device_id),
+        ) as cur:
+            n, first, last = await cur.fetchone()
+        out["total_observations"] = int(n or 0)
+        out["first_seen"] = first
+        out["last_seen"] = last
+        # Recent-observation sample for the sparkline. Newest first; the UI
+        # reverses for left-to-right time order. Cheap because of the
+        # idx_obs_device index.
+        async with db.execute(
+            """
+            SELECT seen_at, rssi, location_id, lat, lon
+            FROM observations
+            WHERE kind=? AND device_id=?
+            ORDER BY seen_at DESC LIMIT ?
+            """,
+            (kind, device_id, int(max_points)),
+        ) as cur:
+            out["observations"] = [dict(r) for r in await cur.fetchall()]
+    out["observations"].reverse()  # oldest → newest
+    return out
+
+
 async def insert_observation(
     location_id: int,
     kind: str,
