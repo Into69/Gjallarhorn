@@ -655,10 +655,46 @@ fieldset .code-block {
 .iface-card dd { margin: 0; font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
 select option:disabled { color: var(--muted); }
 
-/* Floating controls overlaid on the map. */
+/* Themed Leaflet zoom controls — overrides the default white squares so the
+   +/- buttons share the same gradient/border treatment as our custom map
+   controls below. Position stays top-left (where users expect zoom). */
+.leaflet-control-zoom {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+.leaflet-control-zoom a.leaflet-control-zoom-in,
+.leaflet-control-zoom a.leaflet-control-zoom-out {
+  background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%) !important;
+  color: var(--fg) !important;
+  border: 1px solid var(--border) !important;
+  width: 36px !important;
+  height: 36px !important;
+  line-height: 34px !important;
+  font-size: 18px !important;
+  font-weight: 700;
+  border-radius: 5px !important;
+  margin-bottom: 4px !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5) !important;
+  text-decoration: none !important;
+}
+.leaflet-control-zoom a.leaflet-control-zoom-in:hover,
+.leaflet-control-zoom a.leaflet-control-zoom-out:hover {
+  background: rgba(92, 209, 255, 0.08) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+.leaflet-control-zoom a.leaflet-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Floating controls overlaid on the map. Sits below the Leaflet zoom
+   buttons so they don't fight for the same pixels. (zoom = 36+36+~4px gap
+   plus a little air = ~88px tall.) */
 .map-controls {
   position: absolute;
-  top: 12px;
+  top: 88px;
   left: 12px;
   z-index: 1000;
   display: flex;
