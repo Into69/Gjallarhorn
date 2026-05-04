@@ -1028,6 +1028,48 @@ async def count_device_in_recent_locations(kind: str, device_id: str, n_location
             return row[0] if row else 0
 
 
+async def count_companion_locations(kind: str, device_id: str,
+                                    window_hours: int) -> int:
+    """Count distinct locations a device (or any of its BLE-signature
+    siblings) was observed at within the last `window_hours`. The
+    signature lookup means a phone rotating its private MAC every
+    15 minutes still gets counted as one persistent companion rather
+    than disappearing into the noise of new MACs.
+
+    Used by the persistent_companion alert rule."""
+    if window_hours < 1:
+        return 0
+    cutoff = (datetime.utcnow() - timedelta(hours=window_hours)).isoformat()
+    device_id = (device_id or "").lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Look up the device's signature (BLE only — wifi rows have NULL).
+        # If present, expand to every sibling MAC sharing that signature so
+        # the count is across the physical device, not just one MAC.
+        siblings = [device_id]
+        if kind == "bluetooth":
+            async with db.execute(
+                "SELECT signature FROM devices WHERE kind=? AND device_id=? "
+                "AND signature IS NOT NULL LIMIT 1",
+                (kind, device_id),
+            ) as cur:
+                row = await cur.fetchone()
+            sig = row[0] if row else None
+            if sig:
+                async with db.execute(
+                    "SELECT DISTINCT device_id FROM devices WHERE signature=?",
+                    (sig,),
+                ) as cur:
+                    siblings = [r[0] for r in await cur.fetchall()] or [device_id]
+        placeholders = ",".join("?" * len(siblings))
+        sql = (
+            f"SELECT COUNT(DISTINCT location_id) FROM observations "
+            f"WHERE kind=? AND seen_at >= ? AND device_id IN ({placeholders})"
+        )
+        async with db.execute(sql, [kind, cutoff, *siblings]) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+
 async def purge_old_data(
     *, observation_days: int = 0, device_days: int = 0,
 ) -> dict:

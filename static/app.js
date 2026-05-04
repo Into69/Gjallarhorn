@@ -1773,11 +1773,13 @@ const MATCH_TYPE_PLACEHOLDERS = {
   rssi_above: "-60",
   new_device: "300 (seconds the location must be established first; 0 = arm immediately)",
   cross_location: "5/2 — appears in at least 2 of the last 5 locations",
+  persistent_companion: "3/4 — seen at ≥3 distinct locations within the last 4 hours (BLE rotating MACs counted together)",
 };
 const MATCH_TYPE_DEFAULTS = {
   rssi_above: "-60",
   new_device: "300",
   cross_location: "5/2",
+  persistent_companion: "3/4",
 };
 
 function applyMatchTypeUI(matchType) {

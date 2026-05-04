@@ -123,6 +123,21 @@ class AlertService:
                     continue
                 # Stash the count so it lands in the alert's stored details for context.
                 details = {**details, "_cross_location_count": count, "_cross_location_n": n_locs}
+            elif mt == "persistent_companion":
+                # match_value: "M/H" — device (or BLE-signature siblings) seen at
+                # ≥ M distinct locations within the last H hours. Strong signal
+                # of a follower / "stalker tag" rather than coincidental overlap.
+                min_locs, window_h = _parse_companion_value(rule.get("match_value") or "")
+                if min_locs is None:
+                    continue
+                count = await db.count_companion_locations(device_kind, device_id_l, window_h)
+                if count < min_locs:
+                    continue
+                details = {
+                    **details,
+                    "_companion_count": count,
+                    "_companion_window_h": window_h,
+                }
             elif not _matches(rule, device_id_l, ssid_or_name, vendor, rssi):
                 continue
 
@@ -263,6 +278,14 @@ def build_discord_payload(
                 "name": "Cross-location",
                 "value": f"in {c} of last {n}", "inline": True,
             })
+    if match_type == "persistent_companion":
+        c = details.get("_companion_count")
+        h = details.get("_companion_window_h")
+        if c is not None and h is not None:
+            fields.append({
+                "name": "Persistent companion",
+                "value": f"{c} locations in last {h}h", "inline": True,
+            })
 
     embed = {
         "title": f"⚡ {rule.get('name', 'Alert')}",
@@ -273,6 +296,20 @@ def build_discord_payload(
         "footer": {"text": f"rule #{rule.get('id', '?')}"},
     }
     return {"username": username, "embeds": [embed]}
+
+
+def _parse_companion_value(value: str) -> tuple[int | None, int]:
+    """Parse 'M/H' into (min_locations, window_hours). M defaults to 2,
+    H defaults to 4. Returns (None, 0) if unparsable. Both ≥ 1 required."""
+    parts = [p.strip() for p in (value or "").split("/")]
+    try:
+        m = int(parts[0]) if parts and parts[0] else 2
+        h = int(parts[1]) if len(parts) > 1 and parts[1] else 4
+    except (ValueError, IndexError):
+        return None, 0
+    if m < 2 or h < 1:
+        return None, 0
+    return m, h
 
 
 def _parse_cross_location_value(value: str) -> tuple[int | None, int]:
