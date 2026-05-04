@@ -846,6 +846,14 @@ select option:disabled { color: var(--muted); }
   color: #b8a3ff;
   cursor: help;
 }
+/* High-confidence: temporal correlation also matched, not just signature.
+   Brighter color so it pops against the regular signature-only link tag. */
+.link-tag.link-tag-strong {
+  background: rgba(255, 184, 107, 0.10);
+  border-color: #5a4424;
+  color: var(--warn);
+  font-weight: 600;
+}
 
 /* ── Logs tab ────────────────────────────────────────── */
 .log-list {

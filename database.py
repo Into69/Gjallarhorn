@@ -1075,44 +1075,92 @@ async def clear_preserved_devices() -> int:
         return cur.rowcount or 0
 
 
+# Temporal-correlation window: when MAC X stops being seen and MAC Y starts
+# within this many seconds AND they share a BLE signature, the pair is a
+# "high-confidence" rotation match. 20 minutes covers the typical 15-minute
+# RPA rotation interval with slack for scan jitter.
+TEMPORAL_LINK_WINDOW_S = 1200
+
+
+def _parse_iso(s: str | None):
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _temporal_close(this_first, this_last, sib_first, sib_last,
+                    window_s: float = TEMPORAL_LINK_WINDOW_S) -> bool:
+    """True iff one device disappeared shortly before the other appeared
+    (i.e., the lifetimes are adjacent rather than overlapping). Used to
+    promote a signature-only link to high-confidence when the temporal
+    pattern matches a rotation event."""
+    if not (this_first and this_last and sib_first and sib_last):
+        return False
+    gap_after = (sib_first - this_last).total_seconds()
+    gap_before = (this_first - sib_last).total_seconds()
+    return (0 <= gap_after <= window_s) or (0 <= gap_before <= window_s)
+
+
 async def devices_at_location(location_id: int, kind: str | None = None) -> list[dict]:
-    # Pull the row, plus a count and id-list of *other* MAC addresses across
-    # all locations whose BLE-signature matches this one — heuristic linkage
-    # for rotating private MACs. Wifi rows have signature NULL so the
-    # subqueries are no-ops for them.
-    sql = """
-      SELECT d.*,
-        COALESCE((
-          SELECT COUNT(DISTINCT d2.device_id)
-          FROM devices d2
-          WHERE d2.signature = d.signature
-            AND d2.signature IS NOT NULL
-            AND d2.device_id <> d.device_id
-        ), 0) AS linked_count,
-        (
-          SELECT GROUP_CONCAT(DISTINCT d2.device_id)
-          FROM devices d2
-          WHERE d2.signature = d.signature
-            AND d2.signature IS NOT NULL
-            AND d2.device_id <> d.device_id
-        ) AS linked_device_ids
-      FROM devices d
-      WHERE d.location_id=?
-    """
+    """Per-location device rows with BLE rotating-MAC linkage info.
+
+    For BLE rows that share a signature with other devices, this attaches
+    `linked_count` (total signature-matching siblings) and
+    `linked_device_ids` (their MACs). When at least one sibling's lifetime
+    is adjacent to this row's (within TEMPORAL_LINK_WINDOW_S), that
+    sibling is also added to `linked_recent_ids` and the link is treated
+    as high-confidence — that's the "MAC X just rotated to MAC Y" signal.
+    Wifi rows have signature NULL and stay unlinked."""
+    sql = "SELECT * FROM devices WHERE location_id=?"
     args: tuple = (location_id,)
     if kind:
-        sql += " AND d.kind=?"
+        sql += " AND kind=?"
         args = (location_id, kind)
-    sql += " ORDER BY d.best_rssi DESC"
+    sql += " ORDER BY best_rssi DESC"
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, args) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
+
+        # Collect non-null signatures we need to look up siblings for.
+        sigs = sorted({r["signature"] for r in rows if r.get("signature")})
+        siblings_by_sig: dict[str, list[dict]] = {}
+        if sigs:
+            placeholders = ",".join("?" * len(sigs))
+            async with db.execute(
+                f"SELECT signature, device_id, first_seen, last_seen, best_rssi "
+                f"FROM devices WHERE signature IN ({placeholders})",
+                tuple(sigs),
+            ) as cur:
+                for sig, did, first_seen, last_seen, best_rssi in await cur.fetchall():
+                    siblings_by_sig.setdefault(sig, []).append({
+                        "device_id": did,
+                        "first_seen": first_seen,
+                        "last_seen": last_seen,
+                        "best_rssi": best_rssi,
+                    })
+
     for r in rows:
         r["details"] = json.loads(r.pop("details_json"))
-        # Normalize the comma-separated alias list into an array.
-        ids = r.get("linked_device_ids")
-        r["linked_device_ids"] = (
-            [s for s in ids.split(",") if s] if ids else []
-        )
+        sig = r.get("signature")
+        siblings = [s for s in siblings_by_sig.get(sig, [])
+                    if s["device_id"] != r["device_id"]] if sig else []
+        r["linked_device_ids"] = [s["device_id"] for s in siblings]
+        r["linked_count"] = len(siblings)
+
+        # Promote to high-confidence when a sibling's lifetime is adjacent
+        # to this row's (rotation-style hand-off rather than overlap).
+        this_first = _parse_iso(r.get("first_seen"))
+        this_last = _parse_iso(r.get("last_seen"))
+        recent: list[str] = []
+        for s in siblings:
+            if _temporal_close(this_first, this_last,
+                               _parse_iso(s["first_seen"]),
+                               _parse_iso(s["last_seen"])):
+                recent.append(s["device_id"])
+        r["linked_recent_ids"] = recent
+        r["linked_recent_count"] = len(recent)
     return rows

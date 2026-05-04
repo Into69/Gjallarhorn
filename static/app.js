@@ -319,12 +319,27 @@ function renderDeviceRow(d) {
   // BLE link badge: when this row's signature matches one or more other
   // rows (rotating private MACs sharing a stable adv-data fingerprint),
   // surface the count beside the device id with the alias list as the
-  // tooltip. The full alias list also lands inside the details JSON.
+  // tooltip. When at least one sibling's lifetime is temporally adjacent
+  // (one disappeared as the other appeared, within ~20 min), the badge
+  // gets a high-confidence flag — that's the "MAC X just rotated to
+  // MAC Y" signal.
   const linkedCount = d.linked_count || 0;
   const linkedIds = d.linked_device_ids || [];
-  const linkBadge = linkedCount > 0
-    ? ` <span class="link-tag" title="Likely the same physical device as: ${escapeAttr(linkedIds.slice(0, 8).join(", ") + (linkedIds.length > 8 ? `, +${linkedIds.length - 8}` : ""))}">🔗 +${linkedCount}</span>`
-    : "";
+  const recentCount = d.linked_recent_count || 0;
+  const recentIds = d.linked_recent_ids || [];
+  let linkBadge = "";
+  if (linkedCount > 0) {
+    const aliasSummary = linkedIds.slice(0, 8).join(", ") +
+      (linkedIds.length > 8 ? `, +${linkedIds.length - 8}` : "");
+    const tooltip = recentCount > 0
+      ? `${recentCount} of ${linkedCount} are temporally adjacent (likely same device, just rotated MAC). Aliases: ${aliasSummary}`
+      : `Likely the same physical device as: ${aliasSummary}`;
+    const cls = recentCount > 0 ? "link-tag link-tag-strong" : "link-tag";
+    const text = recentCount > 0
+      ? `⚡ +${recentCount}/${linkedCount}`
+      : `🔗 +${linkedCount}`;
+    linkBadge = ` <span class="${cls}" title="${escapeAttr(tooltip)}">${text}</span>`;
+  }
   const idCell = d._merged_count > 1
     ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>${linkBadge}`
     : `<span class="mono">${escapeHtml(d.device_id)}</span>${linkBadge}`;
@@ -333,10 +348,12 @@ function renderDeviceRow(d) {
     : `<button type="button" class="icon-btn dev-wl" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelist this device (silences alerts and excludes from reports)" aria-label="Add to whitelist">☆</button>`;
 
   // Build the JSON shown in the expandable details cell. Promote linked
-  // aliases to a top-level field so they're easy to spot.
+  // aliases to a top-level field so they're easy to spot, and split into
+  // high-confidence (temporally adjacent) and the full set.
   const detailsPayload = {};
   if (d._merged_count > 1) detailsPayload.members = d._members;
   if (linkedCount > 0) {
+    if (recentCount > 0) detailsPayload.linked_aliases_high_confidence = recentIds;
     detailsPayload.linked_aliases = linkedIds;
     if (d.signature) detailsPayload.signature = d.signature;
   }

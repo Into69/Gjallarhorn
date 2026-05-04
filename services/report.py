@@ -283,6 +283,104 @@ def _whitelist_matcher(entries: list[dict]):
     return match
 
 
+def _summary_blurb(locations: list[dict], common: list[dict]) -> str:
+    """One-paragraph framing for the summary section. Uses just the
+    cheap aggregates so this stays fast even on huge data sets."""
+    if not locations:
+        return "No sensor locations recorded yet."
+    creates = [l.get("created_at") for l in locations if l.get("created_at")]
+    last_seens = [l.get("last_seen_at") for l in locations if l.get("last_seen_at")]
+    span = ""
+    if creates and last_seens:
+        first_ts = min(creates)
+        last_ts = max(last_seens)
+        span = f" Coverage spans {_fmt_time(first_ts)} → {_fmt_time(last_ts)}."
+    n_recurring = len(common)
+    follow_phrase = (
+        f"{n_recurring} device{'s' if n_recurring != 1 else ''} appeared at "
+        f"two or more locations." if n_recurring else
+        "No devices were observed at multiple locations."
+    )
+    return (
+        f"This report covers {len(locations)} sensor location"
+        f"{'s' if len(locations) != 1 else ''}.{span} {follow_phrase}"
+    )
+
+
+def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dict]],
+                      common: list[dict]) -> list[str]:
+    """Generate up to ~5 bullet-points highlighting noteworthy patterns.
+    Cheap derivations only — no extra DB calls."""
+    out: list[str] = []
+    if not locations:
+        return out
+
+    # Most active location (highest device count or fix_count)
+    by_devices = sorted(
+        locations,
+        key=lambda l: (
+            (l.get("wifi_count") or 0)
+            + (l.get("bt_count") or 0)
+            + (l.get("wifi_client_count") or 0)
+        ),
+        reverse=True,
+    )
+    top_loc = by_devices[0]
+    top_loc_total = (
+        (top_loc.get("wifi_count") or 0)
+        + (top_loc.get("bt_count") or 0)
+        + (top_loc.get("wifi_client_count") or 0)
+    )
+    if top_loc_total > 0:
+        label = top_loc.get("label") or f"Loc {top_loc['id']}"
+        out.append(
+            f"<b>Most active location:</b> {label} — {top_loc_total} unique devices."
+        )
+
+    # Strongest signal across the whole dataset
+    strongest = None
+    for devs in per_loc_devices.values():
+        for d in devs:
+            r = d.get("best_rssi")
+            if r is None:
+                continue
+            if strongest is None or r > strongest["best_rssi"]:
+                strongest = d
+    if strongest is not None:
+        det = strongest.get("details") or {}
+        name = det.get("ssid") or det.get("name") or strongest.get("device_id")
+        out.append(
+            f"<b>Strongest signal:</b> {strongest.get('best_rssi')} dBm — "
+            f"<font face='Courier'>{strongest.get('device_id')}</font>"
+            f"{f' ({name})' if name and name != strongest.get('device_id') else ''}."
+        )
+
+    # Top recurring device
+    if common:
+        head = common[0]
+        det = head.get("details") or {}
+        name = det.get("ssid") or det.get("name") or ""
+        n = head.get("n_locations") or 0
+        if n >= 2:
+            out.append(
+                f"<b>Most-traveled device:</b> "
+                f"<font face='Courier'>{head.get('device_id')}</font>"
+                f"{f' ({name})' if name else ''} — seen at {n} locations."
+            )
+
+    # Per-kind totals as a one-liner
+    total_wifi = sum(int(l.get("wifi_count") or 0) for l in locations)
+    total_bt = sum(int(l.get("bt_count") or 0) for l in locations)
+    total_cl = sum(int(l.get("wifi_client_count") or 0) for l in locations)
+    if total_wifi or total_bt or total_cl:
+        out.append(
+            f"<b>By kind:</b> {total_wifi} Wi-Fi APs, {total_bt} Bluetooth devices, "
+            f"{total_cl} Wi-Fi clients (passive probe captures)."
+        )
+
+    return out
+
+
 async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
     locations = await db.list_locations()
     locations = sorted(locations, key=lambda l: l["id"])
@@ -312,6 +410,7 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
         # SQL aggregate from list_locations is unaware of either.
         loc["wifi_count"] = sum(1 for d in kept if d.get("kind") == "wifi")
         loc["bt_count"] = sum(1 for d in kept if d.get("kind") == "bluetooth")
+        loc["wifi_client_count"] = sum(1 for d in kept if d.get("kind") == "wifi_client")
         loc["total_observations"] = sum(int(d.get("seen_count") or 0) for d in kept)
 
     common = [c for c in common if not is_wl(c.get("kind", ""), c.get("device_id", ""))]
@@ -321,7 +420,7 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
     s = _styles()
     flow: list[Any] = []
 
-    # ── Cover ──
+    # ── Title ──
     flow.append(Paragraph("Gjallarhorn Sensor Report", s["title"]))
     flow.append(Paragraph(
         f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", s["subtitle"],
@@ -333,14 +432,32 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
             s["caption"],
         ))
 
+    # ── Executive summary (first thing after the title) ──
     total_wifi = sum(int(l.get("wifi_count") or 0) for l in locations)
     total_bt = sum(int(l.get("bt_count") or 0) for l in locations)
+    total_clients = sum(int(l.get("wifi_client_count") or 0) for l in locations)
     total_obs = sum(int(l.get("total_observations") or 0) for l in locations)
+
+    flow.append(Paragraph("Summary", s["h1"]))
+    flow.append(Paragraph(_summary_blurb(locations, common), s["caption"]))
+
     flow.append(_table(
-        ["Locations", "Wi-Fi devices", "Bluetooth devices", "Total observations", "Common devices"],
-        [(str(len(locations)), str(total_wifi), str(total_bt), str(total_obs), str(len(common)))],
-        col_widths=[1.46 * inch] * 5,
+        ["Locations", "Wi-Fi APs", "Bluetooth", "Wi-Fi clients", "Observations", "Recurring"],
+        [(
+            str(len(locations)),
+            str(total_wifi),
+            str(total_bt),
+            str(total_clients),
+            str(total_obs),
+            str(len(common)),
+        )],
+        col_widths=[1.18 * inch] * 6,
     ))
+    flow.append(Spacer(1, 8))
+    findings = _summary_findings(locations, per_loc_devices, common)
+    if findings:
+        for line in findings:
+            flow.append(Paragraph(f"• {line}", s["body"]))
     flow.append(Spacer(1, 16))
 
     # ── Overview map ──
@@ -361,6 +478,7 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
                 _cell(l.get("label") or ""),
                 str(l.get("wifi_count") or 0),
                 str(l.get("bt_count") or 0),
+                str(l.get("wifi_client_count") or 0),
                 str(l.get("total_observations") or 0),
                 _fmt_time(l.get("created_at")),
                 _fmt_time(l.get("last_seen_at")),
@@ -368,9 +486,9 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
             for l in locations
         ]
         flow.append(_table(
-            ["ID", "Label", "Wi-Fi", "BT", "Obs.", "Created", "Last seen"],
+            ["ID", "Label", "Wi-Fi", "BT", "Clients", "Obs.", "Created", "Last seen"],
             comp_rows,
-            col_widths=[0.45 * inch, 2.4 * inch, 0.6 * inch, 0.55 * inch, 0.7 * inch, 1.3 * inch, 1.3 * inch],
+            col_widths=[0.40 * inch, 2.05 * inch, 0.55 * inch, 0.50 * inch, 0.65 * inch, 0.65 * inch, 1.25 * inch, 1.25 * inch],
         ))
 
     # ── Top 10 by location coverage ──
@@ -461,8 +579,9 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
             ("Coordinates", f"{loc['lat']:.6f}, {loc['lon']:.6f}"),
             ("Radius", f"{loc.get('radius_m', '—')} m"),
             ("Fixes", str(loc.get("fix_count", "—"))),
-            ("Wi-Fi devices", str(loc.get("wifi_count") or 0)),
+            ("Wi-Fi APs", str(loc.get("wifi_count") or 0)),
             ("Bluetooth devices", str(loc.get("bt_count") or 0)),
+            ("Wi-Fi clients (probes)", str(loc.get("wifi_client_count") or 0)),
             ("Total observations", str(loc.get("total_observations") or 0)),
             ("Created", _fmt_time(loc.get("created_at"))),
             ("Last seen", _fmt_time(loc.get("last_seen_at"))),
