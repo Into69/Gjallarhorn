@@ -437,6 +437,7 @@ main { height: calc(100vh - 53px); }
 
 .toolbar { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
 .toolbar label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+.toolbar input[type="search"] { min-width: 220px; }
 
 table { width: 100%; border-collapse: collapse; background: var(--panel); }
 th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left;

@@ -140,10 +140,22 @@
             <option value="wifi_client">wifi client (probe)</option>
           </select>
         </label>
+        <label>Last seen:
+          <select id="dev-since">
+            <option value="">any time</option>
+            <option value="3600">past hour</option>
+            <option value="21600">past 6 hours</option>
+            <option value="86400">past day</option>
+            <option value="604800">past week</option>
+            <option value="2592000">past month</option>
+          </select>
+        </label>
+        <input type="search" id="dev-search" placeholder="search MAC / SSID / name / vendor…" autocomplete="off" />
         <label class="check" title="Merge wifi BSSIDs that share the same first 5 octets — these are typically the same physical AP advertising on multiple bands or SSIDs.">
           <input type="checkbox" id="dev-group-bssid" checked /> Group multi-BSSID APs
         </label>
         <button id="dev-refresh">Refresh</button>
+        <span id="dev-count" class="muted"></span>
         <span class="toolbar-spacer"></span>
         <button id="dev-manage-whitelist" class="secondary" title="Open the whitelist editor in Settings.">Manage whitelist</button>
       </div>

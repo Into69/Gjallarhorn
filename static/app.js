@@ -288,10 +288,44 @@ async function refreshDevices() {
   // Optionally collapse wifi BSSIDs that share the same first 5 octets
   // (multi-BSSID radios on the same physical AP). Other kinds pass through.
   const groupBssid = $("#dev-group-bssid")?.checked;
-  const rows = groupBssid ? groupWifiByApPrefix(devices) : devices;
+  let rows = groupBssid ? groupWifiByApPrefix(devices) : devices;
+
+  // Time-range filter: drop rows whose last_seen is older than the selected
+  // window. Comparing ISO strings lexically only works because the format is
+  // fixed-width, so compare via Date instead.
+  const sinceSec = parseInt($("#dev-since")?.value || "0", 10);
+  if (sinceSec > 0) {
+    const cutoff = Date.now() - sinceSec * 1000;
+    rows = rows.filter(d => {
+      const t = d.last_seen ? new Date(d.last_seen + "Z").getTime() : 0;
+      // Backend stores UTC ISO without tz suffix; appending "Z" forces UTC.
+      // Fallback to raw parse if that fails.
+      return (Number.isFinite(t) && t > 0 ? t : Date.parse(d.last_seen || "")) >= cutoff;
+    });
+  }
+
+  // Free-text search across MAC, SSID/name, and vendor — case-insensitive.
+  const q_search = ($("#dev-search")?.value || "").trim().toLowerCase();
+  if (q_search) {
+    rows = rows.filter(d => {
+      const det = d.details || {};
+      const haystack = [
+        d.device_id, det.ssid, det.name, det.vendor,
+        ...(d._merged_ssids || []),
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(q_search);
+    });
+  }
 
   for (const d of rows) {
     tbody.appendChild(renderDeviceRow(d));
+  }
+  const total = (groupBssid ? groupWifiByApPrefix(devices) : devices).length;
+  const countEl = $("#dev-count");
+  if (countEl) {
+    countEl.textContent = (sinceSec || q_search)
+      ? `${rows.length} of ${total}`
+      : `${total} device${total === 1 ? "" : "s"}`;
   }
 }
 
@@ -441,6 +475,14 @@ $("#dev-refresh").addEventListener("click", refreshDevices);
 $("#dev-location").addEventListener("change", refreshDevices);
 $("#dev-kind").addEventListener("change", refreshDevices);
 $("#dev-group-bssid").addEventListener("change", refreshDevices);
+// Search and time-range filter are local to the rendered set, so refilter
+// without re-fetching. Debounce the search input to keep typing snappy.
+let _devSearchTimer = null;
+$("#dev-search")?.addEventListener("input", () => {
+  clearTimeout(_devSearchTimer);
+  _devSearchTimer = setTimeout(refreshDevices, 150);
+});
+$("#dev-since")?.addEventListener("change", refreshDevices);
 
 // Quick jump from the Devices tab to the whitelist editor in Settings.
 $("#dev-manage-whitelist")?.addEventListener("click", () => {
