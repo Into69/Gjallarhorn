@@ -683,14 +683,16 @@ async def merge_locations(loser_id: int, winner_id: int) -> dict:
         # auto-cluster. The loser's outer rim may stick out of the post-
         # merge winner; that's the trade for keeping bubble sizes sane.
         # Manual winners keep the user-drawn radius — geofence size is
-        # intentional.
+        # intentional. Same 2-dp rounding LocationManager.effective_radius_m
+        # uses on creation, so merged radii match the precision of fresh
+        # bubbles.
         if w_source == "manual":
             new_radius = w_radius
         else:
             dist = _haversine_m(w_lat, w_lon, l_lat, l_lon)
             needed = max(w_radius, dist + l_radius)
             cap = w_radius * MERGE_GROW_CAP_FACTOR
-            new_radius = min(needed, cap)
+            new_radius = round(min(needed, cap), 2)
         new_fix_count = (w_fix_count or 0) + (l_fix_count or 0)
         new_last_seen = max(w_last_seen or "", l_last_seen or "") or w_last_seen
         await db.execute(
