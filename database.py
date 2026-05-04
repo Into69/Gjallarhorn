@@ -338,12 +338,53 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * R * math.asin(math.sqrt(a))
 
 
+# ── Merge-contained tunables ─────────────────────────────────────────────
+# Fraction of the LOSER's area that must lie inside the WINNER's circle for
+# the pair to qualify as "contained enough to merge". 0.5 = at least half
+# the loser's bubble overlaps the winner. Stricter than the old "centroid
+# inside radius" rule, which could trigger on as little as ~5% overlap when
+# the loser was much larger than the winner.
+MERGE_OVERLAP_THRESHOLD = 0.5
+# When merging into an auto winner, cap how much the winner's radius can
+# grow to engulf the loser. 1.10 = at most 10%. Manual winners never grow.
+MERGE_GROW_CAP_FACTOR = 1.10
+
+
+def _circle_overlap_area(r1: float, r2: float, d: float) -> float:
+    """Lens-area of two circles with radii r1, r2 separated by centre
+    distance d. 0 when disjoint; π·min(r1,r2)² when one fully contains
+    the other."""
+    if r1 <= 0 or r2 <= 0:
+        return 0.0
+    if d >= r1 + r2:
+        return 0.0
+    if d <= abs(r1 - r2):
+        return math.pi * min(r1, r2) ** 2
+    r1_sq, r2_sq, d_sq = r1 * r1, r2 * r2, d * d
+    a1 = r1_sq * math.acos((d_sq + r1_sq - r2_sq) / (2 * d * r1))
+    a2 = r2_sq * math.acos((d_sq + r2_sq - r1_sq) / (2 * d * r2))
+    triangle = 0.5 * math.sqrt(
+        (-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2)
+    )
+    return a1 + a2 - triangle
+
+
+def _loser_overlap_ratio(loser_radius: float, winner_radius: float, distance_m: float) -> float:
+    """Fraction of the LOSER's area that lies inside the WINNER's circle.
+    Returns a value in [0, 1]."""
+    if loser_radius <= 0:
+        return 0.0
+    overlap = _circle_overlap_area(loser_radius, winner_radius, distance_m)
+    return min(1.0, overlap / (math.pi * loser_radius ** 2))
+
+
 async def find_contained_locations() -> list[dict]:
-    """Return every (loser, winner) pair where the loser's centroid sits
-    inside the winner's radius — the same containment rule LocationManager
-    uses to attribute new fixes. Manual (drawn) locations are never losers:
-    drawn geofences are user-authoritative and always survive. Pairs are
-    sorted so the smallest loser inside the largest winner is merged first."""
+    """Return every (loser, winner) pair where at least
+    MERGE_OVERLAP_THRESHOLD of the loser's circle area lies inside the
+    winner's circle. Manual (drawn) locations are never losers: drawn
+    geofences are user-authoritative and always survive. Pairs are sorted
+    so manual winners absorb first, then smallest loser into largest
+    winner."""
     locs = await list_locations()
     pairs: list[dict] = []
     for a in locs:
@@ -353,7 +394,8 @@ async def find_contained_locations() -> list[dict]:
             if a["id"] == b["id"]:
                 continue
             d = _haversine_m(a["lat"], a["lon"], b["lat"], b["lon"])
-            if d <= b["radius_m"]:
+            ratio = _loser_overlap_ratio(a["radius_m"], b["radius_m"], d)
+            if ratio >= MERGE_OVERLAP_THRESHOLD:
                 pairs.append({
                     "loser_id": a["id"],
                     "winner_id": b["id"],
@@ -364,12 +406,14 @@ async def find_contained_locations() -> list[dict]:
                     "winner_fix_count": b.get("fix_count", 0),
                     "loser_source": a.get("source", "auto"),
                     "winner_source": b.get("source", "auto"),
+                    "overlap_ratio": ratio,
                 })
     pairs.sort(key=lambda p: (
         # Prefer pairs whose winner is a drawn geofence — that way a manual
         # circle absorbs everything inside it before two auto-clusters try
         # to merge with each other.
         0 if p["winner_source"] == "manual" else 1,
+        -p["overlap_ratio"],          # most-overlapping pair first
         p["loser_radius"],            # smallest loser first
         -p["winner_radius"],          # largest winner first
         -p["winner_fix_count"],       # most-trafficked winner
@@ -486,13 +530,19 @@ async def merge_locations(loser_id: int, winner_id: int) -> dict:
         counts["alert_rules_repointed"] = cur.rowcount or 0
 
         # 5. Update winner aggregates. For auto winners, expand radius to
-        # engulf the loser if it wasn't already inside. Manual winners keep
-        # the user-drawn radius — the geofence size is intentional.
+        # engulf the loser if it wasn't already inside, but cap growth at
+        # MERGE_GROW_CAP_FACTOR (10%) so a single merge can't blow up an
+        # auto-cluster. The loser's outer rim may stick out of the post-
+        # merge winner; that's the trade for keeping bubble sizes sane.
+        # Manual winners keep the user-drawn radius — geofence size is
+        # intentional.
         if w_source == "manual":
             new_radius = w_radius
         else:
             dist = _haversine_m(w_lat, w_lon, l_lat, l_lon)
-            new_radius = max(w_radius, dist + l_radius)
+            needed = max(w_radius, dist + l_radius)
+            cap = w_radius * MERGE_GROW_CAP_FACTOR
+            new_radius = min(needed, cap)
         new_fix_count = (w_fix_count or 0) + (l_fix_count or 0)
         new_last_seen = max(w_last_seen or "", l_last_seen or "") or w_last_seen
         await db.execute(

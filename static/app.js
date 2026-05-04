@@ -496,7 +496,10 @@ $("#loc-merge").addEventListener("click", async () => {
       return;
     }
     const summary = pairs.slice(0, 10)
-      .map(p => `  • #${p.loser_id} (r=${p.loser_radius}m) inside #${p.winner_id} (r=${p.winner_radius}m, ${p.distance_m.toFixed(1)}m apart)`)
+      .map(p => {
+        const pct = p.overlap_ratio != null ? `${Math.round(p.overlap_ratio * 100)}% overlap` : `${p.distance_m.toFixed(1)}m apart`;
+        return `  • #${p.loser_id} (r=${p.loser_radius}m) into #${p.winner_id} (r=${p.winner_radius}m, ${pct})`;
+      })
       .join("\n");
     const more = pairs.length > 10 ? `\n  …and ${pairs.length - 10} more` : "";
     if (!confirm(
