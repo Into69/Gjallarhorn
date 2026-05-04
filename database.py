@@ -329,6 +329,11 @@ async def create_location(lat: float, lon: float, radius_m: float, label: str | 
     # Manual (drawn) locations start with fix_count=0; they're geofences,
     # not auto-clusters that always have at least the opening fix.
     fix_count = 0 if source == "manual" else 1
+    # Same 2-dp rounding LocationManager.effective_radius_m applies to
+    # auto-cluster radii. Applied here defensively so manual-draw and
+    # any future caller bypassing the location manager also lands at
+    # consistent precision.
+    radius_m = round(float(radius_m), 2)
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "INSERT INTO sensor_locations(lat,lon,radius_m,created_at,last_seen_at,"
