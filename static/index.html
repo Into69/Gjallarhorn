@@ -427,6 +427,25 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
         </fieldset>
 
         <fieldset>
+          <legend>Retention</legend>
+          <p class="hint">
+            A daily background sweep drops rows past these thresholds. Set
+            either to <code>0</code> to keep that table forever. Whitelisted
+            devices are exempt from the device sweep.
+          </p>
+          <label>Observation retention (days)
+            <input type="number" name="observation_retention_days" min="0" max="3650" />
+          </label>
+          <label>Device retention (days, 0 = forever)
+            <input type="number" name="device_retention_days" min="0" max="3650" />
+          </label>
+          <div class="toolbar">
+            <button type="button" id="purge-now" class="secondary">Purge now</button>
+            <span id="purge-status" class="muted"></span>
+          </div>
+        </fieldset>
+
+        <fieldset>
           <legend>Notifications — Discord</legend>
           <label>Webhook URL
             <input type="url" name="discord_webhook_url" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" />

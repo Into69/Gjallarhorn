@@ -48,6 +48,7 @@ class ScanOrchestrator:
             asyncio.create_task(self._wifi_loop()),
             asyncio.create_task(self._bt_loop()),
             asyncio.create_task(self._probe_loop()),
+            asyncio.create_task(self._purge_loop()),
         ]
 
     async def stop(self) -> None:
@@ -149,6 +150,35 @@ class ScanOrchestrator:
             except Exception as e:
                 log.exception("bt loop error: %s", e)
             if not await self._sleep((await settings_store.load()).bluetooth_scan_interval_s):
+                return
+
+    async def _purge_loop(self) -> None:
+        """Periodically drop rows past the configured retention windows.
+        Runs once at startup (after a small delay so init_db is settled)
+        and then daily. No-op when both retention knobs are 0."""
+        # Stagger the first run so it doesn't compete with startup.
+        if not await self._sleep(60.0):
+            return
+        while not self._stop.is_set():
+            try:
+                s = await settings_store.load()
+                obs_d = int(s.observation_retention_days or 0)
+                dev_d = int(s.device_retention_days or 0)
+                if obs_d > 0 or dev_d > 0:
+                    counts = await db.purge_old_data(
+                        observation_days=obs_d, device_days=dev_d,
+                    )
+                    if counts.get("observations") or counts.get("devices"):
+                        log.info(
+                            "auto-purge dropped %d observations + %d devices "
+                            "(retention obs=%dd dev=%dd)",
+                            counts.get("observations", 0),
+                            counts.get("devices", 0), obs_d, dev_d,
+                        )
+            except Exception as e:
+                log.exception("purge loop error: %s", e)
+            # 24h between sweeps. Cancellation-aware sleep so stop() returns fast.
+            if not await self._sleep(24 * 3600):
                 return
 
     async def _probe_loop(self) -> None:

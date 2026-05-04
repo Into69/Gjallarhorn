@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -899,6 +899,49 @@ async def count_device_in_recent_locations(kind: str, device_id: str, n_location
         async with db.execute(sql, (kind, device_id, n_locations)) as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
+
+
+async def purge_old_data(
+    *, observation_days: int = 0, device_days: int = 0,
+) -> dict:
+    """Drop observations older than `observation_days` and devices whose
+    last_seen is older than `device_days`. Either threshold ≤ 0 disables
+    that pass. Whitelisted devices' rows are kept regardless of the
+    device-age threshold (they survive location deletion already, no point
+    purging them here). Returns counts of rows removed."""
+    counts = {"observations": 0, "devices": 0}
+    if observation_days <= 0 and device_days <= 0:
+        return counts
+    async with aiosqlite.connect(DB_PATH) as db:
+        if observation_days > 0:
+            cutoff = (datetime.utcnow() - timedelta(days=observation_days)).isoformat()
+            cur = await db.execute(
+                "DELETE FROM observations WHERE seen_at < ?", (cutoff,),
+            )
+            counts["observations"] = cur.rowcount or 0
+        if device_days > 0:
+            cutoff = (datetime.utcnow() - timedelta(days=device_days)).isoformat()
+            # Skip whitelist matches — pull whitelist once, build a python
+            # filter, run a single delete on the candidates that don't match.
+            async with db.execute("SELECT kind, device_id FROM device_whitelist") as cur:
+                wl = [(r[0], (r[1] or "").lower()) for r in await cur.fetchall()]
+            async with db.execute(
+                "SELECT location_id, kind, device_id FROM devices WHERE last_seen < ?",
+                (cutoff,),
+            ) as cur:
+                stale = await cur.fetchall()
+            removed = 0
+            for loc_id, kind, did in stale:
+                if _match_whitelist(wl, kind, did):
+                    continue
+                await db.execute(
+                    "DELETE FROM devices WHERE location_id=? AND kind=? AND device_id=?",
+                    (loc_id, kind, did),
+                )
+                removed += 1
+            counts["devices"] = removed
+        await db.commit()
+    return counts
 
 
 async def clear_alert_events() -> int:

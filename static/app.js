@@ -1180,6 +1180,42 @@ $("#tc-clear").addEventListener("click", async () => {
   }
 });
 
+$("#purge-now")?.addEventListener("click", async () => {
+  const status = $("#purge-status");
+  const btn = $("#purge-now");
+  // Use whatever the form currently shows, even if not yet saved — that
+  // way the user can experiment with thresholds before committing.
+  const obs = parseInt(document.querySelector("[name=observation_retention_days]")?.value || "0", 10);
+  const dev = parseInt(document.querySelector("[name=device_retention_days]")?.value || "0", 10);
+  if ((!obs || obs <= 0) && (!dev || dev <= 0)) {
+    status.textContent = "both thresholds are 0 — nothing to purge";
+    return;
+  }
+  if (!confirm(
+    `Purge rows with the current thresholds?\n\n` +
+    `Observations older than: ${obs > 0 ? obs + " days" : "(disabled)"}\n` +
+    `Devices last seen >: ${dev > 0 ? dev + " days" : "(disabled)"}\n\n` +
+    `This cannot be undone.`
+  )) return;
+  btn.disabled = true;
+  status.textContent = "purging…";
+  try {
+    const r = await api("/api/maintenance/purge", {
+      method: "POST",
+      body: JSON.stringify({ observation_days: obs, device_days: dev }),
+    });
+    const removed = r.removed || {};
+    status.textContent =
+      `removed ${removed.observations || 0} observations, ${removed.devices || 0} devices`;
+    setTimeout(() => (status.textContent = ""), 6000);
+    await refreshLocations?.();
+  } catch (e) {
+    status.textContent = "error: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $("#discord-test").addEventListener("click", async () => {
   const status = $("#discord-test-status");
   status.textContent = "sending…";

@@ -496,6 +496,24 @@ async def api_merge_contained_locations():
     return {"ok": True, **result}
 
 
+@app.post("/api/maintenance/purge")
+async def api_purge_old_data(payload: dict | None = None):
+    """Manually run the retention purge using the configured (or
+    overridden) thresholds. Body may contain {observation_days, device_days}
+    to override the saved settings for this one call (e.g. dry-run-ish,
+    user-initiated cleanup)."""
+    s = await settings_store.load()
+    payload = payload or {}
+    obs_d = int(payload.get("observation_days", s.observation_retention_days or 0))
+    dev_d = int(payload.get("device_days", s.device_retention_days or 0))
+    counts = await db.purge_old_data(
+        observation_days=obs_d, device_days=dev_d,
+    )
+    log.info("manual purge: obs_d=%d dev_d=%d removed=%s", obs_d, dev_d, counts)
+    return {"ok": True, "removed": counts,
+            "observation_days": obs_d, "device_days": dev_d}
+
+
 @app.get("/api/tilecache/status")
 async def api_tilecache_status():
     from services.map_cache import cache_status

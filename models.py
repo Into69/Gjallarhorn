@@ -136,3 +136,8 @@ class AppSettings(BaseModel):
     # notifications
     discord_webhook_url: Optional[str] = None
     discord_username: str = "Gjallarhorn"
+
+    # retention — auto-purge old rows so the DB doesn't grow unbounded.
+    # 0 = keep forever for either knob.
+    observation_retention_days: int = 30
+    device_retention_days: int = 0
