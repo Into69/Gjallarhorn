@@ -18,6 +18,7 @@ from typing import Any
 
 import database as db
 from config import settings_store
+from services.location_manager import location_manager
 
 log = logging.getLogger(__name__)
 
@@ -94,7 +95,15 @@ class AlertService:
             if kind_filter and kind_filter != device_kind:
                 continue
             loc_filter = rule.get("location_id")
-            if loc_filter is not None and loc_filter != location_id:
+            if loc_filter == -1:
+                # "Active location" sentinel — resolve to whatever loc the
+                # sensor is currently parked at. If no active loc (GPS lost,
+                # or sensor moving between bubbles), the rule has no scope
+                # and is silently skipped.
+                active = location_manager.active_id
+                if active is None or active != location_id:
+                    continue
+            elif loc_filter is not None and loc_filter != location_id:
                 continue
 
             mt = rule.get("match_type")

@@ -1283,7 +1283,7 @@ async function refreshAlertRules() {
       <td>${escapeHtml(r.kind || "any")}</td>
       <td>${escapeHtml(MATCH_TYPE_LABEL[r.match_type] || r.match_type)}${extraBadge}</td>
       <td class="mono">${escapeHtml(r.match_value)}</td>
-      <td>${r.location_id ?? "any"}</td>
+      <td>${r.location_id == null ? "any" : r.location_id === -1 ? "active" : r.location_id}</td>
       <td><input type="checkbox" class="rule-discord" data-id="${r.id}" ${r.notify_discord ? "checked" : ""}></td>
       <td><input type="checkbox" class="rule-audible" data-id="${r.id}" ${r.audible ? "checked" : ""}></td>
       <td class="mono">${formatTime(r.created_at)}</td>
@@ -1327,16 +1327,26 @@ async function refreshAlertRules() {
       refreshAlertRules();
     })
   );
-  // Populate the location dropdown in the form
+  // Populate the location dropdown in the form. Two special options:
+  //   ""  any location
+  //   -1  active location (resolves to the current active loc at fire time)
   try {
     const locs = await api("/api/locations");
     const sel = $("#rule-location");
-    sel.innerHTML = `<option value="">any</option>`;
+    const prev = sel.value;
+    const activeId = locs.active_id;
+    const activeLabel = activeId != null
+      ? `active location (currently #${activeId})`
+      : "active location (no active location)";
+    sel.innerHTML =
+      `<option value="">any</option>` +
+      `<option value="-1">${escapeHtml(activeLabel)}</option>`;
     for (const loc of locs.locations || []) {
       const o = document.createElement("option");
       o.value = loc.id; o.textContent = `${loc.id} · ${loc.label || ""}`.trim();
       sel.appendChild(o);
     }
+    if (prev) sel.value = prev;  // preserve mid-edit selection
   } catch {}
 }
 
