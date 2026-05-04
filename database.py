@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -221,6 +222,188 @@ async def delete_location(location_id: int) -> dict:
         await db.execute("DELETE FROM sensor_locations WHERE id=?", (location_id,))
         await db.commit()
     return {"locations": 1, "devices": n_dev, "observations": n_obs}
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in metres. Inlined here so database.py doesn't
+    need to import services.location_manager (circular)."""
+    R = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+async def find_contained_locations() -> list[dict]:
+    """Return every (loser, winner) pair where the loser's centroid sits
+    inside the winner's radius — the same containment rule LocationManager
+    uses to attribute new fixes. Pairs are sorted so the smallest loser
+    inside the largest winner is merged first; that keeps tiny clusters
+    from "winning" against the bubble that contains them."""
+    locs = await list_locations()
+    pairs: list[dict] = []
+    for a in locs:
+        for b in locs:
+            if a["id"] == b["id"]:
+                continue
+            d = _haversine_m(a["lat"], a["lon"], b["lat"], b["lon"])
+            if d <= b["radius_m"]:
+                pairs.append({
+                    "loser_id": a["id"],
+                    "winner_id": b["id"],
+                    "distance_m": d,
+                    "loser_radius": a["radius_m"],
+                    "winner_radius": b["radius_m"],
+                    "loser_fix_count": a.get("fix_count", 0),
+                    "winner_fix_count": b.get("fix_count", 0),
+                })
+    pairs.sort(key=lambda p: (
+        p["loser_radius"],            # smallest loser first
+        -p["winner_radius"],          # largest winner first
+        -p["winner_fix_count"],       # most-trafficked winner
+        p["winner_id"],               # oldest winner (lowest id) breaks ties
+    ))
+    return pairs
+
+
+async def merge_locations(loser_id: int, winner_id: int) -> dict:
+    """Move every device/observation/alert tied to `loser_id` onto
+    `winner_id`, combining colliding device rows by (kind, device_id),
+    expand the winner's radius to cover the loser if needed, then delete
+    the loser row. Returns counts for the UI."""
+    if loser_id == winner_id:
+        return {"loser_id": loser_id, "winner_id": winner_id, "noop": True}
+
+    counts = {
+        "loser_id": loser_id,
+        "winner_id": winner_id,
+        "devices_moved": 0,
+        "devices_combined": 0,
+        "observations_moved": 0,
+        "alert_events_moved": 0,
+        "alert_rules_repointed": 0,
+        "winner_radius_before": None,
+        "winner_radius_after": None,
+    }
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Sanity: both rows must exist, otherwise return a no-op shape.
+        async with db.execute(
+            "SELECT id, lat, lon, radius_m, fix_count, last_seen_at "
+            "FROM sensor_locations WHERE id IN (?,?)",
+            (loser_id, winner_id),
+        ) as cur:
+            rows = {r[0]: r for r in await cur.fetchall()}
+        if loser_id not in rows or winner_id not in rows:
+            counts["noop"] = True
+            return counts
+
+        l_id, l_lat, l_lon, l_radius, l_fix_count, l_last_seen = rows[loser_id]
+        w_id, w_lat, w_lon, w_radius, w_fix_count, w_last_seen = rows[winner_id]
+        counts["winner_radius_before"] = w_radius
+
+        # 1. Observations have no unique constraint — single UPDATE moves them.
+        cur = await db.execute(
+            "UPDATE observations SET location_id=? WHERE location_id=?",
+            (winner_id, loser_id),
+        )
+        counts["observations_moved"] = cur.rowcount or 0
+
+        # 2. Devices: combine on collision because PK is (location_id, kind, device_id).
+        async with db.execute(
+            "SELECT kind, device_id, first_seen, last_seen, best_rssi, "
+            "last_rssi, seen_count, details_json FROM devices WHERE location_id=?",
+            (loser_id,),
+        ) as cur:
+            loser_devs = await cur.fetchall()
+        for k, did, l_first, l_last, l_best, l_last_rssi, l_seen, l_details in loser_devs:
+            async with db.execute(
+                "SELECT first_seen, last_seen, best_rssi, last_rssi, seen_count, details_json "
+                "FROM devices WHERE location_id=? AND kind=? AND device_id=?",
+                (winner_id, k, did),
+            ) as c:
+                row = await c.fetchone()
+            if row is None:
+                # No collision — just rewrite the FK.
+                await db.execute(
+                    "UPDATE devices SET location_id=? "
+                    "WHERE location_id=? AND kind=? AND device_id=?",
+                    (winner_id, loser_id, k, did),
+                )
+                counts["devices_moved"] += 1
+            else:
+                w_first, w_last, w_best, w_last_rssi_, w_seen, w_details = row
+                # RSSI is negative — "best" is the max (least-negative).
+                merged_best = max(l_best, w_best)
+                merged_first = min(l_first, w_first)
+                merged_last = max(l_last, w_last)
+                merged_last_rssi = l_last_rssi if l_last >= w_last else w_last_rssi_
+                merged_details = w_details if w_last >= l_last else l_details
+                merged_seen = (l_seen or 0) + (w_seen or 0)
+                await db.execute(
+                    "UPDATE devices SET first_seen=?, last_seen=?, best_rssi=?, "
+                    "last_rssi=?, seen_count=?, details_json=? "
+                    "WHERE location_id=? AND kind=? AND device_id=?",
+                    (merged_first, merged_last, merged_best, merged_last_rssi,
+                     merged_seen, merged_details, winner_id, k, did),
+                )
+                await db.execute(
+                    "DELETE FROM devices WHERE location_id=? AND kind=? AND device_id=?",
+                    (loser_id, k, did),
+                )
+                counts["devices_combined"] += 1
+
+        # 3. Alert events tied to the loser get repointed (informational FK).
+        cur = await db.execute(
+            "UPDATE alert_events SET location_id=? WHERE location_id=?",
+            (winner_id, loser_id),
+        )
+        counts["alert_events_moved"] = cur.rowcount or 0
+
+        # 4. Alert rules pinned to the loser keep firing at the winner.
+        cur = await db.execute(
+            "UPDATE alert_rules SET location_id=? WHERE location_id=?",
+            (winner_id, loser_id),
+        )
+        counts["alert_rules_repointed"] = cur.rowcount or 0
+
+        # 5. Update winner aggregates: expand radius to engulf the loser if
+        # the loser's full circle wasn't already inside, and roll up totals.
+        dist = _haversine_m(w_lat, w_lon, l_lat, l_lon)
+        new_radius = max(w_radius, dist + l_radius)
+        new_fix_count = (w_fix_count or 0) + (l_fix_count or 0)
+        new_last_seen = max(w_last_seen or "", l_last_seen or "") or w_last_seen
+        await db.execute(
+            "UPDATE sensor_locations "
+            "SET radius_m=?, fix_count=?, last_seen_at=? WHERE id=?",
+            (new_radius, new_fix_count, new_last_seen, winner_id),
+        )
+        counts["winner_radius_after"] = new_radius
+
+        # 6. Drop the loser row (CASCADE on devices is moot now — they're gone).
+        await db.execute("DELETE FROM sensor_locations WHERE id=?", (loser_id,))
+        await db.commit()
+
+    return counts
+
+
+async def auto_merge_contained(*, max_iterations: int = 1000) -> dict:
+    """Iteratively merge every location whose centroid sits inside another
+    location's radius. Re-evaluates after each merge so transitive chains
+    (A inside B inside C) collapse cleanly into the outermost survivor."""
+    merged: list[dict] = []
+    for _ in range(max_iterations):
+        pairs = await find_contained_locations()
+        if not pairs:
+            break
+        p = pairs[0]
+        merged.append(await merge_locations(p["loser_id"], p["winner_id"]))
+    return {
+        "merged": len(merged),
+        "details": merged,
+        "loser_ids": [m["loser_id"] for m in merged],
+    }
 
 
 async def delete_all_locations() -> dict:

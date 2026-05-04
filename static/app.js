@@ -441,6 +441,50 @@ $("#loc-new").addEventListener("click", async () => {
   catch (e) { alert(e.message); }
 });
 
+$("#loc-merge").addEventListener("click", async () => {
+  const btn = $("#loc-merge");
+  const orig = btn.textContent;
+  btn.disabled = true; btn.textContent = "Checking…";
+  try {
+    const preview = await api("/api/locations/contained");
+    const pairs = preview.pairs || [];
+    if (pairs.length === 0) {
+      alert("No contained locations found — nothing to merge.");
+      return;
+    }
+    const summary = pairs.slice(0, 10)
+      .map(p => `  • #${p.loser_id} (r=${p.loser_radius}m) inside #${p.winner_id} (r=${p.winner_radius}m, ${p.distance_m.toFixed(1)}m apart)`)
+      .join("\n");
+    const more = pairs.length > 10 ? `\n  …and ${pairs.length - 10} more` : "";
+    if (!confirm(
+      `Found ${pairs.length} containment pair(s). Merging will combine each loser's ` +
+      `devices and observations into its container, expand the container's radius if ` +
+      `needed, and delete the loser. Chains (A inside B inside C) collapse to the outermost.\n\n` +
+      `${summary}${more}\n\nProceed?`
+    )) return;
+    btn.textContent = "Merging…";
+    const r = await api("/api/locations/merge_contained", { method: "POST" });
+    const totals = (r.details || []).reduce((acc, d) => ({
+      devices_moved: acc.devices_moved + (d.devices_moved || 0),
+      devices_combined: acc.devices_combined + (d.devices_combined || 0),
+      observations_moved: acc.observations_moved + (d.observations_moved || 0),
+    }), { devices_moved: 0, devices_combined: 0, observations_moved: 0 });
+    alert(
+      `Merged ${r.merged} location(s).\n\n` +
+      `Devices reattributed: ${totals.devices_moved}\n` +
+      `Devices combined (collisions): ${totals.devices_combined}\n` +
+      `Observations moved: ${totals.observations_moved}`
+    );
+    await refreshLocations();
+    await refreshLocationMarkers();
+    await loadLocationOptions();
+  } catch (e) {
+    alert("Merge failed: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+});
+
 $("#loc-report").addEventListener("click", async () => {
   const btn = $("#loc-report");
   const orig = btn.textContent;

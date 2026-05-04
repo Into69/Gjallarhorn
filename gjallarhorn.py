@@ -400,6 +400,31 @@ async def api_delete_location(loc_id: int):
     return {"ok": True, "deleted": counts}
 
 
+@app.get("/api/locations/contained")
+async def api_locations_contained_preview():
+    """List the (loser, winner) pairs that auto_merge_contained would merge.
+    Pure preview — no mutation."""
+    return {"pairs": await db.find_contained_locations()}
+
+
+@app.post("/api/locations/merge_contained")
+async def api_merge_contained_locations():
+    """Merge every location whose centroid is inside another location's
+    radius into its container. Iterative — chains collapse to the
+    outermost survivor. The active-location pointer follows the merge."""
+    result = await db.auto_merge_contained()
+    if location_manager.active_id in result.get("loser_ids", []):
+        # The active loc was merged away — clear so the next GPS fix
+        # snaps onto whichever surviving location now contains it.
+        location_manager._active_id = None  # type: ignore[attr-defined]
+        location_manager._active_lat = None  # type: ignore[attr-defined]
+        location_manager._active_lon = None  # type: ignore[attr-defined]
+    if result["merged"]:
+        log.info("Merged %d contained locations: %s",
+                 result["merged"], result["loser_ids"])
+    return {"ok": True, **result}
+
+
 @app.get("/api/tilecache/status")
 async def api_tilecache_status():
     from services.map_cache import cache_status
