@@ -174,6 +174,30 @@ async def api_add_whitelist(payload: dict):
     return {"id": entry_id}
 
 
+@app.patch("/api/whitelist/{entry_id}")
+async def api_update_whitelist(entry_id: int, payload: dict):
+    """Edit an existing whitelist row in place. Body shape matches POST:
+    {kind, device_id, note?}. 409 if (kind, device_id) collides with a
+    different existing entry."""
+    kind = payload.get("kind")
+    if kind not in ALLOWED_KINDS or kind is None:
+        raise HTTPException(400, "kind must be wifi, bluetooth, or wifi_client")
+    device_id = (payload.get("device_id") or "").strip()
+    if not device_id:
+        raise HTTPException(400, "device_id required")
+    note = payload.get("note")
+    if note is not None:
+        note = str(note).strip() or None
+    try:
+        ok = await db.update_whitelist(entry_id, kind, device_id, note)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    if not ok:
+        raise HTTPException(404, "entry not found")
+    await alert_service.reload()
+    return {"ok": True}
+
+
 @app.delete("/api/whitelist/{entry_id}")
 async def api_delete_whitelist(entry_id: int):
     ok = await db.delete_whitelist(entry_id)

@@ -1742,24 +1742,98 @@ async function refreshWhitelist() {
     _whitelistCache = r.entries || [];
     isWhitelisted = buildWhitelistMatcher(_whitelistCache);
     tbody.innerHTML = "";
-    for (const e of _whitelistCache) {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td>${escapeHtml(e.kind)}</td>
-        <td class="mono">${escapeHtml(e.device_id)}</td>
-        <td>${escapeHtml(e.note || "")}</td>
-        <td class="mono">${formatTime(e.created_at)}</td>
-        <td><button type="button" class="icon-btn danger wl-delete" data-id="${e.id}" title="Remove from whitelist" aria-label="Remove">×</button></td>
-      `;
-      tbody.appendChild(tr);
-    }
-    $$(".wl-delete").forEach(b => b.addEventListener("click", async () => {
-      await api(`/api/whitelist/${b.dataset.id}`, { method: "DELETE" });
-      await refreshWhitelist();
-    }));
+    for (const e of _whitelistCache) tbody.appendChild(_makeWhitelistRow(e));
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="5" class="muted">error: ${escapeHtml(e.message)}</td></tr>`;
   }
+}
+
+function _makeWhitelistRow(e) {
+  const tr = document.createElement("tr");
+  tr.dataset.id = e.id;
+  tr.dataset.kind = e.kind;
+  tr.dataset.deviceId = e.device_id || "";
+  tr.dataset.note = e.note || "";
+  tr.dataset.createdAt = e.created_at || "";
+  tr.title = "Double-click to edit";
+  tr.innerHTML = `
+    <td>${escapeHtml(e.kind)}</td>
+    <td class="mono">${escapeHtml(e.device_id)}</td>
+    <td>${escapeHtml(e.note || "")}</td>
+    <td class="mono">${formatTime(e.created_at)}</td>
+    <td><button type="button" class="icon-btn danger wl-delete" data-id="${e.id}" title="Remove from whitelist" aria-label="Remove">×</button></td>
+  `;
+  tr.querySelector(".wl-delete").addEventListener("click", async (ev) => {
+    ev.stopPropagation();
+    if (!confirm(`Remove ${e.kind} ${e.device_id} from the whitelist?`)) return;
+    await api(`/api/whitelist/${e.id}`, { method: "DELETE" });
+    await refreshWhitelist();
+    await refreshDevices();
+  });
+  tr.addEventListener("dblclick", (ev) => {
+    if (tr.classList.contains("editing")) return;
+    if (ev.target.closest(".icon-btn")) return;  // don't trigger from buttons
+    _enterWhitelistEdit(tr);
+  });
+  return tr;
+}
+
+function _enterWhitelistEdit(tr) {
+  tr.classList.add("editing");
+  const { id, kind, deviceId, note, createdAt } = tr.dataset;
+  const opt = (k) => `<option value="${k}"${k === kind ? " selected" : ""}>${k}</option>`;
+  tr.innerHTML = `
+    <td>
+      <select class="wl-edit-kind">
+        ${opt("wifi")}${opt("bluetooth")}${opt("wifi_client")}
+      </select>
+    </td>
+    <td><input type="text" class="wl-edit-device-id mono" value="${escapeAttr(deviceId)}" /></td>
+    <td><input type="text" class="wl-edit-note" value="${escapeAttr(note)}" placeholder="note" /></td>
+    <td class="mono">${escapeHtml(formatTime(createdAt))}</td>
+    <td class="row-actions">
+      <button type="button" class="icon-btn wl-save" title="Save (Enter)" aria-label="Save">✓</button>
+      <button type="button" class="icon-btn wl-cancel" title="Cancel (Esc)" aria-label="Cancel">✗</button>
+    </td>
+  `;
+  const idInput = tr.querySelector(".wl-edit-device-id");
+  idInput.focus();
+  idInput.select();
+  tr.querySelectorAll("select, input").forEach(el => {
+    el.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); _saveWhitelistEdit(tr); }
+      else if (ev.key === "Escape") { ev.preventDefault(); refreshWhitelist(); }
+    });
+  });
+  tr.querySelector(".wl-save").addEventListener("click", () => _saveWhitelistEdit(tr));
+  tr.querySelector(".wl-cancel").addEventListener("click", () => refreshWhitelist());
+}
+
+async function _saveWhitelistEdit(tr) {
+  const id = tr.dataset.id;
+  const payload = {
+    kind: tr.querySelector(".wl-edit-kind").value,
+    device_id: tr.querySelector(".wl-edit-device-id").value.trim(),
+    note: tr.querySelector(".wl-edit-note").value.trim() || null,
+  };
+  if (!payload.device_id) {
+    alert("device id is required");
+    tr.querySelector(".wl-edit-device-id")?.focus();
+    return;
+  }
+  try {
+    await api(`/api/whitelist/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    alert("Save failed: " + e.message);
+    return;
+  }
+  await refreshWhitelist();
+  // The matcher may have changed — re-render the Devices tab so the
+  // ★/☆ stars and the row-dimming match the new whitelist.
+  await refreshDevices();
 }
 
 $("#wl-form")?.addEventListener("submit", async (ev) => {

@@ -736,6 +736,22 @@ select option:disabled { color: var(--muted); }
 .wl-form #wl-form-status { grid-column: 1 / -1; }
 #wl-table { font-size: 12px; }
 #wl-table .mono { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
+#wl-table tr { cursor: default; }
+#wl-table tr:hover td { background: rgba(92, 209, 255, 0.05); }
+#wl-table tr.editing td { background: rgba(92, 209, 255, 0.08); }
+#wl-table tr.editing input,
+#wl-table tr.editing select {
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 12px;
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+}
+#wl-table tr.editing input.mono { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
+.icon-btn.wl-save { color: var(--ok); border-color: #2e5a35; }
+.icon-btn.wl-save:hover { background: rgba(121, 224, 140, 0.1); }
 
 /* Compound rule extras inside the rule form. */
 .rule-extras {

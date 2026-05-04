@@ -930,6 +930,33 @@ async def add_whitelist(kind: str, device_id: str, note: str | None = None) -> i
     return int(row[0]) if row else 0
 
 
+async def update_whitelist(entry_id: int, kind: str, device_id: str,
+                           note: str | None) -> bool:
+    """Update an existing whitelist row by id. Returns False if no row has
+    that id; raises ValueError if the new (kind, device_id) collides with
+    a different entry's UNIQUE constraint."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM device_whitelist WHERE id=?", (entry_id,)
+        ) as cur:
+            if await cur.fetchone() is None:
+                return False
+        async with db.execute(
+            "SELECT id FROM device_whitelist WHERE kind=? AND device_id=? AND id <> ?",
+            (kind, device_id.lower(), entry_id),
+        ) as cur:
+            if await cur.fetchone() is not None:
+                raise ValueError(
+                    f"another whitelist entry already has {kind}/{device_id}"
+                )
+        await db.execute(
+            "UPDATE device_whitelist SET kind=?, device_id=?, note=? WHERE id=?",
+            (kind, device_id.lower(), note, entry_id),
+        )
+        await db.commit()
+        return True
+
+
 async def delete_whitelist(entry_id: int) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute("DELETE FROM device_whitelist WHERE id=?", (entry_id,))
