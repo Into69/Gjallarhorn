@@ -485,12 +485,15 @@ async def api_tilecache_clear():
 
 
 @app.get("/api/locations/report.pdf")
-async def api_locations_report():
-    """Generate a downloadable PDF summary of all sensor locations."""
+async def api_locations_report(group_bssids: bool = True):
+    """Generate a downloadable PDF summary of all sensor locations.
+    `group_bssids` mirrors the Devices tab's "Group multi-BSSID APs"
+    checkbox — when true, wifi BSSIDs sharing the same first 5 octets
+    are folded into a single row per physical AP."""
     from fastapi.responses import Response
     from services.report import build_report_pdf
 
-    pdf = await build_report_pdf()
+    pdf = await build_report_pdf(group_bssids=group_bssids)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return Response(
         content=pdf,

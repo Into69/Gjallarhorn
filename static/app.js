@@ -536,7 +536,10 @@ $("#loc-report").addEventListener("click", async () => {
   const orig = btn.textContent;
   btn.disabled = true; btn.textContent = "Generating…";
   try {
-    const res = await fetch("/api/locations/report.pdf", { method: "GET" });
+    // Mirror the Devices tab's "Group multi-BSSID APs" checkbox so the PDF
+    // device tables match what the user sees on the Devices tab.
+    const groupBssids = $("#dev-group-bssid")?.checked ? 1 : 0;
+    const res = await fetch(`/api/locations/report.pdf?group_bssids=${groupBssids}`, { method: "GET" });
     if (!res.ok) {
       const t = await res.text();
       throw new Error(t || `HTTP ${res.status}`);

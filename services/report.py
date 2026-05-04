@@ -119,16 +119,127 @@ def _cell(text: Any, *, mono: bool = False) -> Paragraph:
 
 def _device_row(d: dict) -> tuple:
     det = d.get("details") or {}
-    name = det.get("ssid") or det.get("name") or ""
+    merged_count = d.get("_merged_count") or 1
+    # When this row represents several merged BSSIDs (same physical AP,
+    # different bands/SSIDs), join the SSIDs so the report shows what the
+    # AP advertises on each radio.
+    merged_ssids = d.get("_merged_ssids") or []
+    if merged_count > 1 and merged_ssids:
+        name = ", ".join(merged_ssids)
+    else:
+        name = det.get("ssid") or det.get("name") or ""
     vendor = det.get("vendor") or ""
+    device_id = d.get("device_id", "")
+    if merged_count > 1:
+        device_id = f"{device_id} (+{merged_count - 1})"
     return (
         d.get("kind", ""),
-        _cell(d.get("device_id", ""), mono=True),
+        _cell(device_id, mono=True),
         _cell(name),
         _cell(vendor),
         f"{d.get('best_rssi', '')} dBm",
         str(d.get("seen_count", "")),
     )
+
+
+def _group_wifi_by_ap_prefix(devices: list[dict]) -> list[dict]:
+    """Mirror of the JS groupWifiByApPrefix used on the Devices tab. Aggregates
+    wifi BSSIDs that share the same first 5 octets (same physical AP advertising
+    on multiple bands/SSIDs) into a single row. Non-wifi rows pass through.
+    Adds _merged_count, _members, _merged_ssids, _merged_vendors fields."""
+    groups: dict[str, dict] = {}
+    out: list[dict] = []
+    for d in devices:
+        kind = d.get("kind")
+        device_id = d.get("device_id") or ""
+        if kind != "wifi" or len(device_id) < 17:
+            out.append(d)
+            continue
+        prefix = device_id[:14].lower()  # "aa:bb:cc:dd:ee"
+        g = groups.get(prefix)
+        if g is None:
+            g = {
+                **d,
+                "details": dict(d.get("details") or {}),
+                "_members": [device_id],
+                "_merged_count": 1,
+                "_merged_ssids": [],
+                "_merged_vendors": [],
+            }
+            det0 = d.get("details") or {}
+            if det0.get("ssid"):
+                g["_merged_ssids"].append(det0["ssid"])
+            if det0.get("vendor"):
+                g["_merged_vendors"].append(det0["vendor"])
+            groups[prefix] = g
+            out.append(g)
+            continue
+        g["_members"].append(device_id)
+        g["_merged_count"] += 1
+        g["seen_count"] = (g.get("seen_count") or 0) + (d.get("seen_count") or 0)
+        if d.get("best_rssi") is not None and (
+            g.get("best_rssi") is None or d["best_rssi"] > g["best_rssi"]
+        ):
+            g["best_rssi"] = d["best_rssi"]
+        if d.get("last_seen") and (not g.get("last_seen") or d["last_seen"] > g["last_seen"]):
+            g["last_seen"] = d["last_seen"]
+            g["last_rssi"] = d.get("last_rssi")
+        if d.get("first_seen") and (not g.get("first_seen") or d["first_seen"] < g["first_seen"]):
+            g["first_seen"] = d["first_seen"]
+        if device_id < g["device_id"]:
+            g["device_id"] = device_id
+        det = d.get("details") or {}
+        if det.get("ssid") and det["ssid"] not in g["_merged_ssids"]:
+            g["_merged_ssids"].append(det["ssid"])
+        if det.get("vendor") and det["vendor"] not in g["_merged_vendors"]:
+            g["_merged_vendors"].append(det["vendor"])
+        if not g["details"].get("vendor") and det.get("vendor"):
+            g["details"]["vendor"] = det["vendor"]
+    return out
+
+
+def _group_common_by_ap_prefix(common: list[dict]) -> list[dict]:
+    """Same prefix grouping for the common-devices list. Locations sets and
+    cross-location counts are unioned/summed so the table reflects the
+    physical AP rather than its individual BSSIDs."""
+    groups: dict[str, dict] = {}
+    out: list[dict] = []
+    for d in common:
+        kind = d.get("kind")
+        device_id = d.get("device_id") or ""
+        if kind != "wifi" or len(device_id) < 17:
+            out.append(d)
+            continue
+        prefix = device_id[:14].lower()
+        g = groups.get(prefix)
+        if g is None:
+            g = {
+                **d,
+                "details": dict(d.get("details") or {}),
+                "locations": list(d.get("locations") or []),
+                "_members": [device_id],
+                "_merged_count": 1,
+            }
+            groups[prefix] = g
+            out.append(g)
+            continue
+        g["_members"].append(device_id)
+        g["_merged_count"] += 1
+        merged_locs = set(g.get("locations") or [])
+        for L in d.get("locations") or []:
+            merged_locs.add(L)
+        g["locations"] = sorted(merged_locs)
+        g["n_locations"] = len(g["locations"])
+        g["total_seen"] = (g.get("total_seen") or 0) + (d.get("total_seen") or 0)
+        if d.get("max_rssi") is not None and (
+            g.get("max_rssi") is None or d["max_rssi"] > g["max_rssi"]
+        ):
+            g["max_rssi"] = d["max_rssi"]
+        if device_id < g["device_id"]:
+            g["device_id"] = device_id
+    # n_locations may shift after merging, so re-sort by coverage then volume.
+    out.sort(key=lambda d: (-(d.get("n_locations") or 0), -(d.get("total_seen") or 0)))
+    return out
 
 
 def _table(headers: list[str], rows: list[tuple], col_widths: list[float] | None = None) -> Table:
@@ -172,7 +283,7 @@ def _whitelist_matcher(entries: list[dict]):
     return match
 
 
-async def build_report_pdf() -> bytes:
+async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
     locations = await db.list_locations()
     locations = sorted(locations, key=lambda l: l["id"])
     common = await db.list_common_devices(min_locations=2, limit=_MAX_COMMON_DEVICES)
@@ -187,18 +298,25 @@ async def build_report_pdf() -> bytes:
     per_loc_devices: dict[int, list[dict]] = {}
     for loc in locations:
         devs = await db.devices_at_location(loc["id"])
-        per_loc_devices[loc["id"]] = [
+        kept = [
             d for d in devs if not is_wl(d.get("kind", ""), d.get("device_id", ""))
         ]
+        # Mirror the Devices tab's "Group multi-BSSID APs" checkbox when
+        # asked. Grouping happens AFTER whitelist filtering so a whitelisted
+        # member doesn't pull its physical AP off the list.
+        if group_bssids:
+            kept = _group_wifi_by_ap_prefix(kept)
+        per_loc_devices[loc["id"]] = kept
         # Recompute the per-location counts so the comparison table reflects
-        # the post-whitelist totals (the SQL aggregate from list_locations
-        # was unaware of the whitelist).
-        kept = per_loc_devices[loc["id"]]
+        # the post-whitelist (and post-grouping, when enabled) totals — the
+        # SQL aggregate from list_locations is unaware of either.
         loc["wifi_count"] = sum(1 for d in kept if d.get("kind") == "wifi")
         loc["bt_count"] = sum(1 for d in kept if d.get("kind") == "bluetooth")
         loc["total_observations"] = sum(int(d.get("seen_count") or 0) for d in kept)
 
     common = [c for c in common if not is_wl(c.get("kind", ""), c.get("device_id", ""))]
+    if group_bssids:
+        common = _group_common_by_ap_prefix(common)
 
     s = _styles()
     flow: list[Any] = []
@@ -272,12 +390,16 @@ async def build_report_pdf() -> bytes:
         top_rows = []
         for i, d in enumerate(common[:10], start=1):
             det = d.get("details") or {}
+            merged_count = d.get("_merged_count") or 1
             name = det.get("ssid") or det.get("name") or ""
             vendor = det.get("vendor") or ""
+            device_id = d.get("device_id", "")
+            if merged_count > 1:
+                device_id = f"{device_id} (+{merged_count - 1})"
             top_rows.append((
                 str(i),
                 d.get("kind", ""),
-                _cell(d.get("device_id", ""), mono=True),
+                _cell(device_id, mono=True),
                 _cell(name),
                 _cell(vendor),
                 str(d.get("n_locations", "")),
@@ -304,12 +426,16 @@ async def build_report_pdf() -> bytes:
         rows = []
         for d in common:
             det = d.get("details") or {}
+            merged_count = d.get("_merged_count") or 1
             name = det.get("ssid") or det.get("name") or ""
             vendor = det.get("vendor") or ""
             locs = ", ".join(str(x) for x in (d.get("locations") or []))
+            device_id = d.get("device_id", "")
+            if merged_count > 1:
+                device_id = f"{device_id} (+{merged_count - 1})"
             rows.append((
                 d.get("kind", ""),
-                _cell(d.get("device_id", ""), mono=True),
+                _cell(device_id, mono=True),
                 _cell(name),
                 _cell(vendor),
                 str(d.get("n_locations", "")),
