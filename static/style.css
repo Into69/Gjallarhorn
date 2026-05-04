@@ -439,6 +439,34 @@ main { height: calc(100vh - 53px); }
 .toolbar label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
 .toolbar input[type="search"] { min-width: 220px; }
 
+/* Pin the Devices/Locations tab toolbars to the top of the scroll area so
+   filters stay reachable when the table is long. The negative horizontal
+   margin lets the sticky bar bleed to the tab's padding edges (cleaner
+   look while scrolling). The sticky <th> below is pushed down by the
+   toolbar height so the column headers don't slide under it. */
+#tab-devices > .toolbar,
+#tab-locations > .toolbar {
+  position: sticky;
+  top: -12px;          /* cancels the .tab's 12px top padding so it pins flush */
+  z-index: 10;
+  background: var(--bg);
+  margin: -12px -12px 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+#tab-devices table thead th,
+#tab-locations table thead th {
+  top: 56px;
+}
+@media (max-width: 768px) {
+  /* Toolbar wraps to multiple rows on narrow viewports; bump the th offset
+     so the column headers still clear the (now taller) sticky toolbar. */
+  #tab-devices table thead th,
+  #tab-locations table thead th {
+    top: 110px;
+  }
+}
+
 table { width: 100%; border-collapse: collapse; background: var(--panel); }
 th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left;
   font-size: 12px; vertical-align: top; }
