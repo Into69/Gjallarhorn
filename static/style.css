@@ -832,6 +832,20 @@ select option:disabled { color: var(--muted); }
   font-size: 10px;
   color: var(--accent);
 }
+/* Cross-MAC linkage badge for BLE rows whose advertising-data fingerprint
+   matches one or more other rows. Distinct color so it doesn't read as a
+   multi-BSSID grouping (which uses the accent color). */
+.link-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  background: rgba(184, 163, 255, 0.08);
+  border: 1px solid #4a3f6a;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #b8a3ff;
+  cursor: help;
+}
 
 /* ── Logs tab ────────────────────────────────────────── */
 .log-list {

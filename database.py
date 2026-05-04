@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from datetime import datetime
@@ -26,7 +27,7 @@ CREATE TABLE IF NOT EXISTS sensor_locations (
 
 CREATE TABLE IF NOT EXISTS devices (
     location_id INTEGER NOT NULL,
-    kind TEXT NOT NULL,                -- 'wifi' | 'bluetooth'
+    kind TEXT NOT NULL,                -- 'wifi' | 'bluetooth' | 'wifi_client'
     device_id TEXT NOT NULL,           -- BSSID or BT MAC
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
@@ -34,9 +35,11 @@ CREATE TABLE IF NOT EXISTS devices (
     last_rssi INTEGER NOT NULL,
     seen_count INTEGER NOT NULL DEFAULT 1,
     details_json TEXT NOT NULL,
+    signature TEXT,                    -- BLE: stable adv-data fingerprint for cross-MAC linking; NULL otherwise
     PRIMARY KEY (location_id, kind, device_id),
     FOREIGN KEY (location_id) REFERENCES sensor_locations(id) ON DELETE CASCADE
 );
+CREATE INDEX IF NOT EXISTS idx_devices_signature ON devices(signature);
 
 CREATE TABLE IF NOT EXISTS observations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,6 +159,90 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE sensor_locations ADD COLUMN source TEXT NOT NULL DEFAULT 'auto'"
         )
+
+    # BLE-signature column for cross-MAC linking. Backfill from existing
+    # rows on first migration so devices captured before this lands also
+    # get fingerprinted.
+    async with db.execute("PRAGMA table_info(devices)") as cur:
+        dev_cols = {row[1] for row in await cur.fetchall()}
+    if "signature" not in dev_cols:
+        await db.execute("ALTER TABLE devices ADD COLUMN signature TEXT")
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_devices_signature ON devices(signature)"
+        )
+        async with db.execute(
+            "SELECT location_id, kind, device_id, details_json FROM devices "
+            "WHERE kind='bluetooth'"
+        ) as cur:
+            rows = await cur.fetchall()
+        for loc_id, kind, did, raw in rows:
+            try:
+                d = json.loads(raw or "{}")
+            except (TypeError, ValueError):
+                continue
+            sig = compute_ble_signature(kind, d)
+            if sig:
+                await db.execute(
+                    "UPDATE devices SET signature=? "
+                    "WHERE location_id=? AND kind=? AND device_id=?",
+                    (sig, loc_id, kind, did),
+                )
+
+
+def compute_ble_signature(kind: str, details: dict) -> Optional[str]:
+    """Stable identity hash for a BLE device, derived from durable bits of
+    its advertising data. Used to link rotating private MAC addresses back
+    to a single physical device (we don't have the device's IRK, so this
+    is heuristic — but the durable parts of the adv payload survive MAC
+    rotation for the vast majority of non-Apple BLE devices).
+
+    Returns None for: non-BLE rows; public-address BLE (already stable);
+    or BLE with too little fingerprintable data (single-source matches
+    are too noisy to be useful)."""
+    if kind != "bluetooth":
+        return None
+    if not isinstance(details, dict):
+        return None
+    # Public addresses don't rotate — no fingerprint needed.
+    if details.get("address_type") == "public":
+        return None
+
+    parts: list[str] = []
+
+    # Service UUIDs are usually stable across rotations — sort for hash stability.
+    svc_uuids = details.get("service_uuids") or []
+    if isinstance(svc_uuids, list) and svc_uuids:
+        parts.append("svc:" + ",".join(sorted(str(u).lower() for u in svc_uuids)))
+
+    # Manufacturer-data: the company-id KEYS are stable; values often rotate
+    # (Apple Continuity counters, etc.), so we hash only the keys.
+    mfg_data = details.get("manufacturer_data") or {}
+    if isinstance(mfg_data, dict) and mfg_data:
+        parts.append("mfg:" + ",".join(sorted(str(k) for k in mfg_data.keys())))
+
+    # Service-data UUID keys are stable; values can rotate.
+    svc_data = details.get("service_data") or {}
+    if isinstance(svc_data, dict) and svc_data:
+        parts.append("svd:" + ",".join(sorted(str(k).lower() for k in svc_data.keys())))
+
+    # Appearance — 16-bit GAP code, stable per device class (e.g. 833 = HID
+    # mouse). Useful as a tiebreaker, not strong on its own.
+    appearance = details.get("appearance")
+    if appearance is not None:
+        parts.append(f"app:{appearance}")
+
+    # Name — only when reasonably specific.
+    name = (details.get("name") or "").strip()
+    if name and len(name) >= 3:
+        parts.append(f"nm:{name}")
+
+    # Need at least 2 distinct fingerprint sources to avoid false-positive
+    # clustering. A bare "mfg:0x004C" (Apple) by itself would lump every
+    # Apple device on the planet into one signature.
+    if len(parts) < 2:
+        return None
+
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
 async def get_setting(key: str) -> Optional[str]:
@@ -624,6 +711,7 @@ async def upsert_device(
     """Upsert a device row. Returns True if a new row was inserted, False if updated."""
     now = datetime.utcnow().isoformat()
     payload = json.dumps(details, default=str)
+    signature = compute_ble_signature(kind, details)
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT best_rssi, seen_count FROM devices WHERE location_id=? AND kind=? AND device_id=?",
@@ -633,17 +721,18 @@ async def upsert_device(
         if row is None:
             await db.execute(
                 "INSERT INTO devices(location_id,kind,device_id,first_seen,last_seen,"
-                "best_rssi,last_rssi,seen_count,details_json) VALUES(?,?,?,?,?,?,?,1,?)",
-                (location_id, kind, device_id, now, now, rssi, rssi, payload),
+                "best_rssi,last_rssi,seen_count,details_json,signature) "
+                "VALUES(?,?,?,?,?,?,?,1,?,?)",
+                (location_id, kind, device_id, now, now, rssi, rssi, payload, signature),
             )
             await db.commit()
             return True
         best = max(row[0], rssi)  # rssi is negative — higher is better
         await db.execute(
             "UPDATE devices SET last_seen=?, best_rssi=?, last_rssi=?, "
-            "seen_count=seen_count+1, details_json=? "
+            "seen_count=seen_count+1, details_json=?, signature=? "
             "WHERE location_id=? AND kind=? AND device_id=?",
-            (now, best, rssi, payload, location_id, kind, device_id),
+            (now, best, rssi, payload, signature, location_id, kind, device_id),
         )
         await db.commit()
         return False
@@ -987,16 +1076,43 @@ async def clear_preserved_devices() -> int:
 
 
 async def devices_at_location(location_id: int, kind: str | None = None) -> list[dict]:
-    sql = "SELECT * FROM devices WHERE location_id=?"
+    # Pull the row, plus a count and id-list of *other* MAC addresses across
+    # all locations whose BLE-signature matches this one — heuristic linkage
+    # for rotating private MACs. Wifi rows have signature NULL so the
+    # subqueries are no-ops for them.
+    sql = """
+      SELECT d.*,
+        COALESCE((
+          SELECT COUNT(DISTINCT d2.device_id)
+          FROM devices d2
+          WHERE d2.signature = d.signature
+            AND d2.signature IS NOT NULL
+            AND d2.device_id <> d.device_id
+        ), 0) AS linked_count,
+        (
+          SELECT GROUP_CONCAT(DISTINCT d2.device_id)
+          FROM devices d2
+          WHERE d2.signature = d.signature
+            AND d2.signature IS NOT NULL
+            AND d2.device_id <> d.device_id
+        ) AS linked_device_ids
+      FROM devices d
+      WHERE d.location_id=?
+    """
     args: tuple = (location_id,)
     if kind:
-        sql += " AND kind=?"
+        sql += " AND d.kind=?"
         args = (location_id, kind)
-    sql += " ORDER BY best_rssi DESC"
+    sql += " ORDER BY d.best_rssi DESC"
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, args) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
     for r in rows:
         r["details"] = json.loads(r.pop("details_json"))
+        # Normalize the comma-separated alias list into an array.
+        ids = r.get("linked_device_ids")
+        r["linked_device_ids"] = (
+            [s for s in ids.split(",") if s] if ids else []
+        )
     return rows

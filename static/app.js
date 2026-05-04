@@ -316,12 +316,35 @@ function renderDeviceRow(d) {
   if (d._merged_count > 1) tr.classList.add("merged-ap");
   const wl = isWhitelisted(d.kind, d.device_id);
   if (wl) tr.classList.add("whitelisted");
+  // BLE link badge: when this row's signature matches one or more other
+  // rows (rotating private MACs sharing a stable adv-data fingerprint),
+  // surface the count beside the device id with the alias list as the
+  // tooltip. The full alias list also lands inside the details JSON.
+  const linkedCount = d.linked_count || 0;
+  const linkedIds = d.linked_device_ids || [];
+  const linkBadge = linkedCount > 0
+    ? ` <span class="link-tag" title="Likely the same physical device as: ${escapeAttr(linkedIds.slice(0, 8).join(", ") + (linkedIds.length > 8 ? `, +${linkedIds.length - 8}` : ""))}">🔗 +${linkedCount}</span>`
+    : "";
   const idCell = d._merged_count > 1
-    ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>`
-    : `<span class="mono">${escapeHtml(d.device_id)}</span>`;
+    ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>${linkBadge}`
+    : `<span class="mono">${escapeHtml(d.device_id)}</span>${linkBadge}`;
   const wlBtn = wl
     ? `<button type="button" class="icon-btn dev-wl active" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelisted — click to remove from whitelist" aria-label="Remove from whitelist">★</button>`
     : `<button type="button" class="icon-btn dev-wl" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelist this device (silences alerts and excludes from reports)" aria-label="Add to whitelist">☆</button>`;
+
+  // Build the JSON shown in the expandable details cell. Promote linked
+  // aliases to a top-level field so they're easy to spot.
+  const detailsPayload = {};
+  if (d._merged_count > 1) detailsPayload.members = d._members;
+  if (linkedCount > 0) {
+    detailsPayload.linked_aliases = linkedIds;
+    if (d.signature) detailsPayload.signature = d.signature;
+  }
+  detailsPayload.details = det;
+  const summaryText = d._merged_count > 1
+    ? "members + JSON"
+    : (linkedCount > 0 ? `linked aliases + JSON` : "JSON");
+
   tr.innerHTML = `
     <td>${escapeHtml(d.kind)}</td>
     <td>${idCell}</td>
@@ -333,7 +356,7 @@ function renderDeviceRow(d) {
     <td class="mono">${formatTime(d.first_seen)}</td>
     <td class="mono">${formatTime(d.last_seen)}</td>
     <td>${wlBtn}</td>
-    <td><details><summary>${d._merged_count > 1 ? "members + JSON" : "JSON"}</summary><pre>${escapeHtml(JSON.stringify(d._merged_count > 1 ? { members: d._members, details: det } : det, null, 2))}</pre></details></td>
+    <td><details><summary>${summaryText}</summary><pre>${escapeHtml(JSON.stringify(detailsPayload, null, 2))}</pre></details></td>
   `;
   // Wire the whitelist button — done here so each row keeps its own
   // event listener bound to the right (kind, id) pair.
