@@ -304,13 +304,16 @@ async function refreshDevices() {
     });
   }
 
-  // Free-text search across MAC, SSID/name, and vendor — case-insensitive.
+  // Free-text search across MAC, SSID/name, vendor, and tracker class —
+  // case-insensitive. Searching "airtag" or "tile" matches classified
+  // trackers.
   const q_search = ($("#dev-search")?.value || "").trim().toLowerCase();
   if (q_search) {
     rows = rows.filter(d => {
       const det = d.details || {};
       const haystack = [
         d.device_id, det.ssid, det.name, det.vendor,
+        d.tracker_type,
         ...(d._merged_ssids || []),
       ].filter(Boolean).join(" ").toLowerCase();
       return haystack.includes(q_search);
@@ -350,6 +353,17 @@ function renderDeviceRow(d) {
   if (d._merged_count > 1) tr.classList.add("merged-ap");
   const wl = isWhitelisted(d.kind, d.device_id);
   if (wl) tr.classList.add("whitelisted");
+  // Known-tracker classification (AirTag, Tile, Samsung SmartTag) — surfaced
+  // as a red-bordered badge so they pop in the device list.
+  const trackerLabel = {
+    airtag: "AirTag/FindMy",
+    tile: "Tile",
+    samsung_smarttag: "Samsung SmartTag",
+  }[d.tracker_type];
+  const trackerBadge = trackerLabel
+    ? ` <span class="tracker-tag" title="Identified by BLE adv-data pattern">${escapeHtml(trackerLabel)}</span>`
+    : "";
+
   // BLE link badge: when this row's signature matches one or more other
   // rows (rotating private MACs sharing a stable adv-data fingerprint),
   // surface the count beside the device id with the alias list as the
@@ -375,8 +389,8 @@ function renderDeviceRow(d) {
     linkBadge = ` <span class="${cls}" title="${escapeAttr(tooltip)}">${text}</span>`;
   }
   const idCell = d._merged_count > 1
-    ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>${linkBadge}`
-    : `<span class="mono">${escapeHtml(d.device_id)}</span>${linkBadge}`;
+    ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>${trackerBadge}${linkBadge}`
+    : `<span class="mono">${escapeHtml(d.device_id)}</span>${trackerBadge}${linkBadge}`;
   const wlBtn = wl
     ? `<button type="button" class="icon-btn dev-wl active" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelisted — click to remove from whitelist" aria-label="Remove from whitelist">★</button>`
     : `<button type="button" class="icon-btn dev-wl" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelist this device (silences alerts and excludes from reports)" aria-label="Add to whitelist">☆</button>`;

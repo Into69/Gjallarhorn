@@ -194,6 +194,62 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     )
 
 
+# Manufacturer IDs for known commercial trackers. Integer values (Bluetooth
+# SIG-assigned company IDs); JSON-serialized manufacturer_data keys come
+# back as strings so we coerce on lookup.
+_MFG_APPLE = 76      # 0x004C
+_MFG_TILE = 1660     # 0x067C
+_MFG_SAMSUNG = 117   # 0x0075
+
+
+def classify_tracker(kind: str, details: dict) -> Optional[str]:
+    """Identify known commercial trackers from BLE advertising data.
+
+    Returns one of: 'airtag' (or third-party FindMy item), 'tile',
+    'samsung_smarttag' — or None if the device doesn't match any of
+    the patterns. Detection is based on protocol-level signals that
+    survive the OUI/vendor lookup (which only tells us the chipset
+    manufacturer)."""
+    if kind != "bluetooth" or not isinstance(details, dict):
+        return None
+
+    svc_uuids = [str(u).lower() for u in (details.get("service_uuids") or [])]
+    mfg = details.get("manufacturer_data") or {}
+    if not isinstance(mfg, dict):
+        mfg = {}
+
+    def _has_mfg(target_id: int) -> Optional[str]:
+        """Return the hex payload for `target_id`, or None."""
+        for k, v in mfg.items():
+            try:
+                if int(k) == target_id:
+                    return v if isinstance(v, str) else None
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    # Tile — service UUID 0xFEED or company ID 0x067C
+    if any(u.startswith("feed") or u.endswith("feed") or "0000feed" in u for u in svc_uuids):
+        return "tile"
+    if _has_mfg(_MFG_TILE) is not None:
+        return "tile"
+
+    # Samsung SmartTag — service UUID 0xFD5A (FindMyMobile)
+    if any("fd5a" in u for u in svc_uuids):
+        return "samsung_smarttag"
+
+    # Apple FindMy / AirTag — manufacturer 0x004C, payload type byte 0x12
+    apple_payload = _has_mfg(_MFG_APPLE)
+    if apple_payload:
+        # Hex string; the first byte is the Continuity message type. 0x12
+        # = "FindMy" (AirTag, AirTag-compatible third-party items, "lost"
+        # AirPods cases broadcasting in offline-finding mode).
+        if apple_payload.lower().startswith("12"):
+            return "airtag"
+
+    return None
+
+
 def compute_ble_signature(kind: str, details: dict) -> Optional[str]:
     """Stable identity hash for a BLE device, derived from durable bits of
     its advertising data. Used to link rotating private MAC addresses back
@@ -1113,7 +1169,14 @@ async def list_preserved_devices(kind: str | None = None) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, args) as cur:
-            return [dict(r) for r in await cur.fetchall()]
+            rows = [dict(r) for r in await cur.fetchall()]
+    for r in rows:
+        try:
+            r["details"] = json.loads(r.pop("details_json"))
+        except (TypeError, ValueError):
+            r["details"] = {}
+        r["tracker_type"] = classify_tracker(r.get("kind", ""), r["details"])
+    return rows
 
 
 async def clear_preserved_devices() -> int:
@@ -1193,6 +1256,7 @@ async def devices_at_location(location_id: int, kind: str | None = None) -> list
 
     for r in rows:
         r["details"] = json.loads(r.pop("details_json"))
+        r["tracker_type"] = classify_tracker(r.get("kind", ""), r["details"])
         sig = r.get("signature")
         siblings = [s for s in siblings_by_sig.get(sig, [])
                     if s["device_id"] != r["device_id"]] if sig else []

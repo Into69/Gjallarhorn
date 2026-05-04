@@ -833,6 +833,21 @@ select option:disabled { color: var(--muted); }
   font-size: 10px;
   color: var(--accent);
 }
+/* Identified commercial trackers — AirTag, Tile, Samsung SmartTag.
+   Red-bordered so they pop against the rest of the device list. */
+.tracker-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  background: rgba(255, 107, 107, 0.10);
+  border: 1px solid #5a2828;
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--err);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+
 /* Cross-MAC linkage badge for BLE rows whose advertising-data fingerprint
    matches one or more other rows. Distinct color so it doesn't read as a
    multi-BSSID grouping (which uses the accent color). */
