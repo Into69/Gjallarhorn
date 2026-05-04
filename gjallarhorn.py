@@ -235,6 +235,29 @@ async def api_probe_status():
     return probe_scanner.status()
 
 
+@app.get("/api/scanners/status")
+async def api_scanners_status():
+    """Wifi + bluetooth scan-loop runtime stats — last scan time, duration,
+    device counts, errors. Surfaced on the map sidebar so users can see at
+    a glance whether the scanners are working."""
+    s = await settings_store.load()
+    out = {
+        "paused": orchestrator.paused if orchestrator else False,
+        "wifi": {
+            **(orchestrator.wifi_stats.status() if orchestrator else {}),
+            "scan_interval_s": s.wifi_scan_interval_s,
+            "configured_iface": s.wifi_interface,
+        },
+        "bluetooth": {
+            **(orchestrator.bt_stats.status() if orchestrator else {}),
+            "scan_interval_s": s.bluetooth_scan_interval_s,
+            "scan_duration_s": s.bluetooth_scan_duration_s,
+            "configured_adapter": s.bluetooth_adapter,
+        },
+    }
+    return out
+
+
 # ---------- Pause / resume ----------
 @app.get("/api/system/pause")
 async def api_pause_status():

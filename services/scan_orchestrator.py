@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from config import settings_store
@@ -17,6 +18,54 @@ import database as db
 log = logging.getLogger(__name__)
 
 
+class ScannerStats:
+    """Per-scanner runtime stats surfaced on the map sidebar. Mirrors the
+    shape of probe_scanner.status() so the same UI patterns apply."""
+    def __init__(self) -> None:
+        self.started_at: float = time.time()
+        self.running: bool = False           # True only while a scan is mid-flight
+        self.last_scan_at: Optional[float] = None
+        self.last_scan_duration_s: Optional[float] = None
+        self.last_scan_devices: int = 0
+        self.total_devices_seen: int = 0     # cumulative since process start
+        self.scan_count: int = 0
+        self.last_error: Optional[str] = None
+        self.interface: Optional[str] = None
+        self.iface_meta: Optional[dict] = None  # SSID/adapter info, optional
+
+    def begin(self, interface: Optional[str] = None) -> None:
+        self.running = True
+        if interface is not None:
+            self.interface = interface
+
+    def end(self, devices: int, *, duration_s: float) -> None:
+        self.running = False
+        self.last_scan_at = time.time()
+        self.last_scan_duration_s = duration_s
+        self.last_scan_devices = devices
+        self.total_devices_seen += devices
+        self.scan_count += 1
+        self.last_error = None
+
+    def fail(self, err: str) -> None:
+        self.running = False
+        self.last_error = err
+
+    def status(self) -> dict:
+        return {
+            "started_at": self.started_at,
+            "running": self.running,
+            "last_scan_at": self.last_scan_at,
+            "last_scan_duration_s": self.last_scan_duration_s,
+            "last_scan_devices": self.last_scan_devices,
+            "total_devices_seen": self.total_devices_seen,
+            "scan_count": self.scan_count,
+            "last_error": self.last_error,
+            "interface": self.interface,
+            "iface_meta": self.iface_meta,
+        }
+
+
 class ScanOrchestrator:
     """Runs the GPS poll, location clustering, and periodic wifi/bt scans."""
 
@@ -30,6 +79,8 @@ class ScanOrchestrator:
         # clustering doesn't open new locations. Not persisted: a fresh
         # process always starts unpaused.
         self._paused: bool = False
+        self.wifi_stats = ScannerStats()
+        self.bt_stats = ScannerStats()
 
     @property
     def paused(self) -> bool:
@@ -94,10 +145,18 @@ class ScanOrchestrator:
                 # as "none" — silently skip the scan this tick.
                 if iface == "auto":
                     iface = await pick_wifi_interface()
+                self.wifi_stats.interface = iface
                 loc_id = location_manager.active_id
                 if not self._paused and iface and loc_id is not None:
-                    devs = await scan_wifi(iface)
+                    self.wifi_stats.begin(iface)
+                    t0 = time.time()
+                    try:
+                        devs = await scan_wifi(iface)
+                    except Exception:
+                        self.wifi_stats.fail("scan_wifi raised")
+                        raise
                     fix = self.gps.fix
+                    kept = 0
                     for d in devs:
                         if d.rssi < s.min_rssi:
                             continue
@@ -115,8 +174,11 @@ class ScanOrchestrator:
                             device_kind="wifi", device_id=d.bssid, rssi=d.rssi,
                             location_id=loc_id, details=details, is_new=is_new,
                         )
+                        kept += 1
+                    self.wifi_stats.end(kept, duration_s=time.time() - t0)
             except Exception as e:
                 log.exception("wifi loop error: %s", e)
+                self.wifi_stats.fail(f"{type(e).__name__}: {e}")
             if not await self._sleep((await settings_store.load()).wifi_scan_interval_s):
                 return
 
@@ -124,10 +186,18 @@ class ScanOrchestrator:
         while not self._stop.is_set():
             try:
                 s = await settings_store.load()
+                self.bt_stats.interface = s.bluetooth_adapter or None
                 loc_id = location_manager.active_id
                 if not self._paused and loc_id is not None:
-                    devs = await scan_bluetooth(s.bluetooth_adapter, s.bluetooth_scan_duration_s)
+                    self.bt_stats.begin(s.bluetooth_adapter or None)
+                    t0 = time.time()
+                    try:
+                        devs = await scan_bluetooth(s.bluetooth_adapter, s.bluetooth_scan_duration_s)
+                    except Exception:
+                        self.bt_stats.fail("scan_bluetooth raised")
+                        raise
                     fix = self.gps.fix
+                    kept = 0
                     for d in devs:
                         if d.rssi < s.min_rssi:
                             continue
@@ -147,8 +217,11 @@ class ScanOrchestrator:
                             device_kind="bluetooth", device_id=d.address, rssi=d.rssi,
                             location_id=loc_id, details=details, is_new=is_new,
                         )
+                        kept += 1
+                    self.bt_stats.end(kept, duration_s=time.time() - t0)
             except Exception as e:
                 log.exception("bt loop error: %s", e)
+                self.bt_stats.fail(f"{type(e).__name__}: {e}")
             if not await self._sleep((await settings_store.load()).bluetooth_scan_interval_s):
                 return
 

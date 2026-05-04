@@ -1140,15 +1140,115 @@ function tickProbeRelativeTimes() {
   const s = _probeLastStatus;
   const lastEl = $("#probe-map-last");
   const upEl = $("#probe-map-uptime");
-  if (!lastEl || !upEl) return;
-  if (!s) {
-    lastEl.textContent = "—";
-    upEl.textContent = "—";
+  if (lastEl && upEl) {
+    if (!s) {
+      lastEl.textContent = "—";
+      upEl.textContent = "—";
+    } else {
+      const now = Date.now() / 1000;
+      lastEl.textContent = s.last_probe_at ? formatProbeAgo(now - s.last_probe_at) : "never";
+      upEl.textContent = (s.started_at && s.running) ? formatProbeDuration(now - s.started_at) : "—";
+    }
+  }
+  // Same per-second tick reuses last fetched scanner stats so "Last scan"
+  // ages without waiting for the next 3-second poll.
+  tickScannerRelativeTimes();
+}
+
+let _scannersLastStatus = null;
+
+async function refreshScannerStatus() {
+  let s;
+  try {
+    s = await api("/api/scanners/status");
+  } catch (e) {
     return;
   }
+  _scannersLastStatus = s;
+  updateScannerCard("wifi", s.wifi || {}, s.paused);
+  updateScannerCard("bt", s.bluetooth || {}, s.paused);
+  tickScannerRelativeTimes();
+}
+
+function updateScannerCard(prefix, stats, paused) {
+  const id = (suffix) => `#${prefix}-map-${suffix}`;
+  const stateEl = $(id("state"));
+  if (!stateEl) return;
+
+  if (stats.running) {
+    stateEl.className = "probe-state-pill running";
+    stateEl.textContent = "scanning";
+  } else if (paused) {
+    stateEl.className = "probe-state-pill stopped";
+    stateEl.textContent = "paused";
+  } else if (stats.last_error) {
+    stateEl.className = "probe-state-pill error";
+    stateEl.textContent = "error";
+  } else if (stats.scan_count) {
+    stateEl.className = "probe-state-pill stopped";
+    stateEl.textContent = "idle";
+  } else {
+    stateEl.className = "probe-state-pill stopped";
+    stateEl.textContent = "waiting";
+  }
+
+  const metaEl = $(id("meta"));
+  if (metaEl) {
+    const parts = [];
+    if (stats.interface) parts.push(stats.interface);
+    else if (stats.configured_iface) parts.push(`${stats.configured_iface} (configured)`);
+    else if (stats.configured_adapter) parts.push(`${stats.configured_adapter} (configured)`);
+    else parts.push(prefix === "wifi" ? "no interface configured" : "default adapter");
+    if (stats.scan_duration_s) parts.push(`scans ${stats.scan_duration_s}s`);
+    metaEl.textContent = parts.join(" · ");
+  }
+
+  const errEl = $(id("error"));
+  if (errEl) {
+    if (stats.last_error && !stats.running) {
+      errEl.hidden = false;
+      errEl.textContent = stats.last_error;
+    } else {
+      errEl.hidden = true;
+    }
+  }
+
+  const lastCountEl = $(id("last-count"));
+  if (lastCountEl) lastCountEl.textContent = (stats.last_scan_devices ?? "—").toString();
+
+  const totalEl = $(id("total"));
+  if (totalEl) totalEl.textContent = (stats.total_devices_seen ?? 0).toLocaleString();
+
+  const durEl = $(id("duration"));
+  if (durEl) {
+    durEl.textContent = stats.last_scan_duration_s != null
+      ? `${stats.last_scan_duration_s.toFixed(1)}s`
+      : "—";
+  }
+
+  const intvEl = $(id("interval"));
+  if (intvEl) intvEl.textContent = stats.scan_interval_s ? `${stats.scan_interval_s}s` : "—";
+}
+
+function tickScannerRelativeTimes() {
+  const s = _scannersLastStatus;
+  if (!s) return;
   const now = Date.now() / 1000;
-  lastEl.textContent = s.last_probe_at ? formatProbeAgo(now - s.last_probe_at) : "never";
-  upEl.textContent = (s.started_at && s.running) ? formatProbeDuration(now - s.started_at) : "—";
+  for (const [prefix, stats] of [["wifi", s.wifi], ["bt", s.bluetooth]]) {
+    if (!stats) continue;
+    const lastEl = $(`#${prefix}-map-last`);
+    const upEl = $(`#${prefix}-map-uptime`);
+    if (lastEl) {
+      lastEl.textContent = stats.last_scan_at
+        ? formatProbeAgo(now - stats.last_scan_at)
+        : "never";
+    }
+    if (upEl) {
+      upEl.textContent = stats.started_at
+        ? `up ${formatProbeDuration(now - stats.started_at)}`
+        : "—";
+    }
+  }
 }
 
 function formatProbeAgo(seconds) {
@@ -2704,6 +2804,8 @@ function formatTime(iso) {
   refreshTileCache();
   refreshProbeStatus();
   setInterval(refreshProbeStatus, 3000);
+  refreshScannerStatus();
+  setInterval(refreshScannerStatus, 3000);
   setInterval(tickProbeRelativeTimes, 1000);
   refreshPauseStatus();
   setInterval(refreshPauseStatus, 15000);
