@@ -291,6 +291,23 @@ main { height: calc(100vh - 53px); }
   background: rgba(121, 224, 140, 0.1);
   border: 1px solid #2e5a35;
 }
+.gj-tip-badge.drawn {
+  color: var(--accent);
+  background: rgba(92, 209, 255, 0.1);
+  border: 1px solid #1f4458;
+  margin-right: 4px;
+}
+
+/* Crosshair cursor + active button highlight while in draw mode. */
+#map.drawing,
+#map.drawing .leaflet-grab,
+#map.drawing .leaflet-interactive { cursor: crosshair !important; }
+.map-controls #map-draw.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: linear-gradient(180deg, #1a2a35 0%, #15252e 100%);
+  box-shadow: 0 4px 14px rgba(92, 209, 255, 0.18), 0 4px 14px rgba(0, 0, 0, 0.5);
+}
 
 .gj-tip-coords {
   color: var(--muted);

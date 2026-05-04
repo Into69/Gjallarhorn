@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS sensor_locations (
     created_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
     label TEXT,
-    fix_count INTEGER NOT NULL DEFAULT 0
+    fix_count INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'auto'   -- 'auto' (clustered) | 'manual' (drawn geofence)
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -149,6 +150,13 @@ async def _migrate(db: aiosqlite.Connection) -> None:
             "ALTER TABLE alert_rules ADD COLUMN extra_conditions TEXT NOT NULL DEFAULT '[]'"
         )
 
+    async with db.execute("PRAGMA table_info(sensor_locations)") as cur:
+        loc_cols = {row[1] for row in await cur.fetchall()}
+    if "source" not in loc_cols:
+        await db.execute(
+            "ALTER TABLE sensor_locations ADD COLUMN source TEXT NOT NULL DEFAULT 'auto'"
+        )
+
 
 async def get_setting(key: str) -> Optional[str]:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -167,13 +175,17 @@ async def set_setting(key: str, value: str) -> None:
         await db.commit()
 
 
-async def create_location(lat: float, lon: float, radius_m: float, label: str | None) -> int:
+async def create_location(lat: float, lon: float, radius_m: float, label: str | None,
+                          source: str = "auto") -> int:
     now = datetime.utcnow().isoformat()
+    # Manual (drawn) locations start with fix_count=0; they're geofences,
+    # not auto-clusters that always have at least the opening fix.
+    fix_count = 0 if source == "manual" else 1
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "INSERT INTO sensor_locations(lat,lon,radius_m,created_at,last_seen_at,label,fix_count) "
-            "VALUES(?,?,?,?,?,?,1)",
-            (lat, lon, radius_m, now, now, label),
+            "INSERT INTO sensor_locations(lat,lon,radius_m,created_at,last_seen_at,"
+            "label,fix_count,source) VALUES(?,?,?,?,?,?,?,?)",
+            (lat, lon, radius_m, now, now, label, fix_count, source),
         )
         await db.commit()
         return cur.lastrowid
@@ -195,7 +207,7 @@ async def list_location_centroids() -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, lat, lon, radius_m FROM sensor_locations"
+            "SELECT id, lat, lon, radius_m, source FROM sensor_locations"
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
@@ -328,12 +340,14 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 async def find_contained_locations() -> list[dict]:
     """Return every (loser, winner) pair where the loser's centroid sits
     inside the winner's radius — the same containment rule LocationManager
-    uses to attribute new fixes. Pairs are sorted so the smallest loser
-    inside the largest winner is merged first; that keeps tiny clusters
-    from "winning" against the bubble that contains them."""
+    uses to attribute new fixes. Manual (drawn) locations are never losers:
+    drawn geofences are user-authoritative and always survive. Pairs are
+    sorted so the smallest loser inside the largest winner is merged first."""
     locs = await list_locations()
     pairs: list[dict] = []
     for a in locs:
+        if a.get("source") == "manual":
+            continue  # manual locations never get merged away
         for b in locs:
             if a["id"] == b["id"]:
                 continue
@@ -347,8 +361,14 @@ async def find_contained_locations() -> list[dict]:
                     "winner_radius": b["radius_m"],
                     "loser_fix_count": a.get("fix_count", 0),
                     "winner_fix_count": b.get("fix_count", 0),
+                    "loser_source": a.get("source", "auto"),
+                    "winner_source": b.get("source", "auto"),
                 })
     pairs.sort(key=lambda p: (
+        # Prefer pairs whose winner is a drawn geofence — that way a manual
+        # circle absorbs everything inside it before two auto-clusters try
+        # to merge with each other.
+        0 if p["winner_source"] == "manual" else 1,
         p["loser_radius"],            # smallest loser first
         -p["winner_radius"],          # largest winner first
         -p["winner_fix_count"],       # most-trafficked winner
@@ -380,7 +400,7 @@ async def merge_locations(loser_id: int, winner_id: int) -> dict:
     async with aiosqlite.connect(DB_PATH) as db:
         # Sanity: both rows must exist, otherwise return a no-op shape.
         async with db.execute(
-            "SELECT id, lat, lon, radius_m, fix_count, last_seen_at "
+            "SELECT id, lat, lon, radius_m, fix_count, last_seen_at, source "
             "FROM sensor_locations WHERE id IN (?,?)",
             (loser_id, winner_id),
         ) as cur:
@@ -389,9 +409,15 @@ async def merge_locations(loser_id: int, winner_id: int) -> dict:
             counts["noop"] = True
             return counts
 
-        l_id, l_lat, l_lon, l_radius, l_fix_count, l_last_seen = rows[loser_id]
-        w_id, w_lat, w_lon, w_radius, w_fix_count, w_last_seen = rows[winner_id]
+        l_id, l_lat, l_lon, l_radius, l_fix_count, l_last_seen, l_source = rows[loser_id]
+        w_id, w_lat, w_lon, w_radius, w_fix_count, w_last_seen, w_source = rows[winner_id]
         counts["winner_radius_before"] = w_radius
+        # A manual location must never be a loser — protect against being
+        # called directly with the wrong direction.
+        if l_source == "manual":
+            counts["noop"] = True
+            counts["error"] = "manual locations cannot be merged away"
+            return counts
 
         # 1. Observations have no unique constraint — single UPDATE moves them.
         cur = await db.execute(
@@ -458,10 +484,14 @@ async def merge_locations(loser_id: int, winner_id: int) -> dict:
         )
         counts["alert_rules_repointed"] = cur.rowcount or 0
 
-        # 5. Update winner aggregates: expand radius to engulf the loser if
-        # the loser's full circle wasn't already inside, and roll up totals.
-        dist = _haversine_m(w_lat, w_lon, l_lat, l_lon)
-        new_radius = max(w_radius, dist + l_radius)
+        # 5. Update winner aggregates. For auto winners, expand radius to
+        # engulf the loser if it wasn't already inside. Manual winners keep
+        # the user-drawn radius — the geofence size is intentional.
+        if w_source == "manual":
+            new_radius = w_radius
+        else:
+            dist = _haversine_m(w_lat, w_lon, l_lat, l_lon)
+            new_radius = max(w_radius, dist + l_radius)
         new_fix_count = (w_fix_count or 0) + (l_fix_count or 0)
         new_last_seen = max(w_last_seen or "", l_last_seen or "") or w_last_seen
         await db.execute(
@@ -470,6 +500,7 @@ async def merge_locations(loser_id: int, winner_id: int) -> dict:
             (new_radius, new_fix_count, new_last_seen, winner_id),
         )
         counts["winner_radius_after"] = new_radius
+        counts["winner_source"] = w_source
 
         # 6. Drop the loser row (CASCADE on devices is moot now — they're gone).
         await db.execute("DELETE FROM sensor_locations WHERE id=?", (loser_id,))

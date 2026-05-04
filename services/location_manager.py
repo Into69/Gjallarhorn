@@ -88,13 +88,21 @@ class LocationManager:
         return await self._open_new_location(fix.lat, fix.lon, radius, label_template)
 
     async def _find_containing_location(self, lat: float, lon: float) -> Optional[dict]:
-        best: Optional[dict] = None
-        best_d: float = float("inf")
+        """Pick the location whose radius the fix falls inside. When several
+        match, a drawn (manual) geofence is preferred over auto-clusters —
+        user-drawn intent wins. Within the same source class, the nearest
+        centroid wins."""
+        matches: list[tuple[float, dict]] = []
         for loc in await db.list_location_centroids():
             d = haversine_m(loc["lat"], loc["lon"], lat, lon)
-            if d <= loc["radius_m"] and d < best_d:
-                best, best_d = loc, d
-        return best
+            if d <= loc["radius_m"]:
+                matches.append((d, loc))
+        if not matches:
+            return None
+        manual = [m for m in matches if m[1].get("source") == "manual"]
+        pool = manual if manual else matches
+        pool.sort(key=lambda x: x[0])
+        return pool[0][1]
 
     async def _open_new_location(
         self, lat: float, lon: float, threshold_m: float, label_template: str

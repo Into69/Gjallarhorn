@@ -172,12 +172,13 @@ async function pollGps() {
 function locationTooltipHtml(loc, isActive) {
   const label = escapeHtml(loc.label || `Location ${loc.id}`);
   const activeBadge = isActive ? `<span class="gj-tip-badge active">ACTIVE</span>` : "";
+  const drawnBadge = loc.source === "manual" ? `<span class="gj-tip-badge drawn">DRAWN</span>` : "";
   return `
     <div class="gj-tip-card">
       <div class="gj-tip-header">
         <span class="gj-tip-id">#${loc.id}</span>
         <span class="gj-tip-label">${label}</span>
-        ${activeBadge}
+        ${drawnBadge}${activeBadge}
       </div>
       <div class="gj-tip-coords">${loc.lat.toFixed(5)}, ${loc.lon.toFixed(5)}</div>
       <div class="gj-tip-stats">
@@ -208,11 +209,16 @@ async function refreshLocationMarkers() {
     locationMarkers.clear();
     for (const loc of locations) {
       const isActive = loc.id === active_id;
+      const isManual = loc.source === "manual";
+      // Drawn geofences are styled distinctly (dashed accent stroke) so a
+      // glance at the map tells you which circles you placed yourself vs.
+      // which ones the auto-clusterer made.
       const c = L.circle([loc.lat, loc.lon], {
         radius: loc.radius_m,
-        color: isActive ? "#79e08c" : "#ffb86b",
-        weight: 1.5,
-        fillOpacity: isActive ? 0.12 : 0.06,
+        color: isActive ? "#79e08c" : (isManual ? "#5cd1ff" : "#ffb86b"),
+        weight: isManual ? 2 : 1.5,
+        dashArray: isManual ? "6,4" : null,
+        fillOpacity: isActive ? 0.12 : (isManual ? 0.05 : 0.06),
       }).bindTooltip(locationTooltipHtml(loc, isActive), {
         className: "gj-tip",
         direction: "top",
@@ -419,6 +425,8 @@ const ICON_CROSSHAIR = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hid
 const ICON_NAV = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M14 2 L2 7 L7 9 L9 14 Z" fill="currentColor" fill-opacity="0.4"/></svg>`;
 // Auto-zoom — four corner brackets ("fit to view").
 const ICON_FIT = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.5V2.5h3"/><path d="M14 5.5V2.5h-3"/><path d="M2 10.5v3h3"/><path d="M14 10.5v3h-3"/></svg>`;
+// Dashed circle = "draw a geofence". Reads as a marquee / selection ring.
+const ICON_DRAW = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6" stroke-dasharray="2,2"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg>`;
 
 async function refreshLocations() {
   const { locations, active_id } = await api("/api/locations");
@@ -2037,6 +2045,7 @@ function setupMapToggleIcons() {
   inject("#map-track-sensor-icon", ICON_CROSSHAIR);
   inject("#map-smart-track-icon",  ICON_NAV);
   inject("#map-autozoom-icon",     ICON_FIT);
+  inject("#map-draw-icon",         ICON_DRAW);
   renderMapToggles();
 }
 
@@ -2053,6 +2062,133 @@ function bindMapToggle(btnId, key) {
 bindMapToggle("#map-track-sensor", "trackSensor");
 bindMapToggle("#map-smart-track",  "smartTrack");
 bindMapToggle("#map-autozoom",     "autoZoom");
+
+// ── draw geofence ───────────────────────────────────
+// Click the button → enter draw mode (cursor crosshair, dragging disabled).
+// Click+drag on the map: center placed on mousedown, radius grows with the
+// haversine to the current pointer position. Mouseup finalizes and prompts
+// for a label. ESC cancels. The temp circle is removed on exit; the real
+// one re-renders via refreshLocationMarkers after the POST succeeds.
+let drawState = null;  // { centerLatLng, tempCircle } when active
+
+function exitDrawMode({ commit = false } = {}) {
+  if (!drawState) return null;
+  const { tempCircle, centerLatLng, mouseHandlers } = drawState;
+  if (mouseHandlers) {
+    map.off("mousedown", mouseHandlers.down);
+    map.off("mousemove", mouseHandlers.move);
+    map.off("mouseup",   mouseHandlers.up);
+  }
+  if (tempCircle) {
+    if (commit) {
+      // Caller pulls radius before we remove the circle.
+    } else {
+      map.removeLayer(tempCircle);
+    }
+  }
+  map.dragging.enable();
+  map.getContainer().classList.remove("drawing");
+  $("#map-draw")?.classList.remove("active");
+  drawState = null;
+  return { tempCircle, centerLatLng };
+}
+
+async function finalizeDraw(centerLatLng, tempCircle) {
+  const radius = tempCircle.getRadius();
+  if (radius < 1) {
+    map.removeLayer(tempCircle);
+    return;
+  }
+  const defaultLabel = `Geofence @ ${centerLatLng.lat.toFixed(4)},${centerLatLng.lng.toFixed(4)}`;
+  const label = prompt(
+    `Geofence radius: ${Math.round(radius)} m\n\nLabel for this drawn location:`,
+    defaultLabel,
+  );
+  // Always remove the temp; the real one comes back via refreshLocationMarkers
+  // (or stays gone if the user cancelled).
+  map.removeLayer(tempCircle);
+  if (label === null) return;  // cancelled
+  try {
+    await api("/api/locations/draw", {
+      method: "POST",
+      body: JSON.stringify({
+        lat: centerLatLng.lat,
+        lon: centerLatLng.lng,
+        radius_m: Math.round(radius * 10) / 10,
+        label: label.trim() || null,
+      }),
+    });
+    await refreshLocationMarkers();
+    await loadLocationOptions();
+  } catch (e) {
+    alert("Could not save geofence: " + e.message);
+  }
+}
+
+function startDrawMode() {
+  if (drawState) return;
+  map.dragging.disable();
+  map.getContainer().classList.add("drawing");
+  $("#map-draw")?.classList.add("active");
+
+  let center = null;
+  let temp = null;
+
+  const handlers = {
+    down: (e) => {
+      // Start a fresh drag. If the user clicks once and then again
+      // somewhere else without moving the mouse, treat the second click as
+      // a new center too.
+      center = e.latlng;
+      if (temp) map.removeLayer(temp);
+      temp = L.circle(center, {
+        radius: 0,
+        color: "#5cd1ff",
+        weight: 2,
+        dashArray: "6,4",
+        fillOpacity: 0.05,
+      }).addTo(map);
+      drawState.centerLatLng = center;
+      drawState.tempCircle = temp;
+    },
+    move: (e) => {
+      if (!center || !temp) return;
+      const r = center.distanceTo(e.latlng);  // metres, leaflet's haversine
+      temp.setRadius(r);
+    },
+    up: async (e) => {
+      if (!center || !temp) return;
+      // Use the final pointer position rather than the last mousemove —
+      // accounts for the case where the user lifts the button without
+      // moving (radius would be 0 → handled in finalizeDraw).
+      const r = center.distanceTo(e.latlng);
+      temp.setRadius(r);
+      // Snapshot before exiting (which would otherwise drop refs).
+      const c = drawState.centerLatLng;
+      const t = drawState.tempCircle;
+      exitDrawMode({ commit: true });
+      await finalizeDraw(c, t);
+    },
+  };
+
+  drawState = { centerLatLng: null, tempCircle: null, mouseHandlers: handlers };
+  map.on("mousedown", handlers.down);
+  map.on("mousemove", handlers.move);
+  map.on("mouseup",   handlers.up);
+}
+
+$("#map-draw")?.addEventListener("click", () => {
+  if (drawState) {
+    // Cancelling — discard any in-progress draw.
+    exitDrawMode({ commit: false });
+  } else {
+    startDrawMode();
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && drawState) exitDrawMode({ commit: false });
+});
 
 function applyMapView(latlng) {
   // Called every GPS poll (and on toggle clicks). All branches are no-ops

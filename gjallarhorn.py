@@ -412,6 +412,41 @@ async def api_delete_location(loc_id: int):
     return {"ok": True, "deleted": counts}
 
 
+@app.post("/api/locations/draw")
+async def api_draw_location(payload: dict):
+    """Create a user-drawn geofence (source='manual'). Body:
+    {lat, lon, radius_m, label?}. Manual locations are protected from
+    being merged away and keep their drawn radius even when other
+    locations get folded into them."""
+    raw_lat, raw_lon, raw_r = payload.get("lat"), payload.get("lon"), payload.get("radius_m")
+    if raw_lat is None or raw_lon is None or raw_r is None:
+        raise HTTPException(400, "lat, lon, radius_m are required")
+    try:
+        lat = float(raw_lat)
+        lon = float(raw_lon)
+        radius_m = float(raw_r)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "lat, lon, radius_m must all be numbers")
+    if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+        raise HTTPException(400, "lat/lon out of range")
+    if not (1 <= radius_m <= 100000):
+        raise HTTPException(400, "radius_m must be between 1 and 100000")
+    label = (payload.get("label") or "").strip() or None
+    new_id = await db.create_location(
+        lat=lat, lon=lon, radius_m=radius_m, label=label, source="manual",
+    )
+    if label is None:
+        # Fall back to the same template as auto-created locations so the
+        # entry is at least labelled in the table.
+        s = await settings_store.load()
+        await db.update_location_label(
+            new_id, s.location_label_template.format(id=new_id, lat=lat, lon=lon),
+        )
+    log.info("Drew manual geofence id=%s @ %.6f,%.6f r=%.1fm",
+             new_id, lat, lon, radius_m)
+    return {"ok": True, "id": new_id}
+
+
 @app.get("/api/locations/contained")
 async def api_locations_contained_preview():
     """List the (loser, winner) pairs that auto_merge_contained would merge.
