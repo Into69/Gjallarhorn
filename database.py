@@ -215,8 +215,9 @@ async def list_location_centroids() -> list[dict]:
 async def list_locations() -> list[dict]:
     sql = """
         SELECT l.*,
-            COALESCE(SUM(CASE WHEN d.kind = 'wifi'      THEN 1 ELSE 0 END), 0) AS wifi_count,
-            COALESCE(SUM(CASE WHEN d.kind = 'bluetooth' THEN 1 ELSE 0 END), 0) AS bt_count,
+            COALESCE(SUM(CASE WHEN d.kind = 'wifi'        THEN 1 ELSE 0 END), 0) AS wifi_count,
+            COALESCE(SUM(CASE WHEN d.kind = 'bluetooth'   THEN 1 ELSE 0 END), 0) AS bt_count,
+            COALESCE(SUM(CASE WHEN d.kind = 'wifi_client' THEN 1 ELSE 0 END), 0) AS wifi_client_count,
             COALESCE(SUM(d.seen_count), 0) AS total_observations
         FROM sensor_locations l
         LEFT JOIN devices d ON d.location_id = l.id

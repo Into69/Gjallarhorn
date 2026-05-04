@@ -339,8 +339,9 @@ main { height: calc(100vh - 53px); }
   color: var(--fg);
   font-variant-numeric: tabular-nums;
 }
-.gj-tip-stat-value.wifi { color: var(--accent); }
-.gj-tip-stat-value.bt   { color: #b8a3ff; }
+.gj-tip-stat-value.wifi   { color: var(--accent); }
+.gj-tip-stat-value.bt     { color: #b8a3ff; }
+.gj-tip-stat-value.client { color: var(--warn); }
 .gj-tip-unit { font-size: 10px; color: var(--muted); margin-left: 2px; }
 
 /* ── floating alert toast stack on the map ─────────── */

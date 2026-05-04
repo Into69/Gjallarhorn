@@ -191,6 +191,10 @@ function locationTooltipHtml(loc, isActive) {
           <span class="gj-tip-stat-value bt">${loc.bt_count ?? 0}</span>
         </div>
         <div class="gj-tip-stat">
+          <span class="gj-tip-stat-label">WiFi clients</span>
+          <span class="gj-tip-stat-value client">${loc.wifi_client_count ?? 0}</span>
+        </div>
+        <div class="gj-tip-stat">
           <span class="gj-tip-stat-label">Fixes</span>
           <span class="gj-tip-stat-value">${loc.fix_count ?? 0}</span>
         </div>
