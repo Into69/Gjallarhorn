@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS devices (
     PRIMARY KEY (location_id, kind, device_id),
     FOREIGN KEY (location_id) REFERENCES sensor_locations(id) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS idx_devices_signature ON devices(signature);
+-- idx_devices_signature is created in _migrate after the column is
+-- guaranteed to exist (an existing DB upgraded from before this column
+-- would error here on `no such column: signature`).
 
 CREATE TABLE IF NOT EXISTS observations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,9 +169,6 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         dev_cols = {row[1] for row in await cur.fetchall()}
     if "signature" not in dev_cols:
         await db.execute("ALTER TABLE devices ADD COLUMN signature TEXT")
-        await db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_devices_signature ON devices(signature)"
-        )
         async with db.execute(
             "SELECT location_id, kind, device_id, details_json FROM devices "
             "WHERE kind='bluetooth'"
@@ -187,6 +186,12 @@ async def _migrate(db: aiosqlite.Connection) -> None:
                     "WHERE location_id=? AND kind=? AND device_id=?",
                     (sig, loc_id, kind, did),
                 )
+    # Always (re)create the index — IF NOT EXISTS makes it a no-op when
+    # already present. Runs unconditionally so the index exists for both
+    # fresh DBs (column created by SCHEMA) and migrated ones.
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_devices_signature ON devices(signature)"
+    )
 
 
 def compute_ble_signature(kind: str, details: dict) -> Optional[str]:
