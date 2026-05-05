@@ -2059,7 +2059,7 @@ async function refreshWhitelist() {
     tbody.innerHTML = "";
     for (const e of _whitelistCache) tbody.appendChild(_makeWhitelistRow(e));
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="5" class="muted">error: ${escapeHtml(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" class="muted">error: ${escapeHtml(e.message)}</td></tr>`;
   }
 }
 
@@ -2071,11 +2071,33 @@ function _makeWhitelistRow(e) {
   tr.dataset.note = e.note || "";
   tr.dataset.createdAt = e.created_at || "";
   tr.title = "Double-click to edit";
+  // Match summary — "12" for exact, "12 (+3 archived)" when there are
+  // also preserved_devices rows hidden from the main view.
+  const matches = e.match_count || 0;
+  const archived = e.preserved_count || 0;
+  const matchCell = matches === 0 && archived === 0
+    ? `<span class="muted">no match yet</span>`
+    : matches.toString() + (archived ? ` <span class="muted">(+${archived} archived)</span>` : "");
+  const trackerBadge = e.tracker_type
+    ? ` <span class="tracker-tag">${escapeHtml(e.tracker_type)}</span>`
+    : "";
+  // Compose the displayed device id: for OUI prefixes, also show the most
+  // recent matching MAC so the user knows what's actually been hit.
+  const idCell = e.sample_device_id && e.sample_device_id !== e.device_id
+    ? `<span class="mono">${escapeHtml(e.device_id)}</span>${trackerBadge}`
+      + ` <span class="muted">→ ${escapeHtml(e.sample_device_id)}</span>`
+    : `<span class="mono">${escapeHtml(e.device_id)}</span>${trackerBadge}`;
   tr.innerHTML = `
     <td>${escapeHtml(e.kind)}</td>
-    <td class="mono">${escapeHtml(e.device_id)}</td>
+    <td>${idCell}</td>
     <td>${escapeHtml(e.note || "")}</td>
-    <td class="mono">${formatTime(e.created_at)}</td>
+    <td>${matchCell}</td>
+    <td>${e.location_count ?? 0}</td>
+    <td>${escapeHtml(e.vendor || "")}</td>
+    <td>${escapeHtml(e.name || "")}</td>
+    <td>${e.best_rssi != null ? e.best_rssi + " dBm" : ""}</td>
+    <td class="mono">${escapeHtml(formatTime(e.last_seen))}</td>
+    <td class="mono">${escapeHtml(formatTime(e.created_at))}</td>
     <td><button type="button" class="icon-btn danger wl-delete" data-id="${e.id}" title="Remove from whitelist" aria-label="Remove">×</button></td>
   `;
   tr.querySelector(".wl-delete").addEventListener("click", async (ev) => {
@@ -2105,6 +2127,7 @@ function _enterWhitelistEdit(tr) {
     </td>
     <td><input type="text" class="wl-edit-device-id mono" value="${escapeAttr(deviceId)}" /></td>
     <td><input type="text" class="wl-edit-note" value="${escapeAttr(note)}" placeholder="note" /></td>
+    <td colspan="6" class="muted" style="text-align:center;">— editing —</td>
     <td class="mono">${escapeHtml(formatTime(createdAt))}</td>
     <td class="row-actions">
       <button type="button" class="icon-btn wl-save" title="Save (Enter)" aria-label="Save">✓</button>

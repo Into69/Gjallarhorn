@@ -1223,6 +1223,107 @@ async def list_whitelist() -> list[dict]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+async def list_whitelist_with_devices() -> list[dict]:
+    """Whitelist rows enriched with aggregate info about every device they
+    match in the live `devices` and `preserved_devices` tables. The match
+    rule mirrors AlertService.is_whitelisted: device_id == target (exact)
+    OR device_id LIKE target||'%' (OUI / prefix). For each entry we
+    return:
+      - match_count        live devices matched
+      - preserved_count    archived devices matched
+      - location_count     distinct sensor_locations represented
+      - best_rssi          strongest sighting across all matches
+      - last_seen          most recent last_seen across matches
+      - vendor / name      from the most recently-seen matching row
+      - tracker_type       from the most recently-seen matching row
+      - sample_device_id   one representative MAC (useful for prefix entries)
+    """
+    entries = await list_whitelist()
+    if not entries:
+        return entries
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        for e in entries:
+            kind = e["kind"]
+            target = (e["device_id"] or "").lower()
+            if not target:
+                continue
+            like = f"{target}%"
+
+            # Aggregates from live devices
+            async with db.execute(
+                """
+                SELECT COUNT(*) AS n,
+                       COUNT(DISTINCT location_id) AS loc_n,
+                       MAX(best_rssi) AS best_rssi,
+                       MAX(last_seen) AS last_seen
+                FROM devices
+                WHERE kind=? AND (device_id=? OR device_id LIKE ?)
+                """,
+                (kind, target, like),
+            ) as cur:
+                agg = dict(await cur.fetchone() or {})
+            # Most-recent matching row for representative vendor/name
+            async with db.execute(
+                """
+                SELECT device_id, details_json, last_seen
+                FROM devices
+                WHERE kind=? AND (device_id=? OR device_id LIKE ?)
+                ORDER BY last_seen DESC LIMIT 1
+                """,
+                (kind, target, like),
+            ) as cur:
+                latest = await cur.fetchone()
+            # Preserved-table count (whitelist entries archived from
+            # deleted locations).
+            async with db.execute(
+                """
+                SELECT COUNT(*) AS n,
+                       MAX(last_seen) AS last_seen,
+                       MAX(best_rssi) AS best_rssi
+                FROM preserved_devices
+                WHERE kind=? AND (device_id=? OR device_id LIKE ?)
+                """,
+                (kind, target, like),
+            ) as cur:
+                pres = dict(await cur.fetchone() or {})
+            # Fall back to a preserved_devices latest row if no live match.
+            if latest is None:
+                async with db.execute(
+                    """
+                    SELECT device_id, details_json, last_seen
+                    FROM preserved_devices
+                    WHERE kind=? AND (device_id=? OR device_id LIKE ?)
+                    ORDER BY last_seen DESC LIMIT 1
+                    """,
+                    (kind, target, like),
+                ) as cur:
+                    latest = await cur.fetchone()
+
+            details = {}
+            if latest is not None:
+                try:
+                    details = json.loads(latest["details_json"] or "{}")
+                except (TypeError, ValueError):
+                    details = {}
+
+            e["match_count"] = int(agg.get("n") or 0)
+            e["preserved_count"] = int(pres.get("n") or 0)
+            e["location_count"] = int(agg.get("loc_n") or 0)
+            # Pick the strongest RSSI across both tables (max of two MAXes).
+            best = [r for r in (agg.get("best_rssi"), pres.get("best_rssi"))
+                    if r is not None]
+            e["best_rssi"] = max(best) if best else None
+            last_seens = [r for r in (agg.get("last_seen"), pres.get("last_seen"))
+                          if r]
+            e["last_seen"] = max(last_seens) if last_seens else None
+            e["vendor"] = details.get("vendor") or None
+            e["name"] = details.get("ssid") or details.get("name") or None
+            e["tracker_type"] = classify_tracker(kind, details)
+            e["sample_device_id"] = latest["device_id"] if latest is not None else None
+    return entries
+
+
 async def add_whitelist(kind: str, device_id: str, note: str | None = None) -> int:
     """Insert a whitelist entry (or update its note if the (kind, device_id)
     pair already exists). Returns the row id."""

@@ -152,7 +152,11 @@ async def api_logs_clear():
 # ---------- Device whitelist ----------
 @app.get("/api/whitelist")
 async def api_list_whitelist():
-    return {"entries": await db.list_whitelist()}
+    """Whitelist entries enriched with aggregate info from matching device
+    rows so the Settings UI can show vendor/name/last-seen/etc. The slim
+    list_whitelist (without the joins) is what alert_service and report
+    use for their hot-path matchers."""
+    return {"entries": await db.list_whitelist_with_devices()}
 
 
 @app.post("/api/whitelist")

@@ -596,7 +596,19 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
         </form>
         <table id="wl-table">
           <thead>
-            <tr><th>Kind</th><th>Device id</th><th>Note</th><th>Added</th><th></th></tr>
+            <tr>
+              <th>Kind</th>
+              <th>Device id</th>
+              <th>Note</th>
+              <th title="Live device rows matched by this whitelist entry (exact id or OUI prefix). +N if rows were archived from deleted locations.">Matches</th>
+              <th title="Distinct sensor locations the matching devices have been observed at.">Locs</th>
+              <th>Vendor</th>
+              <th>Name / SSID</th>
+              <th title="Best signal strength ever recorded across matching rows.">Best RSSI</th>
+              <th>Last seen</th>
+              <th>Added</th>
+              <th></th>
+            </tr>
           </thead>
           <tbody></tbody>
         </table>
