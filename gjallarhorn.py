@@ -611,7 +611,7 @@ async def api_oui_lookup(mac: str):
 # ---------- Alerts ----------
 ALLOWED_MATCH_TYPES = {
     "device_id", "name_contains", "vendor_contains", "rssi_above",
-    "new_device", "cross_location",
+    "new_device", "cross_location", "persistent_companion",
 }
 # Compound (AND) conditions only support the simple value-based types — the
 # stateful ones (new_device, cross_location) only make sense as the primary
