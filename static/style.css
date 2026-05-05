@@ -604,6 +604,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .alert-rule { color: var(--accent); font-weight: 600; }
 .alert-meta { color: var(--muted); font-size: 11px; font-family: ui-monospace, Consolas, monospace; }
+.alert-wl {
+  margin-left: 8px;
+  padding: 2px 6px;
+  font-size: 13px;
+  vertical-align: middle;
+}
+.alert-wl.active { color: var(--accent); border-color: var(--accent); }
+.alert-wl:disabled { opacity: 0.7; cursor: default; }
 .alert-device { font-family: ui-monospace, Consolas, monospace; color: var(--fg); }
 .alert-rssi { color: var(--warn); font-family: ui-monospace, Consolas, monospace; }
 

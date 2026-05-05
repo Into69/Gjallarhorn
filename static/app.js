@@ -1565,6 +1565,14 @@ function renderAlertEvent(e) {
   const label = det.ssid || det.name || "";
   const vendor = det.vendor ? ` · ${escapeHtml(det.vendor)}` : "";
   const where = e.location_id != null ? `loc #${e.location_id}` : "no loc";
+  // Whitelist toggle: alerts only fire on non-whitelisted devices, so the
+  // button typically reads ☆. Once whitelisted (here or on the Devices tab)
+  // we render the active ★ — historical events stay in the feed for
+  // reference but are clearly marked as actioned.
+  const wl = isWhitelisted(e.device_kind, e.device_id);
+  const wlBtn = wl
+    ? `<button type="button" class="icon-btn alert-wl active" disabled title="Whitelisted — future alerts on this device are suppressed" aria-label="Already whitelisted">★</button>`
+    : `<button type="button" class="icon-btn alert-wl" data-kind="${escapeAttr(e.device_kind)}" data-id="${escapeAttr(e.device_id)}" title="Whitelist this device — silences future alerts and excludes it from PDF reports" aria-label="Whitelist device">☆</button>`;
   return `
     <div class="alert-item kind-${escapeHtml(e.device_kind)}">
       <div>
@@ -1578,10 +1586,38 @@ function renderAlertEvent(e) {
         <span class="alert-rssi">${e.rssi != null ? e.rssi + " dBm" : ""}</span>
         · ${escapeHtml(where)}
         · ${formatTime(e.triggered_at)}
+        ${wlBtn}
       </div>
     </div>
   `;
 }
+
+// Single delegated handler — the alert list is re-rendered on filter
+// changes and on every poll, so per-row listeners would churn.
+$("#alerts-list")?.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest(".alert-wl");
+  if (!btn || btn.disabled) return;
+  const kind = btn.dataset.kind;
+  const deviceId = btn.dataset.id;
+  if (!kind || !deviceId) return;
+  if (!confirm(
+    `Whitelist ${kind} ${deviceId}?\n\n` +
+    `This silences all future alerts for this device and excludes it from PDF reports.`
+  )) return;
+  btn.disabled = true;
+  try {
+    await api("/api/whitelist", {
+      method: "POST",
+      body: JSON.stringify({ kind, device_id: deviceId, note: "from alert" }),
+    });
+    await refreshWhitelist();      // updates _whitelistCache + isWhitelisted matcher
+    renderFilteredAlerts();        // re-render so this row's button flips to ★
+    await refreshDevices();        // keep Devices-tab stars in sync
+  } catch (err) {
+    alert("Whitelist failed: " + err.message);
+    btn.disabled = false;
+  }
+});
 
 function setBadge(n) {
   const b = $("#alerts-badge");
