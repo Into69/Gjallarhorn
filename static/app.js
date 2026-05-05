@@ -320,13 +320,38 @@ async function refreshDevices() {
     });
   }
 
+  // Min RSSI: keep rows whose best_rssi is at or above the threshold (RSSI
+  // is negative — "above" = stronger = closer to 0).
+  const minRssiRaw = ($("#dev-min-rssi")?.value || "").trim();
+  const minRssi = minRssiRaw === "" ? null : parseInt(minRssiRaw, 10);
+  if (Number.isFinite(minRssi)) {
+    rows = rows.filter(d => d.best_rssi != null && d.best_rssi >= minRssi);
+  }
+
+  const hideWl = $("#dev-hide-wl")?.checked;
+  if (hideWl) {
+    rows = rows.filter(d => !isWhitelisted(d.kind, d.device_id));
+  }
+
+  const trackersOnly = $("#dev-trackers-only")?.checked;
+  if (trackersOnly) {
+    rows = rows.filter(d => !!d.tracker_type);
+  }
+
+  const linkedOnly = $("#dev-linked-only")?.checked;
+  if (linkedOnly) {
+    rows = rows.filter(d => (d.linked_count || 0) > 0);
+  }
+
   for (const d of rows) {
     tbody.appendChild(renderDeviceRow(d));
   }
   const total = (groupBssid ? groupWifiByApPrefix(devices) : devices).length;
+  const filtersActive = sinceSec > 0 || q_search
+    || Number.isFinite(minRssi) || hideWl || trackersOnly || linkedOnly;
   const countEl = $("#dev-count");
   if (countEl) {
-    countEl.textContent = (sinceSec || q_search)
+    countEl.textContent = filtersActive
       ? `${rows.length} of ${total}`
       : `${total} device${total === 1 ? "" : "s"}`;
   }
@@ -494,14 +519,19 @@ $("#dev-refresh").addEventListener("click", refreshDevices);
 $("#dev-location").addEventListener("change", refreshDevices);
 $("#dev-kind").addEventListener("change", refreshDevices);
 $("#dev-group-bssid").addEventListener("change", refreshDevices);
-// Search and time-range filter are local to the rendered set, so refilter
-// without re-fetching. Debounce the search input to keep typing snappy.
+// Search, RSSI, time-range, and toggle filters are local to the rendered
+// set, so refilter without re-fetching. Debounce text/number inputs.
 let _devSearchTimer = null;
-$("#dev-search")?.addEventListener("input", () => {
+const _devDebounce = () => {
   clearTimeout(_devSearchTimer);
   _devSearchTimer = setTimeout(refreshDevices, 150);
-});
+};
+$("#dev-search")?.addEventListener("input", _devDebounce);
+$("#dev-min-rssi")?.addEventListener("input", _devDebounce);
 $("#dev-since")?.addEventListener("change", refreshDevices);
+$("#dev-hide-wl")?.addEventListener("change", refreshDevices);
+$("#dev-trackers-only")?.addEventListener("change", refreshDevices);
+$("#dev-linked-only")?.addEventListener("change", refreshDevices);
 
 // Quick jump from the Devices tab to the whitelist editor in Settings.
 $("#dev-manage-whitelist")?.addEventListener("click", () => {

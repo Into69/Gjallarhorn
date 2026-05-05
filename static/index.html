@@ -212,9 +212,21 @@
             <option value="2592000">past month</option>
           </select>
         </label>
+        <label title="Show only devices with a best signal at or above this dBm (e.g. -70 = nearby only)">Min RSSI:
+          <input type="number" id="dev-min-rssi" placeholder="any" min="-110" max="-20" />
+        </label>
         <input type="search" id="dev-search" placeholder="search MAC / SSID / name / vendor…" autocomplete="off" />
         <label class="check" title="Merge wifi BSSIDs that share the same first 5 octets — these are typically the same physical AP advertising on multiple bands or SSIDs.">
           <input type="checkbox" id="dev-group-bssid" checked /> Group multi-BSSID APs
+        </label>
+        <label class="check" title="Hide devices already in the whitelist — useful for focusing on unknowns.">
+          <input type="checkbox" id="dev-hide-wl" /> Hide whitelisted
+        </label>
+        <label class="check" title="Show only devices identified as commercial trackers (AirTag, Tile, Samsung SmartTag).">
+          <input type="checkbox" id="dev-trackers-only" /> Trackers only
+        </label>
+        <label class="check" title="Show only BLE devices with rotating-MAC siblings linked by adv-data fingerprint.">
+          <input type="checkbox" id="dev-linked-only" /> Linked only
         </label>
         <button id="dev-refresh">Refresh</button>
         <span id="dev-count" class="muted"></span>

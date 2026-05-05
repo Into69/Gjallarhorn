@@ -438,6 +438,7 @@ main { height: calc(100vh - 53px); }
 .toolbar { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
 .toolbar label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
 .toolbar input[type="search"] { min-width: 220px; }
+.toolbar input[type="number"] { width: 70px; }
 
 /* Pin the Devices/Locations tab toolbars to the top of the scroll area so
    filters stay reachable when the table is long. The negative horizontal
