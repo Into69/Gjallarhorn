@@ -25,8 +25,7 @@ from services.map_cache import render_map as _render_map_png
 
 log = logging.getLogger(__name__)
 
-# How many rows of per-location devices and common-device entries to show.
-_TOP_DEVICES_PER_LOCATION = 12
+# How many follower / cross-location entries to include in the report.
 _MAX_COMMON_DEVICES = 60
 
 
@@ -115,31 +114,6 @@ def _cell(text: Any, *, mono: bool = False) -> Paragraph:
     s = "" if text is None else str(text)
     s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return Paragraph(s, _CELL_MONO_STYLE if mono else _CELL_STYLE)
-
-
-def _device_row(d: dict) -> tuple:
-    det = d.get("details") or {}
-    merged_count = d.get("_merged_count") or 1
-    # When this row represents several merged BSSIDs (same physical AP,
-    # different bands/SSIDs), join the SSIDs so the report shows what the
-    # AP advertises on each radio.
-    merged_ssids = d.get("_merged_ssids") or []
-    if merged_count > 1 and merged_ssids:
-        name = ", ".join(merged_ssids)
-    else:
-        name = det.get("ssid") or det.get("name") or ""
-    vendor = det.get("vendor") or ""
-    device_id = d.get("device_id", "")
-    if merged_count > 1:
-        device_id = f"{device_id} (+{merged_count - 1})"
-    return (
-        d.get("kind", ""),
-        _cell(device_id, mono=True),
-        _cell(name),
-        _cell(vendor),
-        f"{d.get('best_rssi', '')} dBm",
-        str(d.get("seen_count", "")),
-    )
 
 
 def _group_wifi_by_ap_prefix(devices: list[dict]) -> list[dict]:
@@ -469,80 +443,46 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
         s["caption"],
     ))
 
-    # ── Cross-location comparison ──
-    if locations:
-        flow.append(Paragraph("Per-location device counts", s["h1"]))
-        comp_rows = [
-            (
-                str(l["id"]),
-                _cell(l.get("label") or ""),
-                str(l.get("wifi_count") or 0),
-                str(l.get("bt_count") or 0),
-                str(l.get("wifi_client_count") or 0),
-                str(l.get("total_observations") or 0),
-                _fmt_time(l.get("created_at")),
-                _fmt_time(l.get("last_seen_at")),
-            )
-            for l in locations
-        ]
-        flow.append(_table(
-            ["ID", "Label", "Wi-Fi", "BT", "Clients", "Obs.", "Created", "Last seen"],
-            comp_rows,
-            col_widths=[0.40 * inch, 2.05 * inch, 0.55 * inch, 0.50 * inch, 0.65 * inch, 0.65 * inch, 1.25 * inch, 1.25 * inch],
-        ))
-
-    # ── Top 10 by location coverage ──
-    # Headline summary of the devices showing up at the most distinct
-    # sensor locations. `common` is already ordered by n_locations DESC,
-    # so the first 10 are the right set.
-    if common:
-        flow.append(Spacer(1, 14))
-        flow.append(Paragraph("Top 10 devices by location coverage", s["h1"]))
+    # ── Followers ── headline section: devices that have shown up at
+    # multiple sensor locations, ranked by breadth and recency. The
+    # "recent" column counts distinct locations within the last 24 hours,
+    # which uses the same BLE-signature aggregation as the persistent_
+    # companion alert rule — rotating private MACs collapse to one entry.
+    flow.append(Spacer(1, 14))
+    flow.append(Paragraph("Followers", s["h1"]))
+    flow.append(Paragraph(
+        "Devices observed at multiple sensor locations — ordered by total "
+        "location count, then total observations. Higher counts suggest a "
+        "device travelling with the sensor (operator's phone, watch) or "
+        "ubiquitous infrastructure (carrier kit, common IoT). The "
+        "<b>recent locs</b> column re-counts within the last 24 hours and "
+        "treats BLE rotating MACs (devices sharing an adv-data fingerprint) "
+        "as a single physical device, so a tracker that cycles its address "
+        "still shows its true reach.",
+        s["caption"],
+    ))
+    if not common:
         flow.append(Paragraph(
-            "Devices observed at the largest number of distinct sensor locations. "
-            "Strong candidates for &quot;follows the operator&quot; (a phone, a watch) or "
-            "&quot;ubiquitous infrastructure&quot; (carrier hardware, common IoT) depending "
-            "on vendor and kind.",
+            "<i>No devices have been observed at two or more locations yet.</i>",
             s["caption"],
         ))
-        top_rows = []
-        for i, d in enumerate(common[:10], start=1):
-            det = d.get("details") or {}
-            merged_count = d.get("_merged_count") or 1
-            name = det.get("ssid") or det.get("name") or ""
-            vendor = det.get("vendor") or ""
-            device_id = d.get("device_id", "")
-            if merged_count > 1:
-                device_id = f"{device_id} (+{merged_count - 1})"
-            top_rows.append((
-                str(i),
-                d.get("kind", ""),
-                _cell(device_id, mono=True),
-                _cell(name),
-                _cell(vendor),
-                str(d.get("n_locations", "")),
-                f"{d.get('max_rssi', '')} dBm",
-                str(d.get("total_seen", "")),
-            ))
-        flow.append(_table(
-            ["#", "Kind", "Device ID", "Name / SSID", "Vendor", "Locations", "Best RSSI", "Total seen"],
-            top_rows,
-            col_widths=[0.30 * inch, 0.55 * inch, 1.30 * inch, 1.40 * inch, 1.30 * inch, 0.70 * inch, 0.85 * inch, 0.90 * inch],
-        ))
+    else:
+        # Recent (last-24h) location count per row, BLE-signature aware.
+        # 24h matches the default persistent_companion alert window. We do
+        # this for the ranked list (capped to keep the queries small).
+        recent_loc_counts: dict[tuple, int] = {}
+        for d in common[:_MAX_COMMON_DEVICES]:
+            try:
+                recent_loc_counts[(d["kind"], d["device_id"])] = (
+                    await db.count_companion_locations(
+                        d["kind"], d["device_id"], window_hours=24,
+                    )
+                )
+            except Exception:  # pragma: no cover — query is best-effort
+                recent_loc_counts[(d["kind"], d["device_id"])] = 0
 
-    # ── Common devices ──
-    if common:
-        flow.append(PageBreak())
-        flow.append(Paragraph("Common devices (seen at ≥ 2 locations)", s["h1"]))
-        flow.append(Paragraph(
-            "Devices that recurred across multiple sensor locations. Higher "
-            "<b>locs</b> counts suggest mobile devices traveling with the sensor "
-            "(e.g. the operator's own phone) or fixed infrastructure visible from "
-            "multiple sites.",
-            s["caption"],
-        ))
         rows = []
-        for d in common:
+        for i, d in enumerate(common, start=1):
             det = d.get("details") or {}
             merged_count = d.get("_merged_count") or 1
             name = det.get("ssid") or det.get("name") or ""
@@ -551,73 +491,107 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
             device_id = d.get("device_id", "")
             if merged_count > 1:
                 device_id = f"{device_id} (+{merged_count - 1})"
+            recent = recent_loc_counts.get((d["kind"], d["device_id"]), 0)
             rows.append((
+                str(i),
                 d.get("kind", ""),
                 _cell(device_id, mono=True),
                 _cell(name),
                 _cell(vendor),
                 str(d.get("n_locations", "")),
+                str(recent),
                 _cell(locs),
                 f"{d.get('max_rssi', '')} dBm",
                 str(d.get("total_seen", "")),
             ))
         flow.append(_table(
-            ["Kind", "Device ID", "Name / SSID", "Vendor", "#locs", "Locations", "Best RSSI", "Total seen"],
+            ["#", "Kind", "Device ID", "Name / SSID", "Vendor",
+             "Locs", "Recent", "Where", "Best RSSI", "Total seen"],
             rows,
-            col_widths=[0.55 * inch, 1.20 * inch, 1.20 * inch, 1.10 * inch, 0.45 * inch, 1.40 * inch, 0.70 * inch, 0.70 * inch],
+            col_widths=[0.30 * inch, 0.55 * inch, 1.20 * inch, 1.05 * inch,
+                         0.95 * inch, 0.40 * inch, 0.55 * inch, 0.95 * inch,
+                         0.70 * inch, 0.70 * inch],
         ))
 
-    # ── Per-location detail ──
-    for loc in locations:
-        flow.append(PageBreak())
-        title = f"Location #{loc['id']}"
-        if loc.get("label"):
-            title += f" — {loc['label']}"
-        flow.append(Paragraph(title, s["h1"]))
-
-        meta_rows = [
-            ("Coordinates", f"{loc['lat']:.6f}, {loc['lon']:.6f}"),
-            ("Radius", f"{loc.get('radius_m', '—')} m"),
-            ("Fixes", str(loc.get("fix_count", "—"))),
-            ("Wi-Fi APs", str(loc.get("wifi_count") or 0)),
-            ("Bluetooth devices", str(loc.get("bt_count") or 0)),
-            ("Wi-Fi clients (probes)", str(loc.get("wifi_client_count") or 0)),
-            ("Total observations", str(loc.get("total_observations") or 0)),
-            ("Created", _fmt_time(loc.get("created_at"))),
-            ("Last seen", _fmt_time(loc.get("last_seen_at"))),
-        ]
-        meta_table = Table(meta_rows, colWidths=[1.6 * inch, 4.9 * inch])
-        meta_table.setStyle(TableStyle([
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#52607a")),
-            ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ]))
-        flow.append(meta_table)
-        flow.append(Spacer(1, 8))
-
-        # Mini-map centered on this site
-        flow.append(await _render_map_image(
-            [(loc["lat"], loc["lon"], "#ff6b6b")],
-            width_px=820, height_px=440, zoom=16,
-        ))
-
-        # Top devices at this location
-        devs = per_loc_devices.get(loc["id"]) or []
+    # ── Recent alert events ──
+    flow.append(PageBreak())
+    flow.append(Paragraph("Recent alert events", s["h1"]))
+    events = await db.list_alert_events(limit=100)
+    # Drop events for whitelisted devices — the rule fired before the user
+    # whitelisted the device, but they're not actionable history any more.
+    events = [
+        e for e in events
+        if not is_wl(e.get("device_kind", ""), e.get("device_id", ""))
+    ]
+    if not events:
         flow.append(Paragraph(
-            f"Top {min(len(devs), _TOP_DEVICES_PER_LOCATION)} devices by best RSSI",
-            s["h2"],
+            "<i>No alert events recorded.</i>", s["caption"],
         ))
-        if not devs:
-            flow.append(Paragraph("<i>No devices recorded at this location yet.</i>", s["caption"]))
-        else:
-            top = devs[:_TOP_DEVICES_PER_LOCATION]
-            flow.append(_table(
-                ["Kind", "Device ID", "Name / SSID", "Vendor", "Best RSSI", "Seen"],
-                [_device_row(d) for d in top],
-                col_widths=[0.65 * inch, 1.5 * inch, 2.0 * inch, 1.7 * inch, 0.85 * inch, 0.6 * inch],
+    else:
+        flow.append(Paragraph(
+            f"{len(events)} most recent matches across all enabled rules. "
+            "Whitelisted devices' historical alerts are excluded.",
+            s["caption"],
+        ))
+        ev_rows = []
+        for e in events:
+            det = e.get("details") or {}
+            name = det.get("ssid") or det.get("name") or ""
+            ev_rows.append((
+                _cell(e.get("rule_name") or f"rule {e.get('rule_id')}"),
+                e.get("device_kind", ""),
+                _cell(e.get("device_id", ""), mono=True),
+                _cell(name),
+                f"{e['rssi']} dBm" if e.get("rssi") is not None else "",
+                str(e.get("location_id") or "—"),
+                _fmt_time(e.get("triggered_at")),
             ))
+        flow.append(_table(
+            ["Rule", "Kind", "Device ID", "Name / SSID", "RSSI", "Loc", "When"],
+            ev_rows,
+            col_widths=[1.30 * inch, 0.55 * inch, 1.30 * inch, 1.40 * inch,
+                         0.70 * inch, 0.45 * inch, 1.40 * inch],
+        ))
+
+    # ── Active alert rules ──
+    flow.append(Spacer(1, 14))
+    flow.append(Paragraph("Alert rules", s["h1"]))
+    rules = await db.alert_event_counts_per_rule()
+    if not rules:
+        flow.append(Paragraph(
+            "<i>No alert rules configured.</i>", s["caption"],
+        ))
+    else:
+        flow.append(Paragraph(
+            "Configured rules with their lifetime fire counts. Rules that "
+            "haven't fired may be over-specific, scoped to a location the "
+            "sensor hasn't visited, or simply waiting for the right device.",
+            s["caption"],
+        ))
+        rule_rows = []
+        for r in rules:
+            loc = r.get("location_id")
+            loc_label = (
+                "any" if loc is None
+                else "active" if loc == -1
+                else f"#{loc}"
+            )
+            rule_rows.append((
+                "✓" if r.get("enabled") else "—",
+                _cell(r.get("name") or ""),
+                r.get("kind") or "any",
+                r.get("match_type") or "",
+                _cell(r.get("match_value") or "", mono=True),
+                loc_label,
+                str(r.get("fires") or 0),
+                _fmt_time(r.get("last_fired")),
+            ))
+        flow.append(_table(
+            ["On", "Name", "Kind", "Match", "Value", "Loc", "Fires", "Last fired"],
+            rule_rows,
+            col_widths=[0.30 * inch, 1.55 * inch, 0.55 * inch, 1.05 * inch,
+                         1.30 * inch, 0.50 * inch, 0.50 * inch, 1.35 * inch],
+        ))
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(

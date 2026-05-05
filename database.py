@@ -1120,6 +1120,27 @@ async def purge_old_data(
     return counts
 
 
+async def alert_event_counts_per_rule() -> list[dict]:
+    """Per-rule fire counts and last-fired timestamps. Used by the report
+    to show which alert rules are actually doing work."""
+    sql = """
+        SELECT r.id, r.name, r.kind, r.match_type, r.match_value,
+               r.location_id, r.enabled,
+               COALESCE(c.fires, 0) AS fires,
+               c.last_fired
+        FROM alert_rules r
+        LEFT JOIN (
+            SELECT rule_id, COUNT(*) AS fires, MAX(triggered_at) AS last_fired
+            FROM alert_events GROUP BY rule_id
+        ) c ON c.rule_id = r.id
+        ORDER BY fires DESC, r.id ASC
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(sql) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
 async def clear_alert_events() -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT COUNT(*) FROM alert_events") as cur:
