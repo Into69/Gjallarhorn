@@ -29,6 +29,11 @@ nav { display: flex; gap: 4px; flex: 1; }
 .tab-btn.active { color: var(--fg); background: var(--panel-2); border-color: var(--border); }
 
 #status { display: flex; gap: 8px; }
+#clock-status {
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
 .pill {
   background: var(--panel-2); border: 1px solid var(--border);
   padding: 4px 10px; border-radius: 999px; font-size: 12px; color: var(--muted);

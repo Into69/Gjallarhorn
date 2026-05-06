@@ -2944,6 +2944,16 @@ function formatTime(iso) {
   setInterval(refreshProbeStatus, 3000);
   refreshScannerStatus();
   setInterval(refreshScannerStatus, 3000);
+  // Header clock — local time, ticks every second.
+  const tickClock = () => {
+    const el = $("#clock-status");
+    if (!el) return;
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    el.textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+  tickClock();
+  setInterval(tickClock, 1000);
   setInterval(tickProbeRelativeTimes, 1000);
   refreshPauseStatus();
   setInterval(refreshPauseStatus, 15000);
