@@ -335,7 +335,7 @@ async def set_setting(key: str, value: str) -> None:
 
 async def create_location(lat: float, lon: float, radius_m: float, label: str | None,
                           source: str = "auto") -> int:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now().isoformat()
     # Manual (drawn) locations start with fix_count=0; they're geofences,
     # not auto-clusters that always have at least the opening fix.
     fix_count = 0 if source == "manual" else 1
@@ -355,7 +355,7 @@ async def create_location(lat: float, lon: float, radius_m: float, label: str | 
 
 
 async def touch_location(location_id: int) -> None:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE sensor_locations SET last_seen_at=?, fix_count=fix_count+1 WHERE id=?",
@@ -421,7 +421,7 @@ async def _preserve_whitelisted_devices(db, location_ids: list[int]) -> int:
     ) as cur:
         rows = await cur.fetchall()
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now().isoformat()
     preserved = 0
     for loc_id, k, did, first_seen, last_seen, best_rssi, last_rssi, seen, details in rows:
         if not _match_whitelist(wl, k, did):
@@ -787,7 +787,7 @@ async def upsert_device(
     details: dict,
 ) -> bool:
     """Upsert a device row. Returns True if a new row was inserted, False if updated."""
-    now = datetime.utcnow().isoformat()
+    now = datetime.now().isoformat()
     payload = json.dumps(details, default=str)
     signature = compute_ble_signature(kind, details)
     async with aiosqlite.connect(DB_PATH) as db:
@@ -922,7 +922,7 @@ async def insert_observation(
     lon: float | None,
     raw: dict,
 ) -> None:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO observations(location_id,kind,device_id,rssi,lat,lon,seen_at,raw_json) "
@@ -956,7 +956,7 @@ async def create_alert_rule(
     location_id: int | None, notify_discord: bool = False,
     audible: bool = False, extra_conditions: list | None = None,
 ) -> int:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now().isoformat()
     extra_json = json.dumps(extra_conditions or [])
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
@@ -992,7 +992,7 @@ async def insert_alert_event(
     rule_id: int, location_id: int | None, device_kind: str, device_id: str,
     rssi: int | None, details: dict,
 ) -> int:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "INSERT INTO alert_events(rule_id,triggered_at,location_id,device_kind,"
@@ -1056,7 +1056,7 @@ async def count_companion_locations(kind: str, device_id: str,
     Used by the persistent_companion alert rule."""
     if window_hours < 1:
         return 0
-    cutoff = (datetime.utcnow() - timedelta(hours=window_hours)).isoformat()
+    cutoff = (datetime.now() - timedelta(hours=window_hours)).isoformat()
     device_id = (device_id or "").lower()
     async with aiosqlite.connect(DB_PATH) as db:
         # Look up the device's signature (BLE only — wifi rows have NULL).
@@ -1100,13 +1100,13 @@ async def purge_old_data(
         return counts
     async with aiosqlite.connect(DB_PATH) as db:
         if observation_days > 0:
-            cutoff = (datetime.utcnow() - timedelta(days=observation_days)).isoformat()
+            cutoff = (datetime.now() - timedelta(days=observation_days)).isoformat()
             cur = await db.execute(
                 "DELETE FROM observations WHERE seen_at < ?", (cutoff,),
             )
             counts["observations"] = cur.rowcount or 0
         if device_days > 0:
-            cutoff = (datetime.utcnow() - timedelta(days=device_days)).isoformat()
+            cutoff = (datetime.now() - timedelta(days=device_days)).isoformat()
             # Skip whitelist matches — pull whitelist once, build a python
             # filter, run a single delete on the candidates that don't match.
             async with db.execute("SELECT kind, device_id FROM device_whitelist") as cur:
@@ -1394,7 +1394,7 @@ async def list_whitelist_with_devices() -> list[dict]:
 async def add_whitelist(kind: str, device_id: str, note: str | None = None) -> int:
     """Insert a whitelist entry (or update its note if the (kind, device_id)
     pair already exists). Returns the row id."""
-    now = datetime.utcnow().isoformat()
+    now = datetime.now().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO device_whitelist(kind, device_id, note, created_at) "

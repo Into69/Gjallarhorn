@@ -248,7 +248,7 @@ async def _scan_with_nmcli(interface: str) -> list[WifiDevice]:
         log.warning("nmcli returned %s: %s", proc.returncode, err.decode(errors="ignore").strip())
         return []
 
-    now = datetime.utcnow()
+    now = datetime.now()
     devices: list[WifiDevice] = []
     for line in out.decode(errors="ignore").splitlines():
         if not line.strip():
@@ -333,7 +333,7 @@ async def _enrich_with_vendor(devices: list[WifiDevice]) -> list[WifiDevice]:
 
 def _parse_iw_scan(text: str) -> Iterable[WifiDevice]:
     blocks = re.split(r"^BSS\s+", text, flags=re.MULTILINE)[1:]
-    now = datetime.utcnow()
+    now = datetime.now()
     for blk in blocks:
         bssid = blk.split("(", 1)[0].strip().split()[0].lower()
         if not re.match(r"^[0-9a-f:]{17}$", bssid):

@@ -137,7 +137,7 @@ class OUIService:
                 return {"ok": False, "error": "no rows fetched", "per_registry": per_registry}
 
             inserted = await db.replace_oui_entries(rows)
-            self._last_updated = datetime.utcnow()
+            self._last_updated = datetime.now()
             await db.set_setting("oui_last_updated", self._last_updated.isoformat())
             # rebuild cache
             self._loaded = False

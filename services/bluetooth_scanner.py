@@ -61,7 +61,7 @@ async def scan_bluetooth(adapter: Optional[str], duration_s: float = 8.0) -> lis
         return []
 
     found: dict[str, BluetoothDevice] = {}
-    now_factory = datetime.utcnow
+    now_factory = datetime.now
 
     def cb(device, adv):
         try:

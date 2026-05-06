@@ -297,10 +297,11 @@ async function refreshDevices() {
   if (sinceSec > 0) {
     const cutoff = Date.now() - sinceSec * 1000;
     rows = rows.filter(d => {
-      const t = d.last_seen ? new Date(d.last_seen + "Z").getTime() : 0;
-      // Backend stores UTC ISO without tz suffix; appending "Z" forces UTC.
-      // Fallback to raw parse if that fails.
-      return (Number.isFinite(t) && t > 0 ? t : Date.parse(d.last_seen || "")) >= cutoff;
+      // Backend writes naive ISO timestamps in *local* time. Parse them
+      // verbatim — no "Z" suffix, no tz adjustment — so the displayed
+      // window matches the wall clock the user is reading.
+      const t = d.last_seen ? Date.parse(d.last_seen) : 0;
+      return (Number.isFinite(t) && t > 0) ? t >= cutoff : false;
     });
   }
 
@@ -2884,7 +2885,9 @@ function renderRssiSparkline(observations) {
     return `<div class="muted">No observations recorded.</div>`;
   }
   const W = 600, H = 120, PAD = 6;
-  const times = observations.map(o => Date.parse(o.seen_at + "Z") || Date.parse(o.seen_at));
+  // Backend writes naive local-time ISO; parse as-is so the sparkline
+  // axis labels match the wall clock.
+  const times = observations.map(o => Date.parse(o.seen_at));
   const t0 = Math.min(...times), t1 = Math.max(...times);
   const dt = Math.max(1, t1 - t0);
   const RSSI_MIN = -100, RSSI_MAX = -20;  // typical band
