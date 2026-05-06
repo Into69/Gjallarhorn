@@ -726,15 +726,18 @@ select option:disabled { color: var(--muted); }
   cursor: not-allowed;
 }
 
-/* Floating controls overlaid on the map. Sits below the Leaflet zoom
-   buttons so they don't fight for the same pixels. (zoom = 36+36+~4px gap
-   plus a little air = ~88px tall.) */
+/* Floating controls overlaid on the map. Stacked as a single vertical
+   column directly below the Leaflet zoom (which is also a vertical pair),
+   so the entire control set lives in one 36px-wide column on the left
+   edge — same convention as Mapbox/Google. left: 10px matches Leaflet's
+   own offset so zoom and our buttons align. */
 .map-controls {
   position: absolute;
-  top: 88px;
-  left: 12px;
+  top: 92px;          /* clears the zoom (top:10 + 36 + 4 + 36 = 86, +6 air) */
+  left: 10px;
   z-index: 1000;
   display: flex;
+  flex-direction: column;
   gap: 6px;
 }
 .map-controls .icon-btn {
