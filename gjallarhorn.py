@@ -750,8 +750,39 @@ async def api_list_events(limit: int = 100, since_id: Optional[int] = None):
 
 @app.delete("/api/alerts/events")
 async def api_clear_events():
+    """Delete every alert_events row. Side effect: every active latch is
+    cleared too, since a deleted row can't keep its latch alive."""
     n = await db.clear_alert_events()
+    alert_service._latched.clear()  # type: ignore[attr-defined]
     return {"deleted": n}
+
+
+@app.post("/api/alerts/clear")
+async def api_clear_latch(payload: dict):
+    """Clear a single latched (rule, device) pair so future matches fire
+    again. Body: {rule_id, device_id}. Marks every alert_events row for
+    the pair as cleared (history preserved) and removes the in-memory
+    latch."""
+    raw_rule_id = payload.get("rule_id")
+    if raw_rule_id is None:
+        raise HTTPException(400, "rule_id required")
+    try:
+        rule_id = int(raw_rule_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "rule_id must be an integer")
+    device_id = (payload.get("device_id") or "").strip()
+    if not device_id:
+        raise HTTPException(400, "device_id required")
+    n = await alert_service.unlatch(rule_id, device_id)
+    return {"ok": True, "cleared": n}
+
+
+@app.post("/api/alerts/clear-all")
+async def api_clear_all_latches():
+    """Clear every active latch in one shot — alert history is kept,
+    just marked acknowledged."""
+    n = await alert_service.unlatch_all()
+    return {"ok": True, "cleared": n}
 
 
 # ---------- Manual control ----------

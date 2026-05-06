@@ -605,7 +605,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .alert-rule { color: var(--accent); font-weight: 600; }
 .alert-meta { color: var(--muted); font-size: 11px; font-family: ui-monospace, Consolas, monospace; }
-.alert-wl {
+.alert-wl,
+.alert-clear {
   margin-left: 8px;
   padding: 2px 6px;
   font-size: 13px;
@@ -613,6 +614,34 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .alert-wl.active { color: var(--accent); border-color: var(--accent); }
 .alert-wl:disabled { opacity: 0.7; cursor: default; }
+.alert-clear { color: var(--warn); border-color: #5a4424; }
+.alert-clear:hover:not(:disabled) {
+  background: rgba(255, 184, 107, 0.1);
+  border-color: var(--warn);
+}
+
+/* Latch state: a small badge after the device id; .latch-tag.cleared
+   visually mutes acknowledged events so the active latches stand out. */
+.latch-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 6px;
+  background: rgba(255, 184, 107, 0.10);
+  border: 1px solid #5a4424;
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--warn);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+.latch-tag.cleared {
+  color: var(--muted);
+  background: var(--panel-2);
+  border-color: var(--border);
+  font-weight: 400;
+}
+.alert-item.alert-cleared { opacity: 0.55; }
+.alert-item.alert-cleared:hover { opacity: 0.85; }
 .alert-device { font-family: ui-monospace, Consolas, monospace; color: var(--fg); }
 .alert-rssi { color: var(--warn); font-family: ui-monospace, Consolas, monospace; }
 

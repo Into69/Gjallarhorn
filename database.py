@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS alert_events (
     device_id TEXT NOT NULL,
     rssi INTEGER,
     details_json TEXT NOT NULL,
+    cleared INTEGER NOT NULL DEFAULT 0,    -- 0 = latched (suppresses re-fire); 1 = acknowledged
     FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
 );
 
@@ -192,6 +193,15 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     await db.execute(
         "CREATE INDEX IF NOT EXISTS idx_devices_signature ON devices(signature)"
     )
+
+    # Latching: alert_events.cleared distinguishes acknowledged events
+    # from active latches that should suppress re-fires until cleared.
+    async with db.execute("PRAGMA table_info(alert_events)") as cur:
+        ev_cols = {row[1] for row in await cur.fetchall()}
+    if "cleared" not in ev_cols:
+        await db.execute(
+            "ALTER TABLE alert_events ADD COLUMN cleared INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 # Manufacturer IDs for known commercial trackers. Integer values (Bluetooth
@@ -1118,6 +1128,42 @@ async def purge_old_data(
             counts["devices"] = removed
         await db.commit()
     return counts
+
+
+async def list_latched_pairs() -> list[tuple[int, str]]:
+    """Every (rule_id, device_id_lower) pair with at least one alert_event
+    row that hasn't been cleared. AlertService loads this on startup so
+    latches survive a process restart."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT DISTINCT rule_id, lower(device_id) "
+            "FROM alert_events WHERE cleared=0"
+        ) as cur:
+            return [(int(r[0]), r[1]) for r in await cur.fetchall()]
+
+
+async def clear_alert_pair(rule_id: int, device_id: str) -> int:
+    """Mark every event for (rule_id, device_id_lower) as cleared. Caller
+    is responsible for removing the matching latch from AlertService."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE alert_events SET cleared=1 "
+            "WHERE rule_id=? AND lower(device_id)=? AND cleared=0",
+            (rule_id, (device_id or "").lower()),
+        )
+        await db.commit()
+        return cur.rowcount or 0
+
+
+async def clear_all_latches() -> int:
+    """Mark every still-latched event as cleared without deleting any
+    history. Returns the number of rows updated."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE alert_events SET cleared=1 WHERE cleared=0"
+        )
+        await db.commit()
+        return cur.rowcount or 0
 
 
 async def alert_event_counts_per_rule() -> list[dict]:

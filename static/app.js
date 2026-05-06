@@ -1603,49 +1603,98 @@ function renderAlertEvent(e) {
   const wlBtn = wl
     ? `<button type="button" class="icon-btn alert-wl active" disabled title="Whitelisted — future alerts on this device are suppressed" aria-label="Already whitelisted">★</button>`
     : `<button type="button" class="icon-btn alert-wl" data-kind="${escapeAttr(e.device_kind)}" data-id="${escapeAttr(e.device_id)}" title="Whitelist this device — silences future alerts and excludes it from PDF reports" aria-label="Whitelist device">☆</button>`;
+  // Latch state: cleared=0 means the (rule, device) pair is still latched
+  // and won't re-fire. Clicking the open-lock unlatches it.
+  const latched = e.cleared === 0 || e.cleared === false || e.cleared == null;
+  const latchBadge = latched
+    ? `<span class="latch-tag" title="Latched — this rule won't fire again on this device until cleared">🔒 latched</span>`
+    : `<span class="latch-tag cleared" title="Acknowledged">cleared</span>`;
+  const latchBtn = latched
+    ? `<button type="button" class="icon-btn alert-clear" data-rule="${escapeAttr(e.rule_id)}" data-id="${escapeAttr(e.device_id)}" title="Clear the latch so future matches fire again" aria-label="Clear latch">🔓</button>`
+    : "";
   return `
-    <div class="alert-item kind-${escapeHtml(e.device_kind)}">
+    <div class="alert-item kind-${escapeHtml(e.device_kind)} ${latched ? "" : "alert-cleared"}">
       <div>
         <span class="alert-rule">${escapeHtml(e.rule_name || "rule " + e.rule_id)}</span>
         <span class="muted"> matched </span>
         <span class="alert-device">${escapeHtml(e.device_id)}</span>
         ${label ? `<span class="muted"> · </span><span>${escapeHtml(label)}</span>` : ""}
         ${vendor}
+        ${latchBadge}
       </div>
       <div class="alert-meta">
         <span class="alert-rssi">${e.rssi != null ? e.rssi + " dBm" : ""}</span>
         · ${escapeHtml(where)}
         · ${formatTime(e.triggered_at)}
-        ${wlBtn}
+        ${latchBtn}${wlBtn}
       </div>
     </div>
   `;
 }
 
 // Single delegated handler — the alert list is re-rendered on filter
-// changes and on every poll, so per-row listeners would churn.
+// changes and on every poll, so per-row listeners would churn. Handles
+// both the whitelist (★) and unlatch (🔓) buttons.
 $("#alerts-list")?.addEventListener("click", async (ev) => {
-  const btn = ev.target.closest(".alert-wl");
-  if (!btn || btn.disabled) return;
-  const kind = btn.dataset.kind;
-  const deviceId = btn.dataset.id;
-  if (!kind || !deviceId) return;
-  if (!confirm(
-    `Whitelist ${kind} ${deviceId}?\n\n` +
-    `This silences all future alerts for this device and excludes it from PDF reports.`
-  )) return;
-  btn.disabled = true;
+  const wlBtn = ev.target.closest(".alert-wl");
+  if (wlBtn && !wlBtn.disabled) {
+    const kind = wlBtn.dataset.kind;
+    const deviceId = wlBtn.dataset.id;
+    if (!kind || !deviceId) return;
+    if (!confirm(
+      `Whitelist ${kind} ${deviceId}?\n\n` +
+      `This silences all future alerts for this device and excludes it from PDF reports.`
+    )) return;
+    wlBtn.disabled = true;
+    try {
+      await api("/api/whitelist", {
+        method: "POST",
+        body: JSON.stringify({ kind, device_id: deviceId, note: "from alert" }),
+      });
+      await refreshWhitelist();
+      renderFilteredAlerts();
+      await refreshDevices();
+    } catch (err) {
+      alert("Whitelist failed: " + err.message);
+      wlBtn.disabled = false;
+    }
+    return;
+  }
+  const clrBtn = ev.target.closest(".alert-clear");
+  if (clrBtn) {
+    const ruleId = parseInt(clrBtn.dataset.rule, 10);
+    const deviceId = clrBtn.dataset.id;
+    if (!Number.isFinite(ruleId) || !deviceId) return;
+    clrBtn.disabled = true;
+    try {
+      await api("/api/alerts/clear", {
+        method: "POST",
+        body: JSON.stringify({ rule_id: ruleId, device_id: deviceId }),
+      });
+      // Reflect locally so re-render flips the badge without a round-trip
+      // to /api/alerts/events first.
+      for (const e of alertsCache) {
+        if (e.rule_id === ruleId &&
+            (e.device_id || "").toLowerCase() === deviceId.toLowerCase()) {
+          e.cleared = 1;
+        }
+      }
+      renderFilteredAlerts();
+    } catch (err) {
+      alert("Unlatch failed: " + err.message);
+      clrBtn.disabled = false;
+    }
+  }
+});
+
+$("#alerts-unlatch-all")?.addEventListener("click", async () => {
+  if (!confirm("Clear every active alarm latch?\n\nHistory is kept; rules can fire again on those devices.")) return;
   try {
-    await api("/api/whitelist", {
-      method: "POST",
-      body: JSON.stringify({ kind, device_id: deviceId, note: "from alert" }),
-    });
-    await refreshWhitelist();      // updates _whitelistCache + isWhitelisted matcher
-    renderFilteredAlerts();        // re-render so this row's button flips to ★
-    await refreshDevices();        // keep Devices-tab stars in sync
+    await api("/api/alerts/clear-all", { method: "POST" });
+    for (const e of alertsCache) e.cleared = 1;
+    renderFilteredAlerts();
   } catch (err) {
-    alert("Whitelist failed: " + err.message);
-    btn.disabled = false;
+    alert("Unlatch failed: " + err.message);
   }
 });
 

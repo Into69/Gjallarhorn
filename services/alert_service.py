@@ -23,16 +23,16 @@ from services.location_manager import location_manager
 log = logging.getLogger(__name__)
 
 
-# Cooldown between repeated alerts for the same (rule_id, device_id) pair
-COOLDOWN_S = 60.0
-
-
 class AlertService:
     def __init__(self) -> None:
         self._rules: list[dict] = []
         self._rules_loaded = False
-        # (rule_id, device_id) -> last fired monotonic timestamp
-        self._cooldown: dict[tuple[int, str], float] = {}
+        # Latched (rule_id, device_id_lower) pairs — once an alert fires
+        # for a pair, it's added here and won't fire again until cleared
+        # via clear_alert_pair (per pair) or clear_all_latches (mass).
+        # Persisted to the alert_events.cleared column so latches survive
+        # process restarts.
+        self._latched: set[tuple[int, str]] = set()
         # location_id -> created_at epoch seconds (cached; created_at never changes)
         self._location_created: dict[int, float] = {}
         # Cached whitelist as (kind, lowercased target). Targets match either
@@ -47,11 +47,28 @@ class AlertService:
         rows = await db.list_whitelist()
         self._whitelist = [(r["kind"], (r["device_id"] or "").lower()) for r in rows]
 
+    async def load_latches(self) -> None:
+        self._latched = set(await db.list_latched_pairs())
+
     async def reload(self) -> None:
         """Call after any rule or whitelist mutation so the next scan
         uses fresh state."""
         await self.load_rules()
         await self.load_whitelist()
+        await self.load_latches()
+
+    async def unlatch(self, rule_id: int, device_id: str) -> int:
+        """Clear the latch for one (rule, device) pair so future matches
+        fire again. Returns the number of event rows marked cleared."""
+        n = await db.clear_alert_pair(rule_id, device_id)
+        self._latched.discard((rule_id, (device_id or "").lower()))
+        return n
+
+    async def unlatch_all(self) -> int:
+        """Clear every active latch without deleting alert history."""
+        n = await db.clear_all_latches()
+        self._latched.clear()
+        return n
 
     def is_whitelisted(self, kind: str, device_id_l: str) -> bool:
         for k, target in self._whitelist:
@@ -71,10 +88,11 @@ class AlertService:
         is_new: bool = False,
     ) -> list[int]:
         """Run all enabled rules against a single device sighting. Returns
-        a list of newly-inserted alert_events ids (after cooldown filtering)."""
+        a list of newly-inserted alert_events ids (after latch filtering)."""
         if not self._rules_loaded:
             await self.load_rules()
             await self.load_whitelist()
+            await self.load_latches()
         # Whitelist gate: silently skip every rule for whitelisted devices.
         if self.is_whitelisted(device_kind, (device_id or "").lower()):
             return []
@@ -82,7 +100,6 @@ class AlertService:
             return []
 
         emitted: list[int] = []
-        now = time.monotonic()
         device_id_l = (device_id or "").lower()
         ssid_or_name = (details.get("ssid") or details.get("name") or "")
         vendor = (details.get("vendor") or "")
@@ -161,11 +178,14 @@ class AlertService:
             ):
                 continue
 
+            # Latch: a (rule, device) pair only fires once per latch
+            # cycle. Persists in alert_events.cleared so latches survive
+            # restarts. The user clears via /api/alerts/clear or the
+            # per-row button in the live feed.
             key = (rule["id"], device_id_l)
-            last = self._cooldown.get(key, 0.0)
-            if now - last < COOLDOWN_S:
+            if key in self._latched:
                 continue
-            self._cooldown[key] = now
+            self._latched.add(key)
 
             event_id = await db.insert_alert_event(
                 rule_id=rule["id"], location_id=location_id,
