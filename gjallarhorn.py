@@ -456,6 +456,18 @@ async def api_location_devices(loc_id: int, kind: Optional[str] = None):
     return {"devices": await db.devices_at_location(loc_id, kind)}
 
 
+@app.delete("/api/locations/{loc_id}/devices")
+async def api_delete_location_devices(loc_id: int):
+    """Wipe every device + observation at this location while keeping
+    the location row itself. Whitelisted devices are archived to
+    preserved_devices first."""
+    counts = await db.delete_devices_at_location(loc_id)
+    if not counts.get("found"):
+        raise HTTPException(404, "location not found")
+    log.info("Cleared devices at location %d: %s", loc_id, counts)
+    return {"ok": True, "deleted": counts}
+
+
 @app.delete("/api/locations/{loc_id}")
 async def api_delete_location(loc_id: int):
     """Delete one location and its associated devices/observations.

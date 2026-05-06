@@ -553,6 +553,8 @@ $("#dev-manage-whitelist")?.addEventListener("click", () => {
 // Inline SVG icons — small currentColor glyphs so they pick up button text colour.
 const ICON_FLOPPY = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2h9l3 3v9a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Z"/><path d="M4 2v4h7V2"/><path d="M5 10h6v4H5z"/></svg>`;
 const ICON_TRASH  = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h10"/><path d="M5 4V2.5A.5.5 0 0 1 5.5 2h5a.5.5 0 0 1 .5.5V4"/><path d="M4 4l1 9.5a1 1 0 0 0 1 .9h4a1 1 0 0 0 1-.9L12 4"/><path d="M6.5 7v5M9.5 7v5"/></svg>`;
+// Eraser — clear devices at a location while keeping the location.
+const ICON_ERASER = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12 9 5 13 9 6 16 H2 Z"/><path d="M9 5 11 3 14 6 12 8"/><path d="M2 16 H10"/></svg>`;
 const ICON_PAUSE  = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><rect x="3.5" y="2" width="3" height="12" rx="0.5"/><rect x="9.5" y="2" width="3" height="12" rx="0.5"/></svg>`;
 const ICON_PLAY   = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor"><path d="M3.5 2.5v11a.5.5 0 0 0 .77.42l8.5-5.5a.5.5 0 0 0 0-.84l-8.5-5.5A.5.5 0 0 0 3.5 2.5z"/></svg>`;
 // Sensor tracking — crosshair / target.
@@ -581,6 +583,7 @@ async function refreshLocations() {
       <td class="mono">${formatTime(loc.last_seen_at)}</td>
       <td class="row-actions">
         <button type="button" class="icon-btn save-label" data-id="${loc.id}" title="Save label changes" aria-label="Save label">${ICON_FLOPPY}</button>
+        <button type="button" class="icon-btn clear-loc-devices" data-id="${loc.id}" title="Clear devices at this location (keeps the location row; whitelisted devices are preserved)" aria-label="Clear devices">${ICON_ERASER}</button>
         <button type="button" class="icon-btn danger delete-loc" data-id="${loc.id}" title="Delete this location and all of its devices/observations" aria-label="Delete location">${ICON_TRASH}</button>
       </td>
     `;
@@ -605,6 +608,29 @@ async function refreshLocations() {
         await loadLocationOptions();
       } catch (e) {
         alert("Delete failed: " + e.message);
+      }
+    })
+  );
+  $$(".clear-loc-devices").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const id = b.dataset.id;
+      if (!confirm(
+        `Clear all devices at location #${id}?\n\n` +
+        `Every device row and observation tied to this location will be removed. ` +
+        `Whitelisted devices' history is preserved (visible under the Devices tab's ` +
+        `"Preserved (whitelist)" pseudo-location). The location itself stays.`
+      )) return;
+      try {
+        const r = await api(`/api/locations/${id}/devices`, { method: "DELETE" });
+        const d = r.deleted || {};
+        alert(
+          `Cleared ${d.devices || 0} devices and ${d.observations || 0} observations.` +
+          (d.preserved ? `\n${d.preserved} whitelisted device row(s) archived.` : "")
+        );
+        await refreshLocations();
+        await refreshDevices();   // Devices tab might be looking at this loc
+      } catch (e) {
+        alert("Clear failed: " + e.message);
       }
     })
   );

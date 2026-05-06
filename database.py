@@ -460,6 +460,34 @@ async def _preserve_whitelisted_devices(db, location_ids: list[int]) -> int:
     return preserved
 
 
+async def delete_devices_at_location(location_id: int) -> dict:
+    """Wipe every device and observation row tied to this location while
+    keeping the sensor_location itself. Whitelisted devices get archived
+    into preserved_devices first, same as delete_location, so their
+    historical data survives the cleanup."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM sensor_locations WHERE id=?", (location_id,)
+        ) as cur:
+            if await cur.fetchone() is None:
+                return {"devices": 0, "observations": 0, "preserved": 0,
+                        "found": False}
+        async with db.execute(
+            "SELECT COUNT(*) FROM devices WHERE location_id=?", (location_id,)
+        ) as cur:
+            n_dev = (await cur.fetchone())[0]
+        async with db.execute(
+            "SELECT COUNT(*) FROM observations WHERE location_id=?", (location_id,)
+        ) as cur:
+            n_obs = (await cur.fetchone())[0]
+        n_preserved = await _preserve_whitelisted_devices(db, [location_id])
+        await db.execute("DELETE FROM observations WHERE location_id=?", (location_id,))
+        await db.execute("DELETE FROM devices WHERE location_id=?", (location_id,))
+        await db.commit()
+    return {"devices": n_dev, "observations": n_obs,
+            "preserved": n_preserved, "found": True}
+
+
 async def delete_location(location_id: int) -> dict:
     """Delete one sensor location and its devices + observations. Whitelisted
     devices' sightings get copied to preserved_devices first so they survive
