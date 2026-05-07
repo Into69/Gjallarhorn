@@ -861,6 +861,58 @@ async def get_device_details(location_id: int, kind: str, device_id: str) -> dic
         return {}
 
 
+async def get_location_summary(location_id: int) -> dict | None:
+    """Compact location info for the Discord enrichment. Returns label,
+    lat, lon, radius_m, source — or None if the id is gone."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, label, lat, lon, radius_m, source "
+            "FROM sensor_locations WHERE id=?", (location_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_device_summary(kind: str, device_id: str) -> dict | None:
+    """Cross-location aggregate for one device. Used by alert dispatch
+    to add temporal/lifetime context to Discord embeds."""
+    device_id_l = (device_id or "").lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT MIN(first_seen), MAX(last_seen), SUM(seen_count), "
+            "MAX(signature), COUNT(DISTINCT location_id) "
+            "FROM devices WHERE kind=? AND device_id=?",
+            (kind, device_id_l),
+        ) as cur:
+            row = await cur.fetchone()
+    if row is None or row[0] is None:
+        return None
+    return {
+        "first_seen": row[0],
+        "last_seen": row[1],
+        "seen_count": int(row[2] or 0),
+        "signature": row[3],
+        "location_count": int(row[4] or 0),
+    }
+
+
+async def get_signature_siblings(signature: str,
+                                 exclude_device_id: str = "") -> list[str]:
+    """Every distinct MAC sharing a BLE adv-data signature, minus the
+    excluded one. Used to surface rotating-MAC aliases in Discord."""
+    if not signature:
+        return []
+    excl = (exclude_device_id or "").lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT DISTINCT device_id FROM devices "
+            "WHERE signature=? AND device_id <> ? ORDER BY device_id",
+            (signature, excl),
+        ) as cur:
+            return [r[0] for r in await cur.fetchall()]
+
+
 async def get_location_created_at(location_id: int) -> str | None:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(

@@ -241,7 +241,10 @@ async def _dispatch_discord(
     rule: dict, device_kind: str, device_id: str, rssi: int,
     location_id: int | None, details: dict,
 ) -> None:
-    """Post a themed embed to the configured Discord webhook. No-op if unset."""
+    """Post a themed embed to the configured Discord webhook. No-op if
+    unset. Pulls cross-location aggregates, BLE signature siblings, and
+    location metadata so the embed has everything an operator needs to
+    decide whether to act on the alert without opening the UI."""
     global _webhook_failure_until
     try:
         s = await settings_store.load()
@@ -250,9 +253,38 @@ async def _dispatch_discord(
             return
         if time.monotonic() < _webhook_failure_until:
             return
+
+        # Enrichment — best-effort. Missing data falls back to the basic
+        # embed; no individual lookup is allowed to break the dispatch.
+        try:
+            loc_info = (await db.get_location_summary(location_id)
+                         if location_id is not None else None)
+        except Exception:
+            loc_info = None
+        try:
+            dev_info = await db.get_device_summary(device_kind, device_id)
+        except Exception:
+            dev_info = None
+        siblings: list[str] = []
+        if dev_info and dev_info.get("signature"):
+            try:
+                siblings = await db.get_signature_siblings(
+                    dev_info["signature"], exclude_device_id=device_id,
+                )
+            except Exception:
+                siblings = []
+        tracker_type = db.classify_tracker(device_kind, details)
+        context = {
+            "location": loc_info,
+            "device_summary": dev_info,
+            "linked_aliases": siblings,
+            "tracker_type": tracker_type,
+        }
+
         payload = build_discord_payload(
             rule=rule, device_kind=device_kind, device_id=device_id, rssi=rssi,
             location_id=location_id, details=details, username=s.discord_username,
+            context=context,
         )
         await asyncio.to_thread(_post_webhook_sync, url, payload)
     except Exception as e:
@@ -282,23 +314,140 @@ def _post_webhook_sync(url: str, payload: dict) -> None:
 def build_discord_payload(
     rule: dict, device_kind: str, device_id: str, rssi: int,
     location_id: int | None, details: dict, username: str = "Gjallarhorn",
+    context: dict | None = None,
 ) -> dict:
-    name_or_ssid = details.get("ssid") or details.get("name") or ""
-    vendor = details.get("vendor") or ""
+    """Compose a Discord embed for one alert event. `context` holds optional
+    enrichments from the dispatch path (location summary, device aggregates,
+    BLE signature siblings, tracker classification) — all best-effort, the
+    embed degrades gracefully when any are missing."""
+    context = context or {}
     color = _KIND_COLOR.get(device_kind, _DEFAULT_COLOR)
     match_type = rule.get("match_type") or "?"
+    match_value = (rule.get("match_value") or "").strip()
+
+    name_or_ssid = details.get("ssid") or details.get("name") or ""
+    vendor = details.get("vendor") or ""
+    tracker_type = context.get("tracker_type")
 
     fields: list[dict] = [
         {"name": "Device", "value": f"`{device_id}`", "inline": True},
         {"name": "RSSI",   "value": f"{rssi} dBm",   "inline": True},
-        {"name": "Kind",   "value": device_kind,     "inline": True},
+        {"name": "Kind",   "value": _KIND_LABELS.get(device_kind, device_kind),
+         "inline": True},
     ]
     if name_or_ssid:
-        fields.append({"name": "Name / SSID", "value": str(name_or_ssid), "inline": True})
+        fields.append({"name": "Name / SSID",
+                       "value": str(name_or_ssid)[:1000], "inline": True})
     if vendor:
         fields.append({"name": "Vendor", "value": str(vendor), "inline": True})
-    if location_id is not None:
-        fields.append({"name": "Location", "value": f"#{location_id}", "inline": True})
+    if tracker_type:
+        fields.append({"name": "Tracker class",
+                       "value": _TRACKER_LABELS.get(tracker_type, tracker_type),
+                       "inline": True})
+
+    # Per-kind technical context — channel/encryption for wifi, address
+    # type/manufacturer/services for bluetooth, probed SSIDs for clients.
+    if device_kind == "wifi":
+        ch = details.get("channel")
+        band = details.get("band")
+        if ch or band:
+            fields.append({"name": "Channel",
+                           "value": f"{ch or '?'}{f' ({band})' if band else ''}",
+                           "inline": True})
+        enc = details.get("encryption")
+        cipher = details.get("cipher")
+        if enc or cipher:
+            fields.append({"name": "Encryption",
+                           "value": f"{enc or '?'}{f' / {cipher}' if cipher else ''}",
+                           "inline": True})
+    elif device_kind == "bluetooth":
+        addr_type = details.get("address_type")
+        if addr_type:
+            fields.append({"name": "Address type",
+                           "value": str(addr_type), "inline": True})
+        mfg = details.get("manufacturer_data") or {}
+        if isinstance(mfg, dict) and mfg:
+            ids = ", ".join(_format_company_id(k) for k in sorted(mfg.keys(),
+                            key=lambda x: int(x)))
+            fields.append({"name": "Manufacturer",
+                           "value": ids[:1000], "inline": True})
+        svcs = details.get("service_uuids") or []
+        if isinstance(svcs, list) and svcs:
+            shown = ", ".join(str(u) for u in svcs[:3])
+            if len(svcs) > 3:
+                shown += f" (+{len(svcs) - 3})"
+            fields.append({"name": "Services",
+                           "value": shown[:1000], "inline": True})
+        appearance = details.get("appearance")
+        if appearance is not None:
+            fields.append({"name": "Appearance",
+                           "value": str(appearance), "inline": True})
+    elif device_kind == "wifi_client":
+        ssids = details.get("ssids") or []
+        if isinstance(ssids, list) and ssids:
+            named = [s for s in ssids if s]
+            shown = ", ".join(named[:3]) or "(wildcard)"
+            if len(named) > 3:
+                shown += f" (+{len(named) - 3} more)"
+            fields.append({"name": "Probed SSIDs",
+                           "value": shown[:1000], "inline": True})
+        ch = details.get("channel")
+        if ch is not None:
+            fields.append({"name": "Channel",
+                           "value": str(ch), "inline": True})
+
+    # Location enrichment — label and coordinates with an OSM link.
+    loc = context.get("location")
+    embed_url: str | None = None
+    if loc:
+        loc_label = loc.get("label") or f"#{loc['id']}"
+        loc_value = loc_label
+        if str(loc.get("id")) and (loc.get("label") or "").strip():
+            loc_value = f"{loc_label} (#{loc['id']})"
+        fields.append({"name": "Location", "value": loc_value, "inline": True})
+        if loc.get("lat") is not None and loc.get("lon") is not None:
+            lat = float(loc["lat"]); lon = float(loc["lon"])
+            embed_url = f"https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=18/{lat}/{lon}"
+            fields.append({
+                "name": "Coordinates",
+                "value": f"[{lat:.5f}, {lon:.5f}]({embed_url})",
+                "inline": True,
+            })
+    elif location_id is not None:
+        fields.append({"name": "Location",
+                       "value": f"#{location_id}", "inline": True})
+
+    # Device-lifetime aggregates from db.get_device_summary.
+    dev = context.get("device_summary")
+    if dev:
+        if dev.get("first_seen"):
+            fields.append({"name": "First seen",
+                           "value": _short_time(dev["first_seen"]),
+                           "inline": True})
+        if dev.get("seen_count"):
+            fields.append({"name": "Total observations",
+                           "value": str(dev["seen_count"]),
+                           "inline": True})
+        if dev.get("location_count"):
+            fields.append({"name": "Locations",
+                           "value": str(dev["location_count"]),
+                           "inline": True})
+
+    # BLE rotating-MAC siblings — when the alert fires on a private MAC,
+    # show what other addresses the same physical device has used so the
+    # operator can correlate.
+    siblings = context.get("linked_aliases") or []
+    if siblings:
+        shown_aliases = ", ".join(f"`{m}`" for m in siblings[:6])
+        if len(siblings) > 6:
+            shown_aliases += f" (+{len(siblings) - 6} more)"
+        fields.append({
+            "name": f"Linked aliases ({len(siblings)})",
+            "value": shown_aliases[:1000],
+            "inline": False,
+        })
+
+    # Stateful match-type extras (existing behavior, preserved).
     if match_type == "cross_location":
         n = details.get("_cross_location_n")
         c = details.get("_cross_location_count")
@@ -316,15 +465,72 @@ def build_discord_payload(
                 "value": f"{c} locations in last {h}h", "inline": True,
             })
 
-    embed = {
+    # Description: include match_value so operators see *what* triggered.
+    desc_parts = [f"`{match_type}` matched on **{_KIND_LABELS.get(device_kind, device_kind)}**"]
+    if match_value:
+        desc_parts.append(f"value: `{match_value}`")
+    if tracker_type:
+        desc_parts.append(f"⚠ classified as **{_TRACKER_LABELS.get(tracker_type, tracker_type)}**")
+    description = " · ".join(desc_parts)
+
+    embed: dict = {
         "title": f"⚡ {rule.get('name', 'Alert')}",
-        "description": f"`{match_type}` matched on **{device_kind}**",
+        "description": description,
         "color": color,
-        "fields": fields,
+        "fields": fields[:25],   # Discord caps embed.fields at 25
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "footer": {"text": f"rule #{rule.get('id', '?')}"},
+        "footer": {"text": f"rule #{rule.get('id', '?')} · {match_type}"},
     }
+    if embed_url:
+        embed["url"] = embed_url
     return {"username": username, "embeds": [embed]}
+
+
+_KIND_LABELS = {
+    "wifi": "WiFi AP",
+    "bluetooth": "Bluetooth",
+    "wifi_client": "WiFi client (probe)",
+}
+_TRACKER_LABELS = {
+    "airtag": "AirTag / FindMy",
+    "tile": "Tile",
+    "samsung_smarttag": "Samsung SmartTag",
+}
+# Bluetooth SIG company IDs we mention by name in alert embeds. Anything
+# not in this set is rendered as `0xNNNN`. Keeps embeds readable without
+# pulling in the full SIG list.
+_BT_COMPANY_NAMES = {
+    6: "Microsoft",
+    76: "Apple",
+    117: "Samsung",
+    224: "Google",
+    301: "Nordic Semi",
+    420: "Bose",
+    343: "Garmin",
+    1660: "Tile",
+    1118: "Anker",
+    2257: "Fitbit",
+}
+
+
+def _format_company_id(raw_key) -> str:
+    try:
+        i = int(raw_key)
+    except (TypeError, ValueError):
+        return str(raw_key)
+    name = _BT_COMPANY_NAMES.get(i)
+    return f"{name} (0x{i:04X})" if name else f"0x{i:04X}"
+
+
+def _short_time(iso: str) -> str:
+    """Render an ISO timestamp as a Discord-friendly short form. Naive
+    times (the local-time strings the rest of the app emits) round-trip
+    fine; if the parser fails just pass the string through."""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return str(iso)
+    return dt.strftime("%Y-%m-%d %H:%M")
 
 
 def _parse_companion_value(value: str) -> tuple[int | None, int]:
