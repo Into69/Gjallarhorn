@@ -513,6 +513,63 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
                          0.70 * inch, 0.70 * inch],
         ))
 
+    # ── Recurrence breakdown ── for the top recurring devices, show how
+    # many times they were observed at each location (not just *where*,
+    # but *how often*). Skipped entirely when nothing's been observed at
+    # multiple locations.
+    recurrence = await db.list_recurring_device_locations(
+        min_locations=2, top_n=10,
+    )
+    # Whitelist filter — drop entries the user has explicitly excluded.
+    recurrence = [
+        r for r in recurrence
+        if not is_wl(r.get("kind", ""), r.get("device_id", ""))
+    ]
+    if recurrence:
+        flow.append(Spacer(1, 14))
+        flow.append(Paragraph("Recurrence breakdown", s["h1"]))
+        flow.append(Paragraph(
+            "Top 10 devices observed at multiple locations, ranked by total "
+            "observations. The breakdown column shows how many times each "
+            "device was logged <i>at each location</i> — a device with one "
+            "very heavy location and a thin scatter elsewhere reads "
+            "differently from one that's evenly distributed.",
+            s["caption"],
+        ))
+        rows = []
+        for i, d in enumerate(recurrence, start=1):
+            det = d.get("details") or {}
+            name = det.get("ssid") or det.get("name") or ""
+            vendor = det.get("vendor") or ""
+            # Format the per-location frequency: "Home (#1): 22, Cafe (#2): 18"
+            # Cap at 8 entries to keep the cell readable; tail count appended.
+            per_loc = d.get("per_location") or []
+            shown = []
+            for p in per_loc[:8]:
+                label = p.get("location_label") or f"#{p['location_id']}"
+                shown.append(f"{label} (#{p['location_id']}): {p['seen_count']}")
+            tail = len(per_loc) - 8
+            breakdown = ", ".join(shown)
+            if tail > 0:
+                breakdown += f", +{tail} more"
+            rows.append((
+                str(i),
+                d.get("kind", ""),
+                _cell(d.get("device_id", ""), mono=True),
+                _cell(name),
+                _cell(vendor),
+                str(d.get("n_locations", "")),
+                str(d.get("total_seen", "")),
+                _cell(breakdown),
+            ))
+        flow.append(_table(
+            ["#", "Kind", "Device ID", "Name / SSID", "Vendor",
+             "Locs", "Total", "Per-location frequency"],
+            rows,
+            col_widths=[0.30 * inch, 0.55 * inch, 1.20 * inch, 1.05 * inch,
+                         0.85 * inch, 0.40 * inch, 0.55 * inch, 2.45 * inch],
+        ))
+
     # ── Recent alert events ──
     flow.append(PageBreak())
     flow.append(Paragraph("Recent alert events", s["h1"]))

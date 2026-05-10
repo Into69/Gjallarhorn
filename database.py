@@ -1246,6 +1246,71 @@ async def clear_all_latches() -> int:
         return cur.rowcount or 0
 
 
+async def list_recurring_device_locations(
+    *, min_locations: int = 2, top_n: int = 10,
+) -> list[dict]:
+    """Per-location frequency breakdown for the top-N devices observed at
+    ≥ min_locations distinct sensor locations. Picks devices ranked by
+    total seen count, then returns one entry per device with a list of
+    {location_id, location_label, seen_count, last_seen, best_rssi}
+    sorted by seen_count DESC. Used by the report's "Recurrence
+    breakdown" section to show *how often*, not just *where*."""
+    sql = """
+        WITH top_devs AS (
+            SELECT kind, device_id,
+                   SUM(seen_count) AS total,
+                   COUNT(DISTINCT location_id) AS n_locs,
+                   MAX(last_seen) AS last_seen,
+                   MAX(best_rssi) AS best_rssi
+            FROM devices
+            GROUP BY kind, device_id
+            HAVING n_locs >= ?
+            ORDER BY total DESC, n_locs DESC
+            LIMIT ?
+        )
+        SELECT t.kind, t.device_id, t.total, t.n_locs, t.last_seen, t.best_rssi,
+               d.location_id, d.seen_count AS loc_seen, d.last_seen AS loc_last_seen,
+               d.best_rssi AS loc_best_rssi, d.details_json,
+               l.label AS location_label
+        FROM top_devs t
+        JOIN devices d ON d.kind = t.kind AND d.device_id = t.device_id
+        LEFT JOIN sensor_locations l ON l.id = d.location_id
+        ORDER BY t.total DESC, t.device_id, d.seen_count DESC
+    """
+    by_dev: dict[tuple[str, str], dict] = {}
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(sql, (min_locations, top_n)) as cur:
+            for row in await cur.fetchall():
+                key = (row["kind"], row["device_id"])
+                head = by_dev.get(key)
+                if head is None:
+                    try:
+                        details = json.loads(row["details_json"] or "{}")
+                    except (TypeError, ValueError):
+                        details = {}
+                    head = {
+                        "kind": row["kind"],
+                        "device_id": row["device_id"],
+                        "total_seen": int(row["total"] or 0),
+                        "n_locations": int(row["n_locs"] or 0),
+                        "last_seen": row["last_seen"],
+                        "best_rssi": row["best_rssi"],
+                        "details": details,
+                        "per_location": [],
+                    }
+                    by_dev[key] = head
+                head["per_location"].append({
+                    "location_id": row["location_id"],
+                    "location_label": row["location_label"],
+                    "seen_count": int(row["loc_seen"] or 0),
+                    "last_seen": row["loc_last_seen"],
+                    "best_rssi": row["loc_best_rssi"],
+                })
+    # Preserve the order from the SQL (already ordered by total DESC).
+    return list(by_dev.values())
+
+
 async def alert_event_counts_per_rule() -> list[dict]:
     """Per-rule fire counts and last-fired timestamps. Used by the report
     to show which alert rules are actually doing work."""
