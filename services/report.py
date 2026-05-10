@@ -27,6 +27,10 @@ log = logging.getLogger(__name__)
 
 # How many follower / cross-location entries to include in the report.
 _MAX_COMMON_DEVICES = 60
+# Per-cell caps — ReportLab can't split a single cell across pages, so a
+# cell with too much wrapped text crashes the layout. Keep these tight.
+_MAX_LOCS_PER_CELL = 12        # comma-separated location IDs per cell
+_MAX_FREQ_PER_CELL = 10        # entries in the Recurrence "Per-location frequency" column
 
 
 def _styles() -> dict[str, ParagraphStyle]:
@@ -511,7 +515,13 @@ async def build_report_pdf(*, group_bssids: bool = True,
             merged_count = d.get("_merged_count") or 1
             name = det.get("ssid") or det.get("name") or ""
             vendor = det.get("vendor") or ""
-            locs = ", ".join(str(x) for x in (d.get("locations") or []))
+            # Cap the location-id list so a follower seen at hundreds of
+            # locations doesn't produce a single cell that's taller than
+            # a page (ReportLab can't split one cell across pages).
+            loc_ids = list(d.get("locations") or [])
+            shown_locs = ", ".join(str(x) for x in loc_ids[:_MAX_LOCS_PER_CELL])
+            if len(loc_ids) > _MAX_LOCS_PER_CELL:
+                shown_locs += f", +{len(loc_ids) - _MAX_LOCS_PER_CELL} more"
             device_id = d.get("device_id", "")
             if merged_count > 1:
                 device_id = f"{device_id} (+{merged_count - 1})"
@@ -524,7 +534,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
                 _cell(vendor),
                 str(d.get("n_locations", "")),
                 str(recent),
-                _cell(locs),
+                _cell(shown_locs),
                 f"{d.get('max_rssi', '')} dBm",
                 str(d.get("total_seen", "")),
             ))
@@ -570,10 +580,13 @@ async def build_report_pdf(*, group_bssids: bool = True,
             # Cap at 8 entries to keep the cell readable; tail count appended.
             per_loc = d.get("per_location") or []
             shown = []
-            for p in per_loc[:8]:
+            for p in per_loc[:_MAX_FREQ_PER_CELL]:
                 label = p.get("location_label") or f"#{p['location_id']}"
+                # Trim long custom labels so one entry can't dominate the cell.
+                if len(label) > 30:
+                    label = label[:27] + "…"
                 shown.append(f"{label} (#{p['location_id']}): {p['seen_count']}")
-            tail = len(per_loc) - 8
+            tail = len(per_loc) - _MAX_FREQ_PER_CELL
             breakdown = ", ".join(shown)
             if tail > 0:
                 breakdown += f", +{tail} more"
