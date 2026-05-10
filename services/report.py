@@ -355,16 +355,37 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
     return out
 
 
-async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
+async def build_report_pdf(*, group_bssids: bool = True,
+                           progress=None) -> bytes:
+    # Stage tracker — each `_step()` updates the caller's progress hook
+    # AND emits an info log so the same trace lands in the Logs tab.
+    # _STAGE_TOTAL is a moving target (we know roughly how many milestones
+    # we'll hit; finer-grained ones bump it up).
+    STAGE_TOTAL = 9
+    state = {"n": 0}
+    def _step(label: str, *, weight: int = 1) -> None:
+        state["n"] += weight
+        log.info("report: %s (%d/%d)", label, state["n"], STAGE_TOTAL)
+        if progress is not None:
+            try:
+                progress(label, state["n"], STAGE_TOTAL)
+            except Exception:  # pragma: no cover — progress hook is opt-in
+                pass
+
+    _step("Loading locations")
     locations = await db.list_locations()
     locations = sorted(locations, key=lambda l: l["id"])
+
+    _step("Loading common devices")
     common = await db.list_common_devices(min_locations=2, limit=_MAX_COMMON_DEVICES)
 
+    _step("Loading whitelist")
     # Whitelist filtering — drop matching entries from per-location device
     # lists, recompute counts to match, and prune the common-devices table.
     whitelist = await db.list_whitelist()
     is_wl = _whitelist_matcher(whitelist)
 
+    _step(f"Aggregating devices across {len(locations)} location(s)")
     # Per-location device pulls in parallel-ish (sequentially since aiosqlite
     # serializes anyway, but the volume is small).
     per_loc_devices: dict[int, list[dict]] = {}
@@ -394,6 +415,7 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
     s = _styles()
     flow: list[Any] = []
 
+    _step("Rendering summary")
     # ── Title ──
     flow.append(Paragraph("Gjallarhorn Sensor Report", s["title"]))
     flow.append(Paragraph(
@@ -434,6 +456,7 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
             flow.append(Paragraph(f"• {line}", s["body"]))
     flow.append(Spacer(1, 16))
 
+    _step("Rendering overview map")
     # ── Overview map ──
     flow.append(Paragraph("Overview", s["h1"]))
     points = [(l["lat"], l["lon"], "#ff6b6b") for l in locations if l.get("lat") is not None]
@@ -443,6 +466,7 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
         s["caption"],
     ))
 
+    _step(f"Computing follower companion-counts ({len(common)} candidates)")
     # ── Followers ── headline section: devices that have shown up at
     # multiple sensor locations, ranked by breadth and recency. The
     # "recent" column counts distinct locations within the last 24 hours,
@@ -513,6 +537,7 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
                          0.70 * inch, 0.70 * inch],
         ))
 
+    _step("Building recurrence breakdown")
     # ── Recurrence breakdown ── for the top recurring devices, show how
     # many times they were observed at each location (not just *where*,
     # but *how often*). Skipped entirely when nothing's been observed at
@@ -570,6 +595,7 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
                          0.85 * inch, 0.40 * inch, 0.55 * inch, 2.45 * inch],
         ))
 
+    _step("Rendering alert sections")
     # ── Recent alert events ──
     flow.append(PageBreak())
     flow.append(Paragraph("Recent alert events", s["h1"]))
@@ -650,6 +676,7 @@ async def build_report_pdf(*, group_bssids: bool = True) -> bytes:
                          1.30 * inch, 0.50 * inch, 0.50 * inch, 1.35 * inch],
         ))
 
+    _step("Building PDF document")
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=letter,

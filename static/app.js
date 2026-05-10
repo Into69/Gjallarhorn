@@ -730,15 +730,64 @@ $("#loc-merge").addEventListener("click", async () => {
   }
 });
 
+function showReportProgress(done, total, label) {
+  const prog = $("#loc-report-progress");
+  const labelEl = $("#loc-report-progress-label");
+  if (!prog || !labelEl) return;
+  const max = Math.max(1, total, done);
+  prog.max = max;
+  prog.value = done;
+  prog.hidden = false;
+  labelEl.textContent = label
+    ? `${label} (${done}/${max})`
+    : `${done}/${max}`;
+  labelEl.hidden = false;
+}
+
+function hideReportProgress() {
+  const prog = $("#loc-report-progress");
+  const label = $("#loc-report-progress-label");
+  if (prog) prog.hidden = true;
+  if (label) label.hidden = true;
+}
+
 $("#loc-report").addEventListener("click", async () => {
   const btn = $("#loc-report");
   const orig = btn.textContent;
-  btn.disabled = true; btn.textContent = "Generating…";
+  btn.disabled = true; btn.textContent = "Starting…";
+  showReportProgress(0, 1, "queued");
   try {
     // Mirror the Devices tab's "Group multi-BSSID APs" checkbox so the PDF
     // device tables match what the user sees on the Devices tab.
     const groupBssids = $("#dev-group-bssid")?.checked ? 1 : 0;
-    const res = await fetch(`/api/locations/report.pdf?group_bssids=${groupBssids}`, { method: "GET" });
+    await api(`/api/locations/report/start?group_bssids=${groupBssids}`, {
+      method: "POST",
+    });
+    btn.textContent = "Generating…";
+
+    // Poll status; bail on error or once ready=true.
+    let ready = false;
+    let last_err = null;
+    for (let i = 0; i < 600; i++) {  // 600 * 500ms = 5 min cap
+      await new Promise(r => setTimeout(r, 500));
+      let st;
+      try {
+        st = await api("/api/locations/report/status");
+      } catch (e) {
+        last_err = e;
+        continue;  // transient — retry
+      }
+      if (st.error) {
+        throw new Error(st.error);
+      }
+      showReportProgress(st.stage_n || 0, st.stage_total || 1, st.stage_label || "");
+      if (st.ready) { ready = true; break; }
+      if (!st.running && st.error) throw new Error(st.error);
+    }
+    if (!ready) throw last_err || new Error("report timed out");
+
+    // Fetch the bytes and trigger the browser's save-as.
+    const res = await fetch("/api/locations/report/result.pdf");
     if (!res.ok) {
       const t = await res.text();
       throw new Error(t || `HTTP ${res.status}`);
@@ -757,6 +806,7 @@ $("#loc-report").addEventListener("click", async () => {
   } catch (e) {
     alert("Report generation failed: " + e.message);
   } finally {
+    hideReportProgress();
     btn.disabled = false; btn.textContent = orig;
   }
 });

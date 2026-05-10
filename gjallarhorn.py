@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -604,7 +606,9 @@ async def api_locations_report(group_bssids: bool = True):
     """Generate a downloadable PDF summary of all sensor locations.
     `group_bssids` mirrors the Devices tab's "Group multi-BSSID APs"
     checkbox — when true, wifi BSSIDs sharing the same first 5 octets
-    are folded into a single row per physical AP."""
+    are folded into a single row per physical AP. Synchronous; UI
+    callers that want progress should use the /report/start +
+    /report/status + /report/result.pdf flow below."""
     from fastapi.responses import Response
     from services.report import build_report_pdf
 
@@ -614,6 +618,107 @@ async def api_locations_report(group_bssids: bool = True):
         content=pdf,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="gjallarhorn-report-{stamp}.pdf"'},
+    )
+
+
+# ── Async report generation with progress ──────────────────────────────
+# Module-level state since only one report can run at a time. The status
+# endpoint is polled by the Locations-tab UI to drive a progress bar; the
+# bytes are stashed here for the browser to fetch via /result.pdf.
+_report_state: dict = {
+    "running": False,
+    "stage_n": 0,
+    "stage_total": 0,
+    "stage_label": "",
+    "started_at": None,
+    "finished_at": None,
+    "result": None,
+    "filename": None,
+    "error": None,
+}
+
+
+async def _run_report_job(group_bssids: bool) -> None:
+    """Background task: builds the PDF, streaming progress into _report_state."""
+    from services.report import build_report_pdf
+
+    def progress(label: str, n: int, total: int) -> None:
+        _report_state["stage_label"] = label
+        _report_state["stage_n"] = n
+        _report_state["stage_total"] = total
+
+    try:
+        pdf = await build_report_pdf(group_bssids=group_bssids, progress=progress)
+        _report_state["result"] = pdf
+        _report_state["filename"] = (
+            f"gjallarhorn-report-{datetime.now().strftime('%Y%m%d-%H%M%S')}.pdf"
+        )
+        _report_state["stage_label"] = "Done"
+    except Exception as e:
+        log.exception("report generation failed")
+        _report_state["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        _report_state["running"] = False
+        _report_state["finished_at"] = time.time()
+
+
+@app.post("/api/locations/report/start")
+async def api_report_start(group_bssids: bool = True):
+    """Kick off a background report build. Returns immediately. Poll
+    /api/locations/report/status to follow progress, then fetch
+    /api/locations/report/result.pdf when done."""
+    if _report_state["running"]:
+        raise HTTPException(409, "a report is already being generated")
+    _report_state.update({
+        "running": True,
+        "stage_n": 0,
+        "stage_total": 0,
+        "stage_label": "Starting…",
+        "started_at": time.time(),
+        "finished_at": None,
+        "result": None,
+        "filename": None,
+        "error": None,
+    })
+    log.info("report: start (group_bssids=%s)", group_bssids)
+    asyncio.create_task(_run_report_job(group_bssids))
+    return {"ok": True}
+
+
+@app.get("/api/locations/report/status")
+async def api_report_status():
+    """Snapshot of the current/last report job. The PDF bytes are not
+    returned here — fetch /report/result.pdf when status.ready=True."""
+    return {
+        "running": _report_state["running"],
+        "stage_n": _report_state["stage_n"],
+        "stage_total": _report_state["stage_total"],
+        "stage_label": _report_state["stage_label"],
+        "started_at": _report_state["started_at"],
+        "finished_at": _report_state["finished_at"],
+        "ready": _report_state["result"] is not None and not _report_state["running"],
+        "error": _report_state["error"],
+        "filename": _report_state["filename"],
+    }
+
+
+@app.get("/api/locations/report/result.pdf")
+async def api_report_result():
+    """Stream back the PDF from the last completed background job. 404
+    until /report/start has produced output; 500 if the job errored."""
+    from fastapi.responses import Response
+    if _report_state["error"]:
+        raise HTTPException(500, _report_state["error"])
+    if _report_state["result"] is None:
+        raise HTTPException(404, "no report ready — call /report/start first")
+    if _report_state["running"]:
+        raise HTTPException(409, "report still being generated")
+    pdf = _report_state["result"]
+    fname = _report_state["filename"] or "gjallarhorn-report.pdf"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
 
