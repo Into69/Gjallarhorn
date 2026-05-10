@@ -544,6 +544,31 @@ async def api_merge_contained_locations():
     return {"ok": True, **result}
 
 
+@app.post("/api/locations/merge_contained/step")
+async def api_merge_contained_step():
+    """One iteration of the merge_contained loop — merges a single pair
+    if any qualifies, otherwise returns done=True. Designed for UIs that
+    want to show progress per merge instead of waiting on the bulk
+    endpoint to return."""
+    pairs = await db.find_contained_locations()
+    if not pairs:
+        return {"ok": True, "done": True, "merged": None, "remaining": 0}
+    p = pairs[0]
+    merged = await db.merge_locations(p["loser_id"], p["winner_id"])
+    if location_manager.active_id == p["loser_id"]:
+        location_manager._active_id = None  # type: ignore[attr-defined]
+        location_manager._active_lat = None  # type: ignore[attr-defined]
+        location_manager._active_lon = None  # type: ignore[attr-defined]
+    log.info("Merged location %d into %d (step)", p["loser_id"], p["winner_id"])
+    # `remaining` is the count *before* this step's merge, minus 1 for the
+    # pair we just collapsed. The next find_contained_locations may reveal
+    # more or fewer than that — UIs should treat it as a hint, not a total.
+    return {
+        "ok": True, "done": False, "merged": merged,
+        "remaining": max(0, len(pairs) - 1),
+    }
+
+
 @app.post("/api/maintenance/purge")
 async def api_purge_old_data(payload: dict | None = None):
     """Manually run the retention purge using the configured (or

@@ -445,6 +445,27 @@ main { height: calc(100vh - 53px); }
 .toolbar input[type="search"] { min-width: 220px; }
 .toolbar input[type="number"] { width: 70px; }
 
+/* Themed inline progress bar (used by the Locations "Merge contained"
+   stepper). Plain <progress> is browser-styled, so we override both the
+   webkit and firefox pseudo-elements. */
+progress {
+  width: 140px;
+  height: 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  overflow: hidden;
+  vertical-align: middle;
+}
+progress::-webkit-progress-bar { background: var(--panel-2); }
+progress::-webkit-progress-value {
+  background: linear-gradient(90deg, var(--accent), var(--ok));
+  transition: width 120ms ease-out;
+}
+progress::-moz-progress-bar {
+  background: linear-gradient(90deg, var(--accent), var(--ok));
+}
+
 /* Pin the Devices/Locations tab toolbars to the top of the scroll area so
    filters stay reachable when the table is long. The negative horizontal
    margin lets the sticky bar bleed to the tab's padding edges (cleaner

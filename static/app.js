@@ -642,6 +642,27 @@ $("#loc-new").addEventListener("click", async () => {
   catch (e) { alert(e.message); }
 });
 
+function showMergeProgress(done, total) {
+  const prog = $("#loc-merge-progress");
+  const label = $("#loc-merge-progress-label");
+  if (!prog || !label) return;
+  // Total can grow mid-merge (a winner's expanded radius may newly contain
+  // other locations on the next iteration), so guard against done > max.
+  const max = Math.max(1, total, done);
+  prog.max = max;
+  prog.value = done;
+  prog.hidden = false;
+  label.textContent = `${done} / ${max}`;
+  label.hidden = false;
+}
+
+function hideMergeProgress() {
+  const prog = $("#loc-merge-progress");
+  const label = $("#loc-merge-progress-label");
+  if (prog) prog.hidden = true;
+  if (label) label.hidden = true;
+}
+
 $("#loc-merge").addEventListener("click", async () => {
   const btn = $("#loc-merge");
   const orig = btn.textContent;
@@ -666,15 +687,34 @@ $("#loc-merge").addEventListener("click", async () => {
       `needed, and delete the loser. Chains (A inside B inside C) collapse to the outermost.\n\n` +
       `${summary}${more}\n\nProceed?`
     )) return;
+
     btn.textContent = "Merging…";
-    const r = await api("/api/locations/merge_contained", { method: "POST" });
-    const totals = (r.details || []).reduce((acc, d) => ({
-      devices_moved: acc.devices_moved + (d.devices_moved || 0),
-      devices_combined: acc.devices_combined + (d.devices_combined || 0),
-      observations_moved: acc.observations_moved + (d.observations_moved || 0),
-    }), { devices_moved: 0, devices_combined: 0, observations_moved: 0 });
+    const totals = { devices_moved: 0, devices_combined: 0, observations_moved: 0 };
+    let merged = 0;
+    let total = pairs.length;
+    showMergeProgress(0, total);
+
+    // Step the merge loop one pair at a time so the progress bar can
+    // advance with each transaction. Hard cap matches the backend's
+    // auto_merge_contained safety bound.
+    for (let i = 0; i < 1000; i++) {
+      const r = await api("/api/locations/merge_contained/step", { method: "POST" });
+      if (r.done) break;
+      merged++;
+      const m = r.merged || {};
+      totals.devices_moved += m.devices_moved || 0;
+      totals.devices_combined += m.devices_combined || 0;
+      totals.observations_moved += m.observations_moved || 0;
+      // `remaining` is a hint from the server; if it surfaced more pairs
+      // (chain growth from radius expansion), grow the bar's max.
+      const projected = merged + (r.remaining || 0);
+      if (projected > total) total = projected;
+      showMergeProgress(merged, total);
+    }
+    hideMergeProgress();
+
     alert(
-      `Merged ${r.merged} location(s).\n\n` +
+      `Merged ${merged} location(s).\n\n` +
       `Devices reattributed: ${totals.devices_moved}\n` +
       `Devices combined (collisions): ${totals.devices_combined}\n` +
       `Observations moved: ${totals.observations_moved}`
@@ -683,6 +723,7 @@ $("#loc-merge").addEventListener("click", async () => {
     await refreshLocationMarkers();
     await loadLocationOptions();
   } catch (e) {
+    hideMergeProgress();
     alert("Merge failed: " + e.message);
   } finally {
     btn.disabled = false; btn.textContent = orig;
