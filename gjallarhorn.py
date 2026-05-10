@@ -931,7 +931,11 @@ async def api_clear_all_latches():
 @app.post("/api/locations/new")
 async def api_force_new_location():
     """Force-open a new location at the current fix (debug helper)."""
-    if gps is None or gps.fix.lat is None:
+    if gps is None:
+        raise HTTPException(503, "no GPS fix")
+    lat = gps.fix.lat
+    lon = gps.fix.lon
+    if lat is None or lon is None:
         raise HTTPException(503, "no GPS fix")
     s = await settings_store.load()
     from services.location_manager import effective_radius_m
@@ -939,12 +943,12 @@ async def api_force_new_location():
         s.new_location_distance_m, speed_mps=gps.fix.speed,
         dynamic_enabled=s.new_location_dynamic, dynamic_t_s=s.new_location_dynamic_t_s,
     )
-    new_id = await db.create_location(gps.fix.lat, gps.fix.lon, radius, None)
-    label = s.location_label_template.format(id=new_id, lat=gps.fix.lat, lon=gps.fix.lon)
+    new_id = await db.create_location(lat, lon, radius, None)
+    label = s.location_label_template.format(id=new_id, lat=lat, lon=lon)
     await db.update_location_label(new_id, label)
     location_manager._active_id = new_id  # type: ignore[attr-defined]
-    location_manager._active_lat = gps.fix.lat  # type: ignore[attr-defined]
-    location_manager._active_lon = gps.fix.lon  # type: ignore[attr-defined]
+    location_manager._active_lat = lat  # type: ignore[attr-defined]
+    location_manager._active_lon = lon  # type: ignore[attr-defined]
     return {"id": new_id}
 
 
