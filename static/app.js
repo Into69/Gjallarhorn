@@ -565,6 +565,8 @@ const ICON_NAV = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="t
 const ICON_FIT = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.5V2.5h3"/><path d="M14 5.5V2.5h-3"/><path d="M2 10.5v3h3"/><path d="M14 10.5v3h-3"/></svg>`;
 // Dashed circle = "draw a geofence". Reads as a marquee / selection ring.
 const ICON_DRAW = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6" stroke-dasharray="2,2"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg>`;
+// Beacon/radar — "baseline scan". Three arcs radiating from a center dot.
+const ICON_BASELINE = `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none"/><path d="M5 8a3 3 0 0 1 6 0"/><path d="M3 8a5 5 0 0 1 10 0"/><path d="M1 8a7 7 0 0 1 14 0"/></svg>`;
 
 async function refreshLocations() {
   const { locations, active_id } = await api("/api/locations");
@@ -2628,6 +2630,7 @@ function setupMapToggleIcons() {
   inject("#map-smart-track-icon",  ICON_NAV);
   inject("#map-autozoom-icon",     ICON_FIT);
   inject("#map-draw-icon",         ICON_DRAW);
+  inject("#map-baseline-icon",     ICON_BASELINE);
   renderMapToggles();
 }
 
@@ -2771,6 +2774,165 @@ $("#map-draw")?.addEventListener("click", () => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && drawState) exitDrawMode({ commit: false });
 });
+
+// ── Baseline scan ──────────────────────────────────────────────────
+// Walks the user through a baseline of "everything nearby": bursts
+// the WiFi/BT scanners harder than normal, then opens a modal letting
+// the user promote individual entries to the permanent whitelist.
+$("#map-baseline")?.addEventListener("click", async () => {
+  if (!confirm(
+    "Run a baseline scan?\n\n" +
+    "Will run multiple WiFi scans and an extended Bluetooth sweep to " +
+    "capture every nearby device. Use this somewhere safe (home, office) " +
+    "where everything visible should count as known-good.\n\n" +
+    "Takes ~30 seconds. Won't interrupt the ongoing background scans."
+  )) return;
+
+  // Drive both the progress phase and the result phase from one modal.
+  openModal("Baseline scan", `
+    <div class="baseline-progress">
+      <p class="muted" id="baseline-stage">Starting…</p>
+      <progress id="baseline-bar" value="0" max="1"></progress>
+      <p class="muted"><span id="baseline-count">0</span> device(s) captured so far</p>
+    </div>
+  `);
+
+  try {
+    await api("/api/scan/baseline/start", { method: "POST" });
+  } catch (e) {
+    $("#modal-body").innerHTML = `<div class="muted">Failed to start: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  // Poll until ready or error. 250ms cadence keeps the bar lively.
+  let ready = false;
+  let lastErr = null;
+  for (let i = 0; i < 600; i++) {
+    await new Promise(r => setTimeout(r, 250));
+    let st;
+    try { st = await api("/api/scan/baseline/status"); }
+    catch (e) { lastErr = e; continue; }
+    if (st.error) {
+      $("#modal-body").innerHTML = `<div class="muted">Scan failed: ${escapeHtml(st.error)}</div>`;
+      return;
+    }
+    const bar = $("#baseline-bar");
+    const stage = $("#baseline-stage");
+    const count = $("#baseline-count");
+    if (bar) {
+      bar.max = Math.max(1, st.stage_total || 1);
+      bar.value = st.stage_n || 0;
+    }
+    if (stage) {
+      stage.textContent = st.stage_label || "Working…";
+    }
+    if (count) {
+      count.textContent = String(st.device_count || 0);
+    }
+    if (st.ready) { ready = true; break; }
+  }
+  if (!ready) {
+    $("#modal-body").innerHTML = `<div class="muted">Scan timed out${lastErr ? ": " + escapeHtml(lastErr.message) : ""}</div>`;
+    return;
+  }
+
+  // Fetch and render the captured device list with checkboxes.
+  let data;
+  try {
+    data = await api("/api/scan/baseline/result");
+  } catch (e) {
+    $("#modal-body").innerHTML = `<div class="muted">Couldn't fetch result: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  renderBaselineResult(data.devices || []);
+});
+
+function renderBaselineResult(devices) {
+  $("#modal-title").textContent =
+    `Baseline scan — ${devices.length} device${devices.length === 1 ? "" : "s"}`;
+  if (!devices.length) {
+    $("#modal-body").innerHTML = `<div class="muted">No devices captured above the configured RSSI floor.</div>`;
+    return;
+  }
+  const rows = devices.map((d, i) => {
+    const trackerBadge = d.tracker_type
+      ? ` <span class="tracker-tag">${escapeHtml(d.tracker_type)}</span>`
+      : "";
+    return `
+      <tr>
+        <td><input type="checkbox" class="baseline-pick" data-i="${i}" checked /></td>
+        <td>${escapeHtml(d.kind)}</td>
+        <td class="mono">${escapeHtml(d.device_id)}${trackerBadge}</td>
+        <td>${escapeHtml(d.name || "")}</td>
+        <td>${escapeHtml(d.vendor || "")}</td>
+        <td>${d.rssi != null ? d.rssi + " dBm" : ""}</td>
+      </tr>`;
+  }).join("");
+  $("#modal-body").innerHTML = `
+    <p class="muted">Sorted by signal strength. Uncheck anything you don't want whitelisted. Whitelisted devices are excluded from PDF reports and never trigger alerts.</p>
+    <div class="baseline-toolbar">
+      <button type="button" id="baseline-select-all" class="secondary">Select all</button>
+      <button type="button" id="baseline-select-none" class="secondary">Select none</button>
+      <button type="button" id="baseline-only-trackers" class="secondary" title="Trackers only — AirTag, Tile, Samsung SmartTag">Only trackers</button>
+      <span class="toolbar-spacer"></span>
+      <button type="button" id="baseline-promote">Add to whitelist</button>
+    </div>
+    <div class="baseline-list">
+      <table>
+        <thead>
+          <tr>
+            <th>✓</th><th>Kind</th><th>Device ID</th>
+            <th>Name / SSID</th><th>Vendor</th><th>RSSI</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+  // Cache for the promote handler — checkboxes carry the index back to the
+  // original device list.
+  _baselineCache = devices;
+  $("#baseline-select-all")?.addEventListener("click",
+    () => $$(".baseline-pick").forEach(cb => cb.checked = true));
+  $("#baseline-select-none")?.addEventListener("click",
+    () => $$(".baseline-pick").forEach(cb => cb.checked = false));
+  $("#baseline-only-trackers")?.addEventListener("click", () => {
+    $$(".baseline-pick").forEach(cb => {
+      const idx = Number(cb.dataset.i);
+      cb.checked = !!_baselineCache[idx]?.tracker_type;
+    });
+  });
+  $("#baseline-promote")?.addEventListener("click", baselinePromoteSelected);
+}
+
+let _baselineCache = [];
+
+async function baselinePromoteSelected() {
+  const picked = $$(".baseline-pick")
+    .filter(cb => cb.checked)
+    .map(cb => _baselineCache[Number(cb.dataset.i)])
+    .filter(Boolean)
+    .map(d => ({ kind: d.kind, device_id: d.device_id, note: "baseline scan" }));
+  if (!picked.length) {
+    alert("Nothing selected.");
+    return;
+  }
+  const btn = $("#baseline-promote");
+  btn.disabled = true;
+  try {
+    const r = await api("/api/scan/baseline/promote", {
+      method: "POST",
+      body: JSON.stringify({ entries: picked }),
+    });
+    closeModal();
+    alert(`Added ${r.added} entr${r.added === 1 ? "y" : "ies"} to the whitelist.`);
+    await refreshWhitelist();
+    await refreshDevices();
+  } catch (e) {
+    alert("Whitelist failed: " + e.message);
+    btn.disabled = false;
+  }
+}
 
 function applyMapView(latlng) {
   // Called every GPS poll (and on toggle clicks). All branches are no-ops

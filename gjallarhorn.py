@@ -927,6 +927,204 @@ async def api_clear_all_latches():
     return {"ok": True, "cleared": n}
 
 
+# ── Baseline scan ──────────────────────────────────────────────────────
+# One-shot "what's around me right now" scan that aggregates a few wifi
+# scan iterations + an extended bluetooth scan into a temporary device
+# list. Operators run this once they're somewhere safe to capture every
+# nearby device as known-good, then selectively promote entries to the
+# permanent whitelist.
+_baseline_state: dict = {
+    "running": False,
+    "stage_n": 0,
+    "stage_total": 0,
+    "stage_label": "",
+    "device_count": 0,
+    "started_at": None,
+    "finished_at": None,
+    "result": None,       # list[dict] when ready
+    "error": None,
+    "rssi_floor": None,
+}
+
+
+async def _run_baseline_scan(rssi_floor: int, wifi_iterations: int = 3,
+                             bt_duration_s: float = 15.0) -> None:
+    """Background task: bursts the wifi/BT scanners harder than the
+    standard cadence and merges everything into _baseline_state['result'].
+    Caller picks the rssi_floor; usually the user's configured min_rssi
+    or a tighter override."""
+    from services.wifi_scanner import scan_wifi, pick_wifi_interface
+    from services.bluetooth_scanner import scan_bluetooth
+
+    settings = await settings_store.load()
+    iface = settings.wifi_interface
+    if iface == "auto":
+        iface = await pick_wifi_interface()
+
+    # Stage count: 1 init + N wifi iterations + 1 BT scan + 1 finalize.
+    total = 2 + (wifi_iterations if iface else 0)
+    _baseline_state["stage_total"] = total
+    _baseline_state["stage_n"] = 0
+
+    def _step(label: str) -> None:
+        _baseline_state["stage_n"] = min(total, _baseline_state["stage_n"] + 1)
+        _baseline_state["stage_label"] = label
+        log.info("baseline: %s (%d/%d)",
+                 label, _baseline_state["stage_n"], total)
+
+    found: dict[tuple[str, str], dict] = {}
+
+    def _keep(kind: str, device_id: str, rssi: int, name: str, vendor: str,
+              details: dict) -> None:
+        device_id = (device_id or "").lower()
+        if rssi < rssi_floor:
+            return
+        key = (kind, device_id)
+        prev = found.get(key)
+        if prev is None or rssi > prev["rssi"]:
+            tracker = db.classify_tracker(kind, details)
+            found[key] = {
+                "kind": kind, "device_id": device_id, "rssi": rssi,
+                "name": name or "", "vendor": vendor or "",
+                "tracker_type": tracker, "details": details,
+            }
+        _baseline_state["device_count"] = len(found)
+
+    _step("Initializing")
+
+    try:
+        # ── WiFi bursts ──────────────────────────────────────────────
+        if iface:
+            for i in range(wifi_iterations):
+                _step(f"WiFi scan {i + 1} of {wifi_iterations} ({iface})")
+                try:
+                    devs = await scan_wifi(iface)
+                except Exception as e:
+                    log.warning("baseline wifi iter %d failed: %s", i + 1, e)
+                    continue
+                for d in devs:
+                    _keep(
+                        "wifi", d.bssid, d.rssi,
+                        d.ssid or "", d.vendor or "",
+                        d.model_dump(mode="json"),
+                    )
+                if i < wifi_iterations - 1:
+                    await asyncio.sleep(1.5)
+
+        # ── Bluetooth extended scan ──────────────────────────────────
+        _step(f"Bluetooth scan ({int(bt_duration_s)}s)")
+        try:
+            devs = await scan_bluetooth(settings.bluetooth_adapter, bt_duration_s)
+        except Exception as e:
+            log.warning("baseline bt scan failed: %s", e)
+            devs = []
+        for d in devs:
+            if settings.hide_random_bt_addresses and d.address_type == "random":
+                continue
+            _keep(
+                "bluetooth", d.address, d.rssi,
+                d.name or "", d.vendor or "",
+                d.model_dump(mode="json"),
+            )
+
+        _step("Finalizing")
+        # Sort strongest first so the UI's default order is "closest".
+        _baseline_state["result"] = sorted(
+            found.values(), key=lambda x: -int(x.get("rssi") or -999),
+        )
+    except Exception as e:
+        log.exception("baseline scan failed")
+        _baseline_state["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        _baseline_state["running"] = False
+        _baseline_state["finished_at"] = time.time()
+        _baseline_state["stage_label"] = (
+            "Done" if _baseline_state["error"] is None else "Failed"
+        )
+
+
+@app.post("/api/scan/baseline/start")
+async def api_baseline_start(rssi_floor: Optional[int] = None):
+    """Kick off a baseline scan. `rssi_floor` defaults to the configured
+    min_rssi; pass a stricter value (e.g. -65) to limit the capture to
+    very close devices only."""
+    if _baseline_state["running"]:
+        raise HTTPException(409, "a baseline scan is already running")
+    settings = await settings_store.load()
+    floor = rssi_floor if rssi_floor is not None else settings.min_rssi
+    _baseline_state.update({
+        "running": True,
+        "stage_n": 0,
+        "stage_total": 0,
+        "stage_label": "Queued",
+        "device_count": 0,
+        "started_at": time.time(),
+        "finished_at": None,
+        "result": None,
+        "error": None,
+        "rssi_floor": floor,
+    })
+    log.info("baseline: start (rssi_floor=%d dBm)", floor)
+    asyncio.create_task(_run_baseline_scan(rssi_floor=floor))
+    return {"ok": True}
+
+
+@app.get("/api/scan/baseline/status")
+async def api_baseline_status():
+    """Snapshot of the in-flight or last baseline-scan job."""
+    return {
+        "running": _baseline_state["running"],
+        "stage_n": _baseline_state["stage_n"],
+        "stage_total": _baseline_state["stage_total"],
+        "stage_label": _baseline_state["stage_label"],
+        "device_count": _baseline_state["device_count"],
+        "started_at": _baseline_state["started_at"],
+        "finished_at": _baseline_state["finished_at"],
+        "ready": _baseline_state["result"] is not None and not _baseline_state["running"],
+        "error": _baseline_state["error"],
+        "rssi_floor": _baseline_state["rssi_floor"],
+    }
+
+
+@app.get("/api/scan/baseline/result")
+async def api_baseline_result():
+    """Captured device list from the last completed scan."""
+    if _baseline_state["error"]:
+        raise HTTPException(500, _baseline_state["error"])
+    if _baseline_state["result"] is None:
+        raise HTTPException(404, "no baseline result — start a scan first")
+    if _baseline_state["running"]:
+        raise HTTPException(409, "baseline scan still running")
+    return {"devices": _baseline_state["result"]}
+
+
+@app.post("/api/scan/baseline/promote")
+async def api_baseline_promote(payload: dict):
+    """Add a list of (kind, device_id) pairs from the baseline result
+    into the permanent whitelist. Body: {entries: [{kind, device_id,
+    note?}, ...]}. Returns count of new entries added (upserts skip
+    duplicates silently)."""
+    entries = payload.get("entries") or []
+    if not isinstance(entries, list) or not entries:
+        raise HTTPException(400, "entries must be a non-empty list")
+    added = 0
+    for e in entries:
+        kind = e.get("kind")
+        device_id = (e.get("device_id") or "").strip().lower()
+        note = (e.get("note") or "baseline scan").strip() or "baseline scan"
+        if kind not in ALLOWED_KINDS or kind is None or not device_id:
+            continue
+        try:
+            await db.add_whitelist(kind, device_id, note)
+            added += 1
+        except Exception as ex:
+            log.warning("baseline promote failed for %s/%s: %s",
+                        kind, device_id, ex)
+    if added:
+        await alert_service.reload()
+    return {"ok": True, "added": added}
+
+
 # ---------- Manual control ----------
 @app.post("/api/locations/new")
 async def api_force_new_location():

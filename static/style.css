@@ -1007,6 +1007,27 @@ select option:disabled { color: var(--muted); }
 .timeline-locs th { font-size: 10px; }
 .timeline-locs td { padding: 4px 8px; }
 
+/* Baseline-scan modal contents. */
+.baseline-progress {
+  display: flex; flex-direction: column; gap: 10px;
+  align-items: stretch;
+  padding: 12px 0;
+}
+.baseline-progress progress { width: 100%; height: 10px; }
+.baseline-toolbar {
+  display: flex; gap: 8px; align-items: center; margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.baseline-toolbar .secondary { padding: 4px 10px; font-size: 12px; }
+.baseline-list {
+  max-height: 55vh; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.baseline-list table { width: 100%; font-size: 11.5px; }
+.baseline-list th { position: sticky; top: 0; }
+.baseline-list td { padding: 4px 8px; vertical-align: middle; }
+.baseline-list input[type="checkbox"] { transform: scale(1.1); cursor: pointer; }
+
 /* Devices tab: whitelist toggle and row marker. */
 .dev-wl { padding: 4px 8px; font-size: 14px; line-height: 1; }
 .dev-wl.active { color: var(--accent); border-color: var(--accent); }
