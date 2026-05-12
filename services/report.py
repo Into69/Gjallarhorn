@@ -70,10 +70,13 @@ async def _render_map_image(
     width_px: int = 900,
     height_px: int = 540,
     zoom: int | None = None,
+    target_inches: float = 6.5,
 ) -> Image | Paragraph:
     """Render an OSM map for the given points using the cached tile store.
-    Falls back to a text placeholder if the renderer raises — a missing
-    map shouldn't break a whole report."""
+    `target_inches` is the on-page width — defaults to the full body width
+    of ~6.5", pass a smaller value (e.g. 4.0) for mini-maps that share a
+    page with other content. Falls back to a text placeholder if the
+    renderer raises — a missing map shouldn't break a whole report."""
     styles = _styles()
     if not points:
         return Paragraph("<i>No locations to plot.</i>", styles["caption"])
@@ -82,8 +85,7 @@ async def _render_map_image(
             points, width_px=width_px, height_px=height_px, zoom=zoom,
         )
         buf = io.BytesIO(png_bytes)
-        # scale to ~6.5 inches wide, preserving aspect
-        target_w = 6.5 * inch
+        target_w = target_inches * inch
         scale = target_w / width_px
         return Image(buf, width=target_w, height=height_px * scale)
     except Exception as e:
@@ -287,16 +289,13 @@ def _summary_blurb(locations: list[dict], common: list[dict]) -> str:
     )
 
 
-def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dict]],
-                      common: list[dict]) -> list[str]:
-    """Generate up to ~5 bullet-points highlighting noteworthy patterns.
-    Cheap derivations only — no extra DB calls."""
-    out: list[str] = []
+def _most_active_location(locations: list[dict]) -> dict | None:
+    """Pick the location with the highest combined unique-device count
+    (wifi + bluetooth + wifi_client). Returns None when no locations have
+    any devices yet."""
     if not locations:
-        return out
-
-    # Most active location (highest device count or fix_count)
-    by_devices = sorted(
+        return None
+    ranked = sorted(
         locations,
         key=lambda l: (
             (l.get("wifi_count") or 0)
@@ -305,13 +304,30 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
         ),
         reverse=True,
     )
-    top_loc = by_devices[0]
-    top_loc_total = (
-        (top_loc.get("wifi_count") or 0)
-        + (top_loc.get("bt_count") or 0)
-        + (top_loc.get("wifi_client_count") or 0)
-    )
-    if top_loc_total > 0:
+    top = ranked[0]
+    if ((top.get("wifi_count") or 0)
+            + (top.get("bt_count") or 0)
+            + (top.get("wifi_client_count") or 0)) == 0:
+        return None
+    return top
+
+
+def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dict]],
+                      common: list[dict]) -> list[str]:
+    """Generate up to ~5 bullet-points highlighting noteworthy patterns.
+    Cheap derivations only — no extra DB calls."""
+    out: list[str] = []
+    if not locations:
+        return out
+
+    # Most active location (highest combined unique-device count)
+    top_loc = _most_active_location(locations)
+    if top_loc is not None:
+        top_loc_total = (
+            (top_loc.get("wifi_count") or 0)
+            + (top_loc.get("bt_count") or 0)
+            + (top_loc.get("wifi_client_count") or 0)
+        )
         label = top_loc.get("label") or f"Loc {top_loc['id']}"
         out.append(
             f"<b>Most active location:</b> {label} — {top_loc_total} unique devices."
@@ -574,6 +590,23 @@ async def build_report_pdf(*, group_bssids: bool = True,
     if findings:
         for line in findings:
             flow.append(Paragraph(f"• {line}", s["body"]))
+
+    # Visual companion to the "Most active location" finding — a small
+    # mini-map zoomed in on that location. Falls back silently if the
+    # location has no coords or the tile renderer fails.
+    top_loc = _most_active_location(locations)
+    if top_loc is not None and top_loc.get("lat") is not None and top_loc.get("lon") is not None:
+        flow.append(Spacer(1, 8))
+        loc_label = top_loc.get("label") or f"Loc {top_loc['id']}"
+        flow.append(Paragraph(
+            f"<i>Most active location: <b>{_h(loc_label)}</b></i>",
+            s["caption"],
+        ))
+        flow.append(await _render_map_image(
+            [(top_loc["lat"], top_loc["lon"], "#ff6b6b")],
+            width_px=560, height_px=320, zoom=16,
+            target_inches=4.0,
+        ))
     flow.append(Spacer(1, 16))
 
     _step("Picking suspected followers")
