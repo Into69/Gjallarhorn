@@ -26,7 +26,9 @@ from services.map_cache import render_map as _render_map_png
 log = logging.getLogger(__name__)
 
 # How many follower / cross-location entries to include in the report.
-_MAX_COMMON_DEVICES = 60
+# Keep this tight — the report's role is to surface signal, not to mirror
+# the Devices tab. Long tail is still visible in the UI.
+_MAX_COMMON_DEVICES = 20
 # Per-cell caps — ReportLab can't split a single cell across pages, so a
 # cell with too much wrapped text crashes the layout. Keep these tight.
 _MAX_LOCS_PER_CELL = 12        # comma-separated location IDs per cell
