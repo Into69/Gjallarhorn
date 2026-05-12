@@ -1028,10 +1028,20 @@ async def _run_baseline_scan(rssi_floor: int, wifi_iterations: int = 3,
             )
 
         _step("Finalizing")
+        # Drop devices that are already on the whitelist — no point making
+        # the user re-promote things they've already approved. Match rule
+        # mirrors AlertService.is_whitelisted (exact id or OUI prefix).
+        wl_rows = await db.list_whitelist()
+        wl = [(r["kind"], (r["device_id"] or "").lower()) for r in wl_rows]
+        kept = [
+            d for d in found.values()
+            if not db._match_whitelist(wl, d["kind"], d["device_id"])
+        ]
         # Sort strongest first so the UI's default order is "closest".
         _baseline_state["result"] = sorted(
-            found.values(), key=lambda x: -int(x.get("rssi") or -999),
+            kept, key=lambda x: -int(x.get("rssi") or -999),
         )
+        _baseline_state["device_count"] = len(kept)
     except Exception as e:
         log.exception("baseline scan failed")
         _baseline_state["error"] = f"{type(e).__name__}: {e}"
