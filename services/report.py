@@ -359,13 +359,127 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
     return out
 
 
+def _top_followers(common: list[dict], *, top_n: int,
+                   n_total_locations: int) -> list[dict]:
+    """Pick the most-traveled devices from the common-devices list for
+    the headline "Looks like you were followed by…" section. Sorted by
+    fraction of total locations (then by total observations as the
+    tiebreaker). Returns at most top_n entries; skipped entirely when
+    nothing was observed at >= 2 locations."""
+    if not common:
+        return []
+    out = sorted(
+        common,
+        key=lambda d: (
+            -(d.get("n_locations") or 0),
+            -(d.get("total_seen") or 0),
+        ),
+    )[:top_n]
+    for d in out:
+        n_locs = int(d.get("n_locations") or 0)
+        d["_coverage_pct"] = (
+            int(round(100 * n_locs / n_total_locations))
+            if n_total_locations else 0
+        )
+    return out
+
+
+def _render_suspect(sus: dict, s: dict, *, total_locations: int):
+    """Build a Paragraph block describing one "suspected follower" for
+    the headline section. Pulls every available signal (kind, name,
+    vendor, tracker class, RSSI, observation count, BLE-signature
+    aliases) into a compact multi-line callout."""
+    det = sus.get("details") or {}
+    merged_count = sus.get("_merged_count") or 1
+    members = sus.get("_members") or []
+    kind_label = {
+        "wifi": "Wi-Fi AP",
+        "bluetooth": "Bluetooth",
+        "wifi_client": "Wi-Fi client",
+    }.get(sus.get("kind", ""), sus.get("kind", "") or "device")
+    name = det.get("ssid") or det.get("name") or ""
+    vendor = det.get("vendor") or ""
+    n_locs = sus.get("n_locations") or 0
+    total_seen = sus.get("total_seen") or 0
+    max_rssi = sus.get("max_rssi")
+    pct = sus.get("_coverage_pct") or 0
+    locs = ", ".join(str(x) for x in (sus.get("locations") or [])[:_MAX_LOCS_PER_CELL])
+    if (sus.get("locations") or []) and len(sus["locations"]) > _MAX_LOCS_PER_CELL:
+        locs += f", +{len(sus['locations']) - _MAX_LOCS_PER_CELL} more"
+    tracker = db.classify_tracker(sus.get("kind", ""), det) if hasattr(db, "classify_tracker") else None
+    tracker_label = {
+        "airtag": "AirTag / FindMy",
+        "tile": "Tile",
+        "samsung_smarttag": "Samsung SmartTag",
+    }.get(tracker) if tracker else None
+
+    # Headline line: device id + kind + (tracker class | name | vendor)
+    bits = [f"<b><font face='Courier'>{_h(sus.get('device_id', ''))}</font></b>"]
+    if merged_count > 1:
+        bits.append(f"<font color='#52607a'>(+{merged_count - 1} merged BSSID)</font>")
+    bits.append(f"<font color='#52607a'>· {kind_label}</font>")
+    if name:
+        bits.append(f"— {_h(name)}")
+    if vendor:
+        bits.append(f"<font color='#52607a'>({_h(vendor)})</font>")
+    if tracker_label:
+        bits.append(f"<b><font color='#cc2a2a'>⚠ {tracker_label}</font></b>")
+    headline = " ".join(bits)
+
+    # Stats line: coverage, total observations, RSSI
+    stats_bits = [
+        f"<b>{n_locs}</b> of {total_locations} locations ({pct}% coverage)",
+        f"<b>{total_seen}</b> observations",
+    ]
+    if max_rssi is not None:
+        stats_bits.append(f"best RSSI <b>{max_rssi} dBm</b>")
+    stats = " · ".join(stats_bits)
+
+    where_line = f"<font color='#52607a'>Seen at locations:</font> {_h(locs)}" if locs else ""
+
+    aliases_line = ""
+    if merged_count > 1 and members:
+        shown = members[:6]
+        more = len(members) - len(shown)
+        alias_txt = ", ".join(f"<font face='Courier'>{_h(m)}</font>" for m in shown)
+        if more > 0:
+            alias_txt += f" (+{more} more)"
+        aliases_line = f"<font color='#52607a'>Likely aliases:</font> {alias_txt}"
+
+    parts = [headline, stats]
+    if where_line:
+        parts.append(where_line)
+    if aliases_line:
+        parts.append(aliases_line)
+    body = "<br/>".join(parts)
+
+    style = ParagraphStyle(
+        "suspect", parent=s["body"],
+        fontSize=10, leading=13,
+        leftIndent=8, rightIndent=8,
+        spaceBefore=6, spaceAfter=6,
+        borderColor=colors.HexColor("#cca56a"),
+        borderWidth=0.6, borderPadding=8,
+        backColor=colors.HexColor("#fff6e8"),
+    )
+    return Paragraph(body, style)
+
+
+def _h(s_in) -> str:
+    """Escape for reportlab Paragraph HTML-ish markup."""
+    return (str(s_in or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
 async def build_report_pdf(*, group_bssids: bool = True,
                            progress=None) -> bytes:
     # Stage tracker — each `_step()` updates the caller's progress hook
     # AND emits an info log so the same trace lands in the Logs tab.
     # _STAGE_TOTAL is a moving target (we know roughly how many milestones
     # we'll hit; finer-grained ones bump it up).
-    STAGE_TOTAL = 9
+    STAGE_TOTAL = 10
     state = {"n": 0}
     def _step(label: str, *, weight: int = 1) -> None:
         state["n"] += weight
@@ -459,6 +573,26 @@ async def build_report_pdf(*, group_bssids: bool = True,
         for line in findings:
             flow.append(Paragraph(f"• {line}", s["body"]))
     flow.append(Spacer(1, 16))
+
+    _step("Picking suspected followers")
+    # ── "Looks like you were followed by…" callout ──
+    # Headline-style section that calls out the most-traveled devices
+    # *before* the data tables. Surfaces the answer to the question most
+    # operators are actually asking when they generate this report.
+    suspects = _top_followers(common, top_n=5, n_total_locations=len(locations))
+    if suspects:
+        flow.append(Paragraph("Looks like you were followed by…", s["h1"]))
+        flow.append(Paragraph(
+            "Devices that appeared at the largest fraction of your sensor "
+            "locations. BLE rotating-MAC siblings (devices sharing an "
+            "advertising-data fingerprint) are listed under "
+            "<b>likely aliases</b> so a tracker that cycles its address "
+            "still reads as one suspect, not several.",
+            s["caption"],
+        ))
+        for sus in suspects:
+            flow.append(_render_suspect(sus, s, total_locations=len(locations)))
+        flow.append(Spacer(1, 16))
 
     _step("Rendering overview map")
     # ── Overview map ──
