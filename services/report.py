@@ -479,7 +479,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
     # AND emits an info log so the same trace lands in the Logs tab.
     # _STAGE_TOTAL is a moving target (we know roughly how many milestones
     # we'll hit; finer-grained ones bump it up).
-    STAGE_TOTAL = 10
+    STAGE_TOTAL = 10  # one per _step() call below; keep in sync if adding/removing stages
     state = {"n": 0}
     def _step(label: str, *, weight: int = 1) -> None:
         state["n"] += weight
@@ -742,86 +742,8 @@ async def build_report_pdf(*, group_bssids: bool = True,
                          0.85 * inch, 0.40 * inch, 0.55 * inch, 2.45 * inch],
         ))
 
-    _step("Rendering alert sections")
-    # ── Recent alert events ──
-    flow.append(PageBreak())
-    flow.append(Paragraph("Recent alert events", s["h1"]))
-    events = await db.list_alert_events(limit=100)
-    # Drop events for whitelisted devices — the rule fired before the user
-    # whitelisted the device, but they're not actionable history any more.
-    events = [
-        e for e in events
-        if not is_wl(e.get("device_kind", ""), e.get("device_id", ""))
-    ]
-    if not events:
-        flow.append(Paragraph(
-            "<i>No alert events recorded.</i>", s["caption"],
-        ))
-    else:
-        flow.append(Paragraph(
-            f"{len(events)} most recent matches across all enabled rules. "
-            "Whitelisted devices' historical alerts are excluded.",
-            s["caption"],
-        ))
-        ev_rows = []
-        for e in events:
-            det = e.get("details") or {}
-            name = det.get("ssid") or det.get("name") or ""
-            ev_rows.append((
-                _cell(e.get("rule_name") or f"rule {e.get('rule_id')}"),
-                e.get("device_kind", ""),
-                _cell(e.get("device_id", ""), mono=True),
-                _cell(name),
-                f"{e['rssi']} dBm" if e.get("rssi") is not None else "",
-                str(e.get("location_id") or "—"),
-                _fmt_time(e.get("triggered_at")),
-            ))
-        flow.append(_table(
-            ["Rule", "Kind", "Device ID", "Name / SSID", "RSSI", "Loc", "When"],
-            ev_rows,
-            col_widths=[1.30 * inch, 0.55 * inch, 1.30 * inch, 1.40 * inch,
-                         0.70 * inch, 0.45 * inch, 1.40 * inch],
-        ))
-
-    # ── Active alert rules ──
-    flow.append(Spacer(1, 14))
-    flow.append(Paragraph("Alert rules", s["h1"]))
-    rules = await db.alert_event_counts_per_rule()
-    if not rules:
-        flow.append(Paragraph(
-            "<i>No alert rules configured.</i>", s["caption"],
-        ))
-    else:
-        flow.append(Paragraph(
-            "Configured rules with their lifetime fire counts. Rules that "
-            "haven't fired may be over-specific, scoped to a location the "
-            "sensor hasn't visited, or simply waiting for the right device.",
-            s["caption"],
-        ))
-        rule_rows = []
-        for r in rules:
-            loc = r.get("location_id")
-            loc_label = (
-                "any" if loc is None
-                else "active" if loc == -1
-                else f"#{loc}"
-            )
-            rule_rows.append((
-                "✓" if r.get("enabled") else "—",
-                _cell(r.get("name") or ""),
-                r.get("kind") or "any",
-                r.get("match_type") or "",
-                _cell(r.get("match_value") or "", mono=True),
-                loc_label,
-                str(r.get("fires") or 0),
-                _fmt_time(r.get("last_fired")),
-            ))
-        flow.append(_table(
-            ["On", "Name", "Kind", "Match", "Value", "Loc", "Fires", "Last fired"],
-            rule_rows,
-            col_widths=[0.30 * inch, 1.55 * inch, 0.55 * inch, 1.05 * inch,
-                         1.30 * inch, 0.50 * inch, 0.50 * inch, 1.35 * inch],
-        ))
+    # Recent alert events + Alert rules sections were removed — the report
+    # focuses on followers/recurrence; live alert state belongs in the UI.
 
     _step("Building PDF document")
     buf = io.BytesIO()
