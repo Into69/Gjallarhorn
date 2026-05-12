@@ -826,10 +826,14 @@ $("#loc-delete-all").addEventListener("click", async () => {
   try {
     const res = await api("/api/locations", { method: "DELETE" });
     const d = res.deleted || {};
-    alert(`Deleted ${d.locations || 0} locations, ${d.devices || 0} devices, ${d.observations || 0} observations.`);
+    const extra = d.temp_whitelist_cleared
+      ? ` ${d.temp_whitelist_cleared} temporary whitelist entr${d.temp_whitelist_cleared === 1 ? "y" : "ies"} cleared.`
+      : "";
+    alert(`Deleted ${d.locations || 0} locations, ${d.devices || 0} devices, ${d.observations || 0} observations.` + extra);
     await refreshLocations();
     await refreshLocationMarkers();
     await loadLocationOptions();
+    await refreshTempWhitelist();
   } catch (e) {
     alert("Delete failed: " + e.message);
   } finally {
@@ -2218,6 +2222,68 @@ function buildWhitelistMatcher(entries) {
 }
 let isWhitelisted = (_k, _d) => false;
 
+async function refreshTempWhitelist() {
+  const panel = $("#wl-temp-panel");
+  const tbody = $("#wl-temp-table tbody");
+  if (!panel || !tbody) return;
+  try {
+    const r = await api("/api/whitelist/temp");
+    const entries = r.entries || [];
+    if (!entries.length) {
+      panel.hidden = true;
+      tbody.innerHTML = "";
+      return;
+    }
+    panel.hidden = false;
+    tbody.innerHTML = entries.map(e => `
+      <tr>
+        <td>${escapeHtml(e.kind)}</td>
+        <td class="mono">${escapeHtml(e.device_id)}</td>
+        <td>${escapeHtml(e.note || "")}</td>
+        <td class="mono">${escapeHtml(formatTime(e.created_at))}</td>
+        <td class="row-actions">
+          <button type="button" class="icon-btn wl-temp-promote" data-kind="${escapeAttr(e.kind)}" data-id="${escapeAttr(e.device_id)}" title="Promote to permanent whitelist" aria-label="Promote">★</button>
+          <button type="button" class="icon-btn danger wl-temp-remove" data-kind="${escapeAttr(e.kind)}" data-id="${escapeAttr(e.device_id)}" title="Un-silence (future matches will fire alerts again)" aria-label="Remove">×</button>
+        </td>
+      </tr>
+    `).join("");
+    $$(".wl-temp-promote").forEach(b => b.addEventListener("click", async () => {
+      await api("/api/whitelist/temp/promote", {
+        method: "POST",
+        body: JSON.stringify({
+          kind: b.dataset.kind,
+          device_id: b.dataset.id,
+          note: "promoted from baseline",
+        }),
+      });
+      await refreshWhitelist();
+      await refreshTempWhitelist();
+    }));
+    $$(".wl-temp-remove").forEach(b => b.addEventListener("click", async () => {
+      if (!confirm(`Un-silence ${b.dataset.kind} ${b.dataset.id}? Future alerts will fire again on this device.`)) return;
+      await api("/api/whitelist/temp", {
+        method: "DELETE",
+        body: JSON.stringify({ kind: b.dataset.kind, device_id: b.dataset.id }),
+      });
+      await refreshTempWhitelist();
+      await refreshDevices();
+    }));
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" class="muted">error: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+$("#wl-temp-clear")?.addEventListener("click", async () => {
+  if (!confirm("Clear every temporarily-silenced device?\n\nFuture matches will trigger alerts on them again until you re-baseline or whitelist.")) return;
+  try {
+    await api("/api/whitelist/temp", { method: "DELETE" });
+    await refreshTempWhitelist();
+    await refreshDevices();
+  } catch (e) {
+    alert("Clear failed: " + e.message);
+  }
+});
+
 async function refreshWhitelist() {
   const tbody = $("#wl-table tbody");
   if (!tbody) return;
@@ -2869,13 +2935,18 @@ function renderBaselineResult(devices) {
       </tr>`;
   }).join("");
   $("#modal-body").innerHTML = `
-    <p class="muted">Sorted by signal strength. Uncheck anything you don't want whitelisted. Whitelisted devices are excluded from PDF reports and never trigger alerts.</p>
+    <p class="muted">
+      Sorted by signal strength. <b>Checked</b> entries go to your permanent
+      whitelist. <b>Unchecked</b> entries are silenced in the temporary
+      whitelist — they won't trigger alerts but get wiped if you ever press
+      "Delete all locations" on the Locations tab.
+    </p>
     <div class="baseline-toolbar">
       <button type="button" id="baseline-select-all" class="secondary">Select all</button>
       <button type="button" id="baseline-select-none" class="secondary">Select none</button>
       <button type="button" id="baseline-only-trackers" class="secondary" title="Trackers only — AirTag, Tile, Samsung SmartTag">Only trackers</button>
       <span class="toolbar-spacer"></span>
-      <button type="button" id="baseline-promote">Add to whitelist</button>
+      <button type="button" id="baseline-promote">Apply</button>
     </div>
     <div class="baseline-list">
       <table>
@@ -2913,10 +2984,6 @@ async function baselinePromoteSelected() {
     .map(cb => _baselineCache[Number(cb.dataset.i)])
     .filter(Boolean)
     .map(d => ({ kind: d.kind, device_id: d.device_id, note: "baseline scan" }));
-  if (!picked.length) {
-    alert("Nothing selected.");
-    return;
-  }
   const btn = $("#baseline-promote");
   btn.disabled = true;
   try {
@@ -2925,11 +2992,15 @@ async function baselinePromoteSelected() {
       body: JSON.stringify({ entries: picked }),
     });
     closeModal();
-    alert(`Added ${r.added} entr${r.added === 1 ? "y" : "ies"} to the whitelist.`);
+    const bits = [];
+    if (r.added) bits.push(`${r.added} added to permanent whitelist`);
+    if (r.silenced) bits.push(`${r.silenced} silenced (temporary)`);
+    alert(bits.length ? bits.join(" · ") : "Nothing to apply.");
     await refreshWhitelist();
+    await refreshTempWhitelist();
     await refreshDevices();
   } catch (e) {
-    alert("Whitelist failed: " + e.message);
+    alert("Whitelist apply failed: " + e.message);
     btn.disabled = false;
   }
 }
@@ -3241,6 +3312,7 @@ function formatTime(iso) {
   setInterval(refreshPauseStatus, 15000);
   setupMapToggleIcons();
   refreshWhitelist();
+  refreshTempWhitelist();
   startLogsPolling();
   setInterval(pollGps, 1500);
   setInterval(refreshLocationMarkers, 5000);

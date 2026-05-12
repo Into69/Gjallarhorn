@@ -111,6 +111,19 @@ CREATE TABLE IF NOT EXISTS device_whitelist (
     UNIQUE(kind, device_id)
 );
 
+-- Session-scoped whitelist: matches the permanent table at runtime but is
+-- wiped wholesale by "Delete all locations". Used by the baseline-scan
+-- modal — every device the user doesn't promote to permanent lands here,
+-- silencing it until the operator resets their location set.
+CREATE TABLE IF NOT EXISTS device_temp_whitelist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(kind, device_id)
+);
+
 -- Whitelisted devices' sightings get copied here before the parent
 -- sensor_location is deleted, so the historic record survives. Same
 -- shape as `devices` minus the location FK; combined on collisions
@@ -403,11 +416,16 @@ def _match_whitelist(wl: list[tuple[str, str]], kind: str, device_id: str) -> bo
 
 async def _preserve_whitelisted_devices(db, location_ids: list[int]) -> int:
     """Copy whitelisted devices in `location_ids` into preserved_devices,
-    combining stats on collision. Caller owns the transaction.
+    combining stats on collision. Caller owns the transaction. Honors
+    BOTH the permanent and temporary whitelists — temp-whitelisted
+    devices behave like permanent for the lifetime of their entry.
     Returns the number of device rows preserved."""
     if not location_ids:
         return 0
-    async with db.execute("SELECT kind, device_id FROM device_whitelist") as cur:
+    async with db.execute(
+        "SELECT kind, device_id FROM device_whitelist "
+        "UNION SELECT kind, device_id FROM device_temp_whitelist"
+    ) as cur:
         wl = [(r[0], (r[1] or "").lower()) for r in await cur.fetchall()]
     if not wl:
         return 0
@@ -773,7 +791,10 @@ async def auto_merge_contained(*, max_iterations: int = 1000) -> dict:
 
 async def delete_all_locations() -> dict:
     """Delete every sensor location and all associated devices/observations.
-    Whitelisted devices get archived into preserved_devices first.
+    Whitelisted devices get archived into preserved_devices first. Also
+    wipes the temporary whitelist — the baseline-scan temp entries are
+    session-scoped to the current location set, so a full reset clears
+    them too.
     Returns the row counts that were removed."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT COUNT(*) FROM sensor_locations") as cur:
@@ -785,9 +806,12 @@ async def delete_all_locations() -> dict:
         async with db.execute("SELECT id FROM sensor_locations") as cur:
             all_ids = [r[0] for r in await cur.fetchall()]
         n_preserved = await _preserve_whitelisted_devices(db, all_ids)
+        async with db.execute("SELECT COUNT(*) FROM device_temp_whitelist") as cur:
+            n_temp = (await cur.fetchone())[0]
         await db.execute("DELETE FROM observations")
         await db.execute("DELETE FROM devices")
         await db.execute("DELETE FROM sensor_locations")
+        await db.execute("DELETE FROM device_temp_whitelist")
         # Reset AUTOINCREMENT counters so new ids start from 1
         await db.execute(
             "DELETE FROM sqlite_sequence WHERE name IN ('sensor_locations','observations')"
@@ -795,7 +819,7 @@ async def delete_all_locations() -> dict:
         await db.commit()
     return {
         "locations": n_loc, "devices": n_dev, "observations": n_obs,
-        "preserved": n_preserved,
+        "preserved": n_preserved, "temp_whitelist_cleared": n_temp,
     }
 
 
@@ -1581,6 +1605,70 @@ async def update_whitelist(entry_id: int, kind: str, device_id: str,
         )
         await db.commit()
         return True
+
+
+async def list_temp_whitelist() -> list[dict]:
+    """Session-scoped whitelist (baseline-scan auto-populated)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM device_temp_whitelist ORDER BY kind, device_id"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def add_temp_whitelist(kind: str, device_id: str,
+                             note: str | None = None) -> int:
+    """Upsert into the temporary whitelist. Same UNIQUE rule as the
+    permanent table — repeated calls with the same (kind, device_id)
+    update the note instead of duplicating."""
+    now = datetime.now().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO device_temp_whitelist(kind, device_id, note, created_at) "
+            "VALUES(?,?,?,?) "
+            "ON CONFLICT(kind, device_id) DO UPDATE SET note=excluded.note",
+            (kind, device_id.lower(), note, now),
+        )
+        await db.commit()
+        async with db.execute(
+            "SELECT id FROM device_temp_whitelist WHERE kind=? AND device_id=?",
+            (kind, device_id.lower()),
+        ) as cur:
+            row = await cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+async def delete_temp_whitelist_pair(kind: str, device_id: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM device_temp_whitelist WHERE kind=? AND device_id=?",
+            (kind, (device_id or "").lower()),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def clear_temp_whitelist() -> int:
+    """Wipe the temporary whitelist. Called from delete_all_locations."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM device_temp_whitelist")
+        await db.commit()
+        return cur.rowcount or 0
+
+
+async def list_whitelist_combined() -> list[dict]:
+    """Permanent + temporary whitelist rows merged. Used by alert and
+    report matchers so temp entries silence devices the same as permanent
+    ones. Each row carries a `source` field of 'permanent' or 'temp' so
+    downstream code can render them differently if desired."""
+    perm = await list_whitelist()
+    for r in perm:
+        r["source"] = "permanent"
+    temp = await list_temp_whitelist()
+    for r in temp:
+        r["source"] = "temp"
+    return perm + temp
 
 
 async def delete_whitelist(entry_id: int) -> bool:

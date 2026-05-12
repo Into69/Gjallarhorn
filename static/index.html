@@ -623,6 +623,27 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
         </table>
       </fieldset>
 
+      <fieldset id="wl-temp-panel" hidden>
+        <legend>Silenced (temporary)</legend>
+        <p class="muted">
+          Devices captured by a baseline scan that weren't promoted to the
+          permanent whitelist. Treated as whitelisted (no alerts, excluded
+          from reports) but wiped when <b>Delete all locations</b> is pressed.
+          Promote (★) moves an entry to the permanent whitelist; remove (×)
+          un-silences the device so future matches fire again.
+        </p>
+        <table id="wl-temp-table">
+          <thead>
+            <tr><th>Kind</th><th>Device id</th><th>Note</th><th>Added</th><th></th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div class="toolbar">
+          <button type="button" id="wl-temp-clear" class="danger">Clear all silenced</button>
+          <span id="wl-temp-status" class="muted"></span>
+        </div>
+      </fieldset>
+
       <fieldset id="oui-panel">
         <legend>OUI / vendor database</legend>
         <p class="muted">Downloads IEEE registries (MA-L, MA-M, MA-S) and resolves WiFi BSSIDs and Bluetooth MACs to vendor names. A scheduled agent refreshes this monthly.</p>

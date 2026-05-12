@@ -1108,31 +1108,102 @@ async def api_baseline_result():
     return {"devices": _baseline_state["result"]}
 
 
+@app.get("/api/whitelist/temp")
+async def api_list_temp_whitelist():
+    """Inspect the temporary whitelist (session-scoped, baseline-populated)."""
+    return {"entries": await db.list_temp_whitelist()}
+
+
+@app.post("/api/whitelist/temp/promote")
+async def api_promote_temp_whitelist(payload: dict):
+    """Move one (kind, device_id) from the temp list to the permanent
+    whitelist. Body: {kind, device_id, note?}."""
+    kind = payload.get("kind")
+    if kind not in ALLOWED_KINDS or kind is None:
+        raise HTTPException(400, "kind must be wifi, bluetooth, or wifi_client")
+    device_id = (payload.get("device_id") or "").strip().lower()
+    if not device_id:
+        raise HTTPException(400, "device_id required")
+    note = (payload.get("note") or "").strip() or "promoted from temp"
+    await db.add_whitelist(kind, device_id, note)
+    await db.delete_temp_whitelist_pair(kind, device_id)
+    await alert_service.reload()
+    return {"ok": True}
+
+
+@app.delete("/api/whitelist/temp")
+async def api_clear_temp_whitelist(payload: dict | None = None):
+    """Without a body: clear the entire temp whitelist.
+    With {kind, device_id}: drop one entry (un-silences the device)."""
+    payload = payload or {}
+    kind = payload.get("kind")
+    device_id = (payload.get("device_id") or "").strip().lower()
+    if kind and device_id:
+        ok = await db.delete_temp_whitelist_pair(kind, device_id)
+        await alert_service.reload()
+        return {"ok": True, "removed": int(ok)}
+    n = await db.clear_temp_whitelist()
+    await alert_service.reload()
+    return {"ok": True, "removed": n}
+
+
 @app.post("/api/scan/baseline/promote")
 async def api_baseline_promote(payload: dict):
-    """Add a list of (kind, device_id) pairs from the baseline result
-    into the permanent whitelist. Body: {entries: [{kind, device_id,
-    note?}, ...]}. Returns count of new entries added (upserts skip
-    duplicates silently)."""
+    """Resolve a baseline-scan capture. Body: {entries: [{kind, device_id,
+    note?}, ...]} — the selected entries get added to the permanent
+    whitelist; everything else in _baseline_state['result'] but not in
+    the selection lands in the temporary whitelist, silencing those
+    devices until the operator hits "Delete all locations". Returns
+    counts of each."""
     entries = payload.get("entries") or []
-    if not isinstance(entries, list) or not entries:
-        raise HTTPException(400, "entries must be a non-empty list")
-    added = 0
+    if not isinstance(entries, list):
+        raise HTTPException(400, "entries must be a list")
+
+    # Index the user's explicit selection so we can subtract it from the
+    # cached baseline result to find the "leave silenced but don't keep"
+    # set.
+    picked: set[tuple[str, str]] = set()
+    added_perm = 0
     for e in entries:
         kind = e.get("kind")
         device_id = (e.get("device_id") or "").strip().lower()
         note = (e.get("note") or "baseline scan").strip() or "baseline scan"
         if kind not in ALLOWED_KINDS or kind is None or not device_id:
             continue
+        picked.add((kind, device_id))
         try:
             await db.add_whitelist(kind, device_id, note)
-            added += 1
+            # If the same device was previously parked in the temp list
+            # (from an earlier baseline that didn't promote it), drop the
+            # temp row — it's been upgraded.
+            await db.delete_temp_whitelist_pair(kind, device_id)
+            added_perm += 1
         except Exception as ex:
             log.warning("baseline promote failed for %s/%s: %s",
                         kind, device_id, ex)
-    if added:
+
+    # Everything the user *saw* in the modal but didn't promote goes into
+    # the temp whitelist. The result list is what was shown.
+    added_temp = 0
+    for d in (_baseline_state.get("result") or []):
+        kind = d.get("kind")
+        device_id = (d.get("device_id") or "").lower()
+        if not kind or not device_id:
+            continue
+        if (kind, device_id) in picked:
+            continue
+        try:
+            await db.add_temp_whitelist(kind, device_id, "baseline (silenced)")
+            added_temp += 1
+        except Exception as ex:
+            log.warning("baseline temp-whitelist failed for %s/%s: %s",
+                        kind, device_id, ex)
+
+    if added_perm or added_temp:
         await alert_service.reload()
-    return {"ok": True, "added": added}
+    log.info("baseline promote: %d → permanent, %d → temporary",
+             added_perm, added_temp)
+    return {"ok": True, "added": added_perm, "silenced": added_temp}
 
 
 # ---------- Manual control ----------

@@ -44,7 +44,10 @@ class AlertService:
         self._rules_loaded = True
 
     async def load_whitelist(self) -> None:
-        rows = await db.list_whitelist()
+        # Permanent + temporary whitelists are merged for matching — the
+        # temp set is auto-populated by the baseline-scan flow and lives
+        # until "Delete all locations" wipes it.
+        rows = await db.list_whitelist_combined()
         self._whitelist = [(r["kind"], (r["device_id"] or "").lower()) for r in rows]
 
     async def load_latches(self) -> None:

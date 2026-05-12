@@ -518,7 +518,8 @@ async def build_report_pdf(*, group_bssids: bool = True,
     _step("Loading whitelist")
     # Whitelist filtering — drop matching entries from per-location device
     # lists, recompute counts to match, and prune the common-devices table.
-    whitelist = await db.list_whitelist()
+    # Combined (permanent + temporary) — temp entries also silence in reports.
+    whitelist = await db.list_whitelist_combined()
     is_wl = _whitelist_matcher(whitelist)
 
     _step(f"Aggregating devices across {len(locations)} location(s)")
