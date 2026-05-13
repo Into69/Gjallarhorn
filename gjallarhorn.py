@@ -722,6 +722,24 @@ async def api_report_result():
     )
 
 
+@app.post("/api/locations/reset")
+async def api_reset_locations():
+    """Delete every auto-clustered location while keeping drawn geofences.
+    Whitelisted devices' history is archived to preserved_devices first.
+    Active-location pointer is cleared if the active loc was wiped."""
+    counts = await db.delete_auto_locations()
+    # If the active loc was an auto cluster (probably was), it's now gone.
+    # Cheapest check: look up the active id; clear if not found.
+    if location_manager.active_id is not None:
+        info = await db.get_location_summary(location_manager.active_id)
+        if info is None:
+            location_manager._active_id = None  # type: ignore[attr-defined]
+            location_manager._active_lat = None  # type: ignore[attr-defined]
+            location_manager._active_lon = None  # type: ignore[attr-defined]
+    log.info("reset locations (auto only): %s", counts)
+    return {"ok": True, "deleted": counts}
+
+
 @app.delete("/api/locations")
 async def api_delete_all_locations():
     """Wipe every location and all associated devices and observations."""

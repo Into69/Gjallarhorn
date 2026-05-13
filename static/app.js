@@ -812,6 +812,39 @@ $("#loc-report").addEventListener("click", async () => {
     btn.disabled = false; btn.textContent = orig;
   }
 });
+$("#loc-reset").addEventListener("click", async () => {
+  const ok = confirm(
+    "Reset auto-clustered locations?\n\n" +
+    "Wipes every auto-clustered sensor location and the devices/" +
+    "observations attached to them. Drawn geofences are kept, and " +
+    "whitelisted devices' history is archived to the preserved list. " +
+    "The temporary whitelist is left intact.\n\n" +
+    "This cannot be undone."
+  );
+  if (!ok) return;
+  const btn = $("#loc-reset");
+  btn.disabled = true; btn.textContent = "Resetting…";
+  try {
+    const res = await api("/api/locations/reset", { method: "POST" });
+    const d = res.deleted || {};
+    alert(
+      `Reset complete:\n` +
+      `  ${d.locations || 0} auto location(s) removed\n` +
+      `  ${d.devices || 0} device row(s) cleared\n` +
+      `  ${d.observations || 0} observation(s) cleared` +
+      (d.preserved ? `\n  ${d.preserved} whitelisted device row(s) archived` : "")
+    );
+    await refreshLocations();
+    await refreshLocationMarkers();
+    await loadLocationOptions();
+    await refreshDevices();
+  } catch (e) {
+    alert("Reset failed: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "Reset";
+  }
+});
+
 $("#loc-delete-all").addEventListener("click", async () => {
   const ok = confirm(
     "Delete ALL locations?\n\n" +

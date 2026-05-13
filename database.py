@@ -789,6 +789,47 @@ async def auto_merge_contained(*, max_iterations: int = 1000) -> dict:
     }
 
 
+async def delete_auto_locations() -> dict:
+    """Reset: delete every auto-clustered sensor location and its
+    devices/observations while leaving drawn geofences (source='manual')
+    in place. Whitelisted devices get archived into preserved_devices
+    first, same as delete_all_locations does. Temp whitelist is left
+    intact — Reset is a softer action than Delete all."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id FROM sensor_locations WHERE source='auto'"
+        ) as cur:
+            ids = [r[0] for r in await cur.fetchall()]
+        if not ids:
+            return {"locations": 0, "devices": 0, "observations": 0, "preserved": 0}
+
+        ph = ",".join("?" * len(ids))
+        async with db.execute(
+            f"SELECT COUNT(*) FROM devices WHERE location_id IN ({ph})", ids,
+        ) as cur:
+            n_dev = (await cur.fetchone())[0]
+        async with db.execute(
+            f"SELECT COUNT(*) FROM observations WHERE location_id IN ({ph})", ids,
+        ) as cur:
+            n_obs = (await cur.fetchone())[0]
+        n_preserved = await _preserve_whitelisted_devices(db, ids)
+
+        await db.execute(
+            f"DELETE FROM observations WHERE location_id IN ({ph})", ids,
+        )
+        await db.execute(
+            f"DELETE FROM devices WHERE location_id IN ({ph})", ids,
+        )
+        await db.execute(
+            f"DELETE FROM sensor_locations WHERE id IN ({ph})", ids,
+        )
+        await db.commit()
+    return {
+        "locations": len(ids), "devices": n_dev, "observations": n_obs,
+        "preserved": n_preserved,
+    }
+
+
 async def delete_all_locations() -> dict:
     """Delete every sensor location and all associated devices/observations.
     Whitelisted devices get archived into preserved_devices first. Also
