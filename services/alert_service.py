@@ -277,11 +277,31 @@ async def _dispatch_discord(
             except Exception:
                 siblings = []
         tracker_type = db.classify_tracker(device_kind, details)
+        # 24-hour companion-location count — strong signal for "following".
+        # Uses the same BLE-signature aggregation as the persistent_companion
+        # rule, so rotating-MAC siblings collapse to one count.
+        try:
+            recent_24h = await db.count_companion_locations(
+                device_kind, device_id, window_hours=24,
+            )
+        except Exception:
+            recent_24h = 0
+        # How many alert_events have already fired on this (rule, device)
+        # pair across the system's history? Lets the operator see at a
+        # glance whether this is "first time" or "this keeps happening".
+        try:
+            prior_fires = await db.count_alert_events_for_rule_device(
+                rule_id=rule["id"], device_kind=device_kind, device_id=device_id,
+            )
+        except Exception:
+            prior_fires = 0
         context = {
             "location": loc_info,
             "device_summary": dev_info,
             "linked_aliases": siblings,
             "tracker_type": tracker_type,
+            "recent_locations_24h": recent_24h,
+            "prior_fires": prior_fires,
         }
 
         payload = build_discord_payload(
@@ -348,8 +368,7 @@ def build_discord_payload(
                        "value": _TRACKER_LABELS.get(tracker_type, tracker_type),
                        "inline": True})
 
-    # Per-kind technical context — channel/encryption for wifi, address
-    # type/manufacturer/services for bluetooth, probed SSIDs for clients.
+    # Per-kind technical context.
     if device_kind == "wifi":
         ch = details.get("channel")
         band = details.get("band")
@@ -357,23 +376,64 @@ def build_discord_payload(
             fields.append({"name": "Channel",
                            "value": f"{ch or '?'}{f' ({band})' if band else ''}",
                            "inline": True})
+        freq = details.get("frequency_mhz")
+        if freq:
+            fields.append({"name": "Frequency",
+                           "value": f"{freq} MHz", "inline": True})
         enc = details.get("encryption")
         cipher = details.get("cipher")
         if enc or cipher:
             fields.append({"name": "Encryption",
                            "value": f"{enc or '?'}{f' / {cipher}' if cipher else ''}",
                            "inline": True})
+        auth = details.get("auth")
+        if auth:
+            fields.append({"name": "Auth", "value": str(auth)[:100],
+                           "inline": True})
+        caps = details.get("capabilities")
+        if caps:
+            shown = str(caps)
+            if len(shown) > 60:
+                shown = shown[:57] + "…"
+            fields.append({"name": "Capabilities",
+                           "value": shown, "inline": True})
+        beacon = details.get("beacon_interval_ms")
+        if beacon:
+            fields.append({"name": "Beacon",
+                           "value": f"{beacon} ms", "inline": True})
     elif device_kind == "bluetooth":
         addr_type = details.get("address_type")
         if addr_type:
             fields.append({"name": "Address type",
                            "value": str(addr_type), "inline": True})
+        tx_power = details.get("tx_power")
+        if tx_power is not None:
+            fields.append({"name": "TX power",
+                           "value": f"{tx_power} dBm", "inline": True})
+        connectable = details.get("is_connectable")
+        if connectable is not None:
+            fields.append({"name": "Connectable",
+                           "value": "yes" if connectable else "no",
+                           "inline": True})
         mfg = details.get("manufacturer_data") or {}
         if isinstance(mfg, dict) and mfg:
             ids = ", ".join(_format_company_id(k) for k in sorted(mfg.keys(),
                             key=lambda x: int(x)))
             fields.append({"name": "Manufacturer",
                            "value": ids[:1000], "inline": True})
+            # Preview the first manufacturer-data payload (16 hex bytes max)
+            # so operators can eyeball the protocol-level fingerprint.
+            try:
+                first_key = sorted(mfg.keys(), key=lambda x: int(x))[0]
+                first_val = str(mfg[first_key] or "")
+                if first_val:
+                    preview = first_val[:32]
+                    if len(first_val) > 32:
+                        preview += "…"
+                    fields.append({"name": "Mfg payload",
+                                   "value": f"`{preview}`", "inline": True})
+            except (ValueError, IndexError):
+                pass
         svcs = details.get("service_uuids") or []
         if isinstance(svcs, list) and svcs:
             shown = ", ".join(str(u) for u in svcs[:3])
@@ -398,6 +458,9 @@ def build_discord_payload(
         if ch is not None:
             fields.append({"name": "Channel",
                            "value": str(ch), "inline": True})
+        if details.get("randomized"):
+            fields.append({"name": "MAC type",
+                           "value": "randomized (privacy)", "inline": True})
 
     # Location enrichment — label and coordinates with an OSM link.
     loc = context.get("location")
@@ -427,14 +490,40 @@ def build_discord_payload(
             fields.append({"name": "First seen",
                            "value": _short_time(dev["first_seen"]),
                            "inline": True})
+        if dev.get("last_seen"):
+            fields.append({"name": "Last seen",
+                           "value": _short_time(dev["last_seen"]),
+                           "inline": True})
         if dev.get("seen_count"):
             fields.append({"name": "Total observations",
                            "value": str(dev["seen_count"]),
                            "inline": True})
         if dev.get("location_count"):
-            fields.append({"name": "Locations",
+            fields.append({"name": "Locations (all-time)",
                            "value": str(dev["location_count"]),
                            "inline": True})
+
+    # 24h companion-locations: how broadly the device (and its rotating-MAC
+    # siblings) has covered in the last day. Surfaces "this is following me
+    # right now" vs "matched a stale rule".
+    recent_24h = context.get("recent_locations_24h")
+    if recent_24h is not None and recent_24h >= 2:
+        fields.append({
+            "name": "Recent (24h)",
+            "value": f"{recent_24h} locations",
+            "inline": True,
+        })
+
+    # Latch history — how many times this exact (rule, device) pair has
+    # ever fired. Distinguishes "first time" from "this keeps happening".
+    prior_fires = context.get("prior_fires") or 0
+    if prior_fires >= 1:
+        fields.append({
+            "name": "Latch history",
+            "value": f"{prior_fires} fire{'s' if prior_fires != 1 else ''} "
+                     f"on this pair",
+            "inline": True,
+        })
 
     # BLE rotating-MAC siblings — when the alert fires on a private MAC,
     # show what other addresses the same physical device has used so the
@@ -468,10 +557,24 @@ def build_discord_payload(
                 "value": f"{c} locations in last {h}h", "inline": True,
             })
 
-    # Description: include match_value so operators see *what* triggered.
+    # Description: include match_value so operators see *what* triggered,
+    # the rule's scope, and any tracker classification up front.
     desc_parts = [f"`{match_type}` matched on **{_KIND_LABELS.get(device_kind, device_kind)}**"]
     if match_value:
         desc_parts.append(f"value: `{match_value}`")
+    rule_loc = rule.get("location_id")
+    if rule_loc is None:
+        scope = "any location"
+    elif rule_loc == -1:
+        scope = "active location"
+    else:
+        scope = f"location #{rule_loc}"
+    desc_parts.append(f"scope: {scope}")
+    if rule.get("extra_conditions"):
+        n_extra = len(rule["extra_conditions"])
+        desc_parts.append(
+            f"+{n_extra} compound condition{'s' if n_extra != 1 else ''}"
+        )
     if tracker_type:
         desc_parts.append(f"⚠ classified as **{_TRACKER_LABELS.get(tracker_type, tracker_type)}**")
     description = " · ".join(desc_parts)

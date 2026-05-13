@@ -1376,6 +1376,23 @@ async def list_recurring_device_locations(
     return list(by_dev.values())
 
 
+async def count_alert_events_for_rule_device(
+    *, rule_id: int, device_kind: str, device_id: str,
+) -> int:
+    """How many times this (rule, device) pair has fired across history,
+    including the row that *just* got inserted. Used by the Discord embed
+    to distinguish "first hit" from "this is the 5th time"."""
+    device_id_l = (device_id or "").lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM alert_events "
+            "WHERE rule_id=? AND device_kind=? AND lower(device_id)=?",
+            (rule_id, device_kind, device_id_l),
+        ) as cur:
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
+
+
 async def alert_event_counts_per_rule() -> list[dict]:
     """Per-rule fire counts and last-fired timestamps. Used by the report
     to show which alert rules are actually doing work."""
