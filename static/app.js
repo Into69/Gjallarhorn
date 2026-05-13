@@ -832,7 +832,8 @@ $("#loc-reset").addEventListener("click", async () => {
       `  ${d.locations || 0} auto location(s) removed\n` +
       `  ${d.devices || 0} device row(s) cleared\n` +
       `  ${d.observations || 0} observation(s) cleared` +
-      (d.preserved ? `\n  ${d.preserved} whitelisted device row(s) archived` : "")
+      (d.preserved ? `\n  ${d.preserved} whitelisted device row(s) archived` : "") +
+      (d.alerts_cleared ? `\n  ${d.alerts_cleared} alert event(s) cleared` : "")
     );
     await refreshLocations();
     await refreshLocationMarkers();
@@ -859,10 +860,15 @@ $("#loc-delete-all").addEventListener("click", async () => {
   try {
     const res = await api("/api/locations", { method: "DELETE" });
     const d = res.deleted || {};
-    const extra = d.temp_whitelist_cleared
-      ? ` ${d.temp_whitelist_cleared} temporary whitelist entr${d.temp_whitelist_cleared === 1 ? "y" : "ies"} cleared.`
-      : "";
-    alert(`Deleted ${d.locations || 0} locations, ${d.devices || 0} devices, ${d.observations || 0} observations.` + extra);
+    const bits = [
+      `${d.locations || 0} location(s)`,
+      `${d.devices || 0} device(s)`,
+      `${d.observations || 0} observation(s)`,
+    ];
+    if (d.preserved) bits.push(`${d.preserved} whitelist row(s) archived`);
+    if (d.temp_whitelist_cleared) bits.push(`${d.temp_whitelist_cleared} temp whitelist entr${d.temp_whitelist_cleared === 1 ? "y" : "ies"} cleared`);
+    if (d.alerts_cleared) bits.push(`${d.alerts_cleared} alert event(s) cleared`);
+    alert("Deleted:\n  • " + bits.join("\n  • "));
     await refreshLocations();
     await refreshLocationMarkers();
     await loadLocationOptions();

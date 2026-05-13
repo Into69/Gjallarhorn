@@ -726,7 +726,9 @@ async def api_report_result():
 async def api_reset_locations():
     """Delete every auto-clustered location while keeping drawn geofences.
     Whitelisted devices' history is archived to preserved_devices first.
-    Active-location pointer is cleared if the active loc was wiped."""
+    Active-location pointer is cleared if the active loc was wiped. Also
+    clears the alert feed and any active latches — a reset is a fresh
+    page for the operator."""
     counts = await db.delete_auto_locations()
     # If the active loc was an auto cluster (probably was), it's now gone.
     # Cheapest check: look up the active id; clear if not found.
@@ -736,18 +738,25 @@ async def api_reset_locations():
             location_manager._active_id = None  # type: ignore[attr-defined]
             location_manager._active_lat = None  # type: ignore[attr-defined]
             location_manager._active_lon = None  # type: ignore[attr-defined]
+    counts["alerts_cleared"] = await db.clear_alert_events()
+    alert_service._latched.clear()  # type: ignore[attr-defined]
     log.info("reset locations (auto only): %s", counts)
     return {"ok": True, "deleted": counts}
 
 
 @app.delete("/api/locations")
 async def api_delete_all_locations():
-    """Wipe every location and all associated devices and observations."""
+    """Wipe every location and all associated devices and observations.
+    Also clears the alert feed and any active latches — the entire
+    sensor state is being reset, so historical alerts no longer have
+    context."""
     counts = await db.delete_all_locations()
     # Reset the active-location pointer so the next GPS fix opens a fresh one.
     location_manager._active_id = None  # type: ignore[attr-defined]
     location_manager._active_lat = None  # type: ignore[attr-defined]
     location_manager._active_lon = None  # type: ignore[attr-defined]
+    counts["alerts_cleared"] = await db.clear_alert_events()
+    alert_service._latched.clear()  # type: ignore[attr-defined]
     log.info("Deleted all locations: %s", counts)
     return {"ok": True, "deleted": counts}
 
