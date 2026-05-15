@@ -546,6 +546,29 @@ async def api_merge_contained_locations():
     return {"ok": True, **result}
 
 
+@app.post("/api/locations/{loser_id}/merge_into/{winner_id}")
+async def api_merge_into(loser_id: int, winner_id: int):
+    """Merge `loser_id` into `winner_id`. Used by the map's per-bubble
+    "Merge into…" action — bypasses the contained-pair finder so the user
+    can fold any two locations together, not just overlapping ones."""
+    if loser_id == winner_id:
+        raise HTTPException(400, "loser and winner must be different")
+    result = await db.merge_locations(loser_id, winner_id)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    if result.get("noop"):
+        raise HTTPException(404, "one or both locations no longer exist")
+    if location_manager.active_id == loser_id:
+        # The active loc was merged away — clear so the next GPS fix snaps
+        # onto whichever surviving location now contains it (same handling
+        # the auto-merge endpoints do).
+        location_manager._active_id = None  # type: ignore[attr-defined]
+        location_manager._active_lat = None  # type: ignore[attr-defined]
+        location_manager._active_lon = None  # type: ignore[attr-defined]
+    log.info("Manual merge: location %d into %d", loser_id, winner_id)
+    return {"ok": True, **result}
+
+
 @app.post("/api/locations/merge_contained/step")
 async def api_merge_contained_step():
     """One iteration of the merge_contained loop — merges a single pair

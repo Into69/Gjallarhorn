@@ -359,6 +359,52 @@ main { height: calc(100vh - 53px); }
   pointer-events: none;
   max-width: 320px;
 }
+
+/* Banner shown while the map is in merge-pick mode. Anchored to the top
+   centre so it's obvious without covering the map controls in the
+   top-left corner. */
+.merge-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%);
+  border: 1px solid var(--err);
+  border-left: 3px solid var(--err);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  padding: 8px 12px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 12px;
+  color: var(--fg);
+  max-width: calc(100% - 24px);
+}
+.merge-banner .merge-banner-text { line-height: 1.35; }
+.merge-banner .secondary { padding: 4px 10px; font-size: 12px; }
+
+/* Leaflet popup contents shown when a location bubble is clicked.
+   Standalone — doesn't share .alert-popup's flash animation. */
+.loc-popup { min-width: 220px; font-size: 12px; color: var(--fg); }
+.loc-popup .loc-popup-title { font-weight: 600; margin-bottom: 4px; }
+.loc-popup .loc-popup-coords {
+  font-size: 11px; color: var(--muted); margin-bottom: 6px;
+}
+.loc-popup .loc-popup-note {
+  font-size: 11px; color: var(--warn);
+  margin: 4px 0 8px;
+  line-height: 1.35;
+}
+.loc-popup .loc-popup-actions { display: flex; gap: 6px; }
+.loc-popup .loc-popup-actions button {
+  padding: 4px 10px; font-size: 12px;
+}
+.loc-popup .loc-popup-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.loc-popup-wrap .leaflet-popup-content-wrapper {
+  background: var(--panel); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.loc-popup-wrap .leaflet-popup-tip { background: var(--panel); }
 .alert-toast {
   background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%);
   border: 1px solid var(--border);

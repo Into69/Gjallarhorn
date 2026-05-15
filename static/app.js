@@ -206,6 +206,90 @@ function locationTooltipHtml(loc, isActive) {
     </div>`;
 }
 
+// Per-bubble popup shown on click. Hosts the "Merge into…" entry-point —
+// click puts the map into merge-pick mode where the next bubble click
+// chooses the target. Drawn geofences cannot be losers (the server-side
+// merge_locations refuses them), so disable the button on those.
+function locationPopupHtml(loc) {
+  const label = escapeHtml(loc.label || `Location ${loc.id}`);
+  const isManual = loc.source === "manual";
+  const note = isManual
+    ? `<div class="loc-popup-note">Drawn geofence — can absorb other locations, but can't be merged away itself.</div>`
+    : "";
+  const disabled = isManual ? ' disabled title="Drawn geofences cannot be merged away"' : "";
+  return `
+    <div class="loc-popup">
+      <div class="loc-popup-title">#${loc.id} · ${label}</div>
+      <div class="loc-popup-coords mono">${loc.lat.toFixed(5)}, ${loc.lon.toFixed(5)} · r=${Math.round(loc.radius_m)} m</div>
+      ${note}
+      <div class="loc-popup-actions">
+        <button type="button" class="loc-popup-merge"${disabled}>Merge into…</button>
+      </div>
+    </div>`;
+}
+
+// Merge-pick state. Set when the user picks a source location from a
+// popup's "Merge into…" button; the next bubble click chooses the target.
+// Null in normal mode.
+let mergeState = null;
+
+function showMergeBanner(loc) {
+  const banner = $("#merge-banner");
+  const text = banner?.querySelector(".merge-banner-text");
+  if (!banner || !text) return;
+  const label = loc.label || `Location ${loc.id}`;
+  text.textContent = `Merging #${loc.id} (${label}) — click any other bubble to choose the target. Esc to cancel.`;
+  banner.hidden = false;
+}
+
+function hideMergeBanner() {
+  const banner = $("#merge-banner");
+  if (banner) banner.hidden = true;
+}
+
+function enterMergeMode(loc) {
+  mergeState = { sourceId: loc.id, sourceLoc: loc };
+  // Re-render markers so the source bubble is highlighted and popups are
+  // suppressed (bubble click now picks a target instead of opening info).
+  showMergeBanner(loc);
+  refreshLocationMarkers();
+}
+
+function exitMergeMode() {
+  if (!mergeState) return;
+  mergeState = null;
+  hideMergeBanner();
+  refreshLocationMarkers();
+}
+
+async function pickMergeTarget(targetLoc) {
+  if (!mergeState) return;
+  const src = mergeState.sourceLoc;
+  if (targetLoc.id === src.id) return;  // can't merge into self — ignore
+  const srcLabel = src.label || `Location ${src.id}`;
+  const tgtLabel = targetLoc.label || `Location ${targetLoc.id}`;
+  const ok = confirm(
+    `Merge #${src.id} (${srcLabel}) into #${targetLoc.id} (${tgtLabel})?\n\n`
+    + `Devices, observations, and alert history move to #${targetLoc.id}. `
+    + `#${src.id} is deleted. Whitelisted devices are preserved.`
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/locations/${src.id}/merge_into/${targetLoc.id}`, { method: "POST" });
+    exitMergeMode();
+    await refreshLocationMarkers();
+    // Devices tab dropdown caches location ids; refresh so the merged-away
+    // id falls off without forcing the user to switch tabs.
+    try { await loadLocationOptions(); } catch {}
+    // If the Locations tab is currently visible, keep it in sync too.
+    if (document.querySelector("#tab-locations.active")) {
+      try { await refreshLocations(); } catch {}
+    }
+  } catch (e) {
+    alert("Merge failed: " + (e.message || e));
+  }
+}
+
 async function refreshLocationMarkers() {
   try {
     const { locations, active_id } = await api("/api/locations");
@@ -214,15 +298,21 @@ async function refreshLocationMarkers() {
     for (const loc of locations) {
       const isActive = loc.id === active_id;
       const isManual = loc.source === "manual";
+      const isMergeSource = mergeState && mergeState.sourceId === loc.id;
       // Drawn geofences are styled distinctly (dashed accent stroke) so a
       // glance at the map tells you which circles you placed yourself vs.
-      // which ones the auto-clusterer made.
+      // which ones the auto-clusterer made. In merge-pick mode the source
+      // bubble is recoloured red so the user can see which one they're
+      // moving; everything else stays normal and is clickable as a target.
+      const color = isMergeSource ? "#ff6b6b"
+        : (isActive ? "#79e08c" : (isManual ? "#5cd1ff" : "#ffb86b"));
       const c = L.circle([loc.lat, loc.lon], {
         radius: loc.radius_m,
-        color: isActive ? "#79e08c" : (isManual ? "#5cd1ff" : "#ffb86b"),
-        weight: isManual ? 2 : 1.5,
+        color,
+        weight: isMergeSource ? 3 : (isManual ? 2 : 1.5),
         dashArray: isManual ? "6,4" : null,
-        fillOpacity: isActive ? 0.12 : (isManual ? 0.05 : 0.06),
+        fillOpacity: isMergeSource ? 0.18
+          : (isActive ? 0.12 : (isManual ? 0.05 : 0.06)),
       }).bindTooltip(locationTooltipHtml(loc, isActive), {
         className: "gj-tip",
         direction: "top",
@@ -230,11 +320,37 @@ async function refreshLocationMarkers() {
         opacity: 1,
         sticky: true,
       });
+      // Suppress the info popup while merge-picking — a bubble click in
+      // that mode is a target selection, not an "open info" gesture.
+      if (!mergeState) {
+        c.bindPopup(locationPopupHtml(loc), {
+          className: "loc-popup-wrap",
+          autoClose: true, closeButton: true,
+        });
+        c.on("popupopen", (ev) => {
+          const el = ev.popup.getElement();
+          const btn = el && el.querySelector(".loc-popup-merge");
+          if (btn) {
+            btn.addEventListener("click", () => {
+              c.closePopup();
+              enterMergeMode(loc);
+            });
+          }
+        });
+      }
+      c.on("click", () => {
+        if (mergeState) pickMergeTarget(loc);
+      });
       c.addTo(map);
       locationMarkers.set(loc.id, c);
     }
   } catch (e) { /* ignore */ }
 }
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && mergeState) exitMergeMode();
+});
+$("#merge-banner-cancel")?.addEventListener("click", () => exitMergeMode());
 
 // ---------- devices tab ----------
 const PRESERVED_SENTINEL = "__preserved__";
