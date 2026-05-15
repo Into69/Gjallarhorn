@@ -307,13 +307,25 @@
             </label>
             <label>Match type
               <select name="match_type" id="rule-match-type">
-                <option value="device_id">device id (exact / prefix)</option>
-                <option value="name_contains">name / SSID contains</option>
-                <option value="vendor_contains">vendor contains</option>
-                <option value="rssi_above">RSSI ≥ (stronger than) dBm</option>
-                <option value="new_device">new device at location</option>
-                <option value="cross_location">cross-location: in M of last N</option>
-                <option value="persistent_companion">persistent companion: M locations within H hours</option>
+                <optgroup label="Value match">
+                  <option value="device_id">device id (exact / prefix)</option>
+                  <option value="name_contains">name / SSID contains</option>
+                  <option value="vendor_contains">vendor contains</option>
+                  <option value="rssi_above">RSSI ≥ (stronger than) dBm</option>
+                </optgroup>
+                <optgroup label="Per-location">
+                  <option value="new_device">new device at location</option>
+                  <option value="cross_location">cross-location: in M of last N</option>
+                  <option value="persistent_companion">persistent companion: M locations within H hours</option>
+                </optgroup>
+                <optgroup label="Follower detection">
+                  <option value="co_arrival_transit">co-arrival on transit: M of last N arrivals within W s</option>
+                  <option value="travel_time_companion">travel-time companion: ≥T s of sightings at ≥V m/s</option>
+                  <option value="approach_vector">approach vector: RSSI ↑ ≥D dB across T s while stationary</option>
+                  <option value="novel_location_chain">novel-location chain: ≥N new locations in last H h</option>
+                  <option value="mac_rotation_rate">MAC rotation rate: ≥K BLE siblings in last H h</option>
+                  <option value="cross_kind_co_travel">cross-kind co-travel: BLE+WiFi pair sharing ≥M locations</option>
+                </optgroup>
               </select>
             </label>
             <label>Value <input type="text" name="match_value" id="rule-match-value" placeholder="aa:bb:cc or 'Apple' or -60" required /></label>

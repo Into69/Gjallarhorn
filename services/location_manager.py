@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import math
+import time
+from collections import deque
 from datetime import datetime
 from typing import Optional
 
@@ -13,6 +15,11 @@ log = logging.getLogger(__name__)
 # Safety cap for the dynamic radius — a sensor on a highway shouldn't
 # generate kilometres-wide bubbles even if speed × t_s implies it.
 DYNAMIC_RADIUS_MAX_M = 5000.0
+
+# How many recent location arrivals to remember in memory. Used by the
+# co_arrival_transit alert rule, which scans the last N arrivals for
+# co-occurring first-sightings of a device.
+ARRIVAL_HISTORY_MAX = 32
 
 
 def effective_radius_m(
@@ -48,10 +55,31 @@ class LocationManager:
         self._active_id: Optional[int] = None
         self._active_lat: Optional[float] = None
         self._active_lon: Optional[float] = None
+        # (location_id, arrived_at_unix) for the last few transitions.
+        # In-memory only — restarts reset follower correlation on purpose;
+        # a stale process shouldn't keep raising follower alerts from a day
+        # ago. Co-arrival alerts (co_arrival_transit) read this directly.
+        self._arrivals: deque[tuple[int, float]] = deque(maxlen=ARRIVAL_HISTORY_MAX)
 
     @property
     def active_id(self) -> Optional[int]:
         return self._active_id
+
+    def recent_arrivals(self, *, max_age_s: float | None = None) -> list[tuple[int, float]]:
+        """Snapshot of recent arrivals, newest last. If `max_age_s` is set,
+        entries older than that are filtered out."""
+        if max_age_s is None:
+            return list(self._arrivals)
+        cutoff = time.time() - max_age_s
+        return [(lid, t) for (lid, t) in self._arrivals if t >= cutoff]
+
+    def _record_arrival(self, location_id: int) -> None:
+        """Append an arrival row, but only when the active id actually
+        flipped (the GPS loop calls update_with_fix on every poll, so most
+        invocations just re-confirm the active location)."""
+        if self._arrivals and self._arrivals[-1][0] == location_id:
+            return
+        self._arrivals.append((location_id, time.time()))
 
     async def update_with_fix(
         self, fix: GPSFix, *,
@@ -73,6 +101,7 @@ class LocationManager:
                     "Sensor entered existing location id=%s @ %.6f,%.6f; switching active",
                     matched["id"], matched["lat"], matched["lon"],
                 )
+                self._record_arrival(matched["id"])
             self._active_id = matched["id"]
             self._active_lat = matched["lat"]
             self._active_lon = matched["lon"]
@@ -113,6 +142,7 @@ class LocationManager:
         self._active_id = new_id
         self._active_lat = lat
         self._active_lon = lon
+        self._record_arrival(new_id)
         log.info("Opened new sensor location id=%s @ %.6f,%.6f r=%.1fm",
                  new_id, lat, lon, threshold_m)
         return new_id

@@ -173,6 +173,7 @@ class ScanOrchestrator:
                         await alert_service.evaluate(
                             device_kind="wifi", device_id=d.bssid, rssi=d.rssi,
                             location_id=loc_id, details=details, is_new=is_new,
+                            speed_mps=fix.speed,
                         )
                         kept += 1
                     self.wifi_stats.end(kept, duration_s=time.time() - t0)
@@ -216,6 +217,7 @@ class ScanOrchestrator:
                         await alert_service.evaluate(
                             device_kind="bluetooth", device_id=d.address, rssi=d.rssi,
                             location_id=loc_id, details=details, is_new=is_new,
+                            speed_mps=fix.speed,
                         )
                         kept += 1
                     self.bt_stats.end(kept, duration_s=time.time() - t0)
@@ -345,6 +347,7 @@ class ScanOrchestrator:
         await alert_service.evaluate(
             device_kind="wifi_client", device_id=mac, rssi=rssi,
             location_id=loc_id, details=details, is_new=is_new,
+            speed_mps=fix.speed,
         )
 
 

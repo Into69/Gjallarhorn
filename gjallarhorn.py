@@ -785,6 +785,8 @@ async def api_oui_lookup(mac: str):
 ALLOWED_MATCH_TYPES = {
     "device_id", "name_contains", "vendor_contains", "rssi_above",
     "new_device", "cross_location", "persistent_companion",
+    "co_arrival_transit", "travel_time_companion", "approach_vector",
+    "novel_location_chain", "mac_rotation_rate", "cross_kind_co_travel",
 }
 # Compound (AND) conditions only support the simple value-based types — the
 # stateful ones (new_device, cross_location) only make sense as the primary

@@ -1232,6 +1232,179 @@ async def count_companion_locations(kind: str, device_id: str,
             return row[0] if row else 0
 
 
+async def _ble_signature_siblings(db, kind: str, device_id_l: str) -> list[str]:
+    """Helper: every MAC sharing this device's BLE adv-data signature,
+    including itself. Returns just `[device_id_l]` for wifi / unsigned BLE.
+    Caller owns the connection."""
+    if kind != "bluetooth":
+        return [device_id_l]
+    async with db.execute(
+        "SELECT signature FROM devices WHERE kind=? AND device_id=? "
+        "AND signature IS NOT NULL LIMIT 1",
+        (kind, device_id_l),
+    ) as cur:
+        row = await cur.fetchone()
+    sig = row[0] if row else None
+    if not sig:
+        return [device_id_l]
+    async with db.execute(
+        "SELECT DISTINCT device_id FROM devices WHERE signature=?", (sig,),
+    ) as cur:
+        sibs = [r[0] for r in await cur.fetchall()]
+    return sibs or [device_id_l]
+
+
+async def first_sightings_at_locations(
+    kind: str, device_id: str, location_ids: list[int], since_iso: str,
+) -> dict[int, str]:
+    """For each location id in `location_ids`, the earliest observation of
+    (kind, device_id) at that location with seen_at >= since_iso. BLE
+    rotating-MAC siblings are folded in so a private-MAC phone that
+    rotates between arrivals still gets counted as one follower.
+
+    Returns a dict of location_id → ISO timestamp of the first sighting
+    within the window (locations with no matching observation are absent).
+    Used by the co_arrival_transit rule."""
+    if not location_ids:
+        return {}
+    device_id_l = (device_id or "").lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        siblings = await _ble_signature_siblings(db, kind, device_id_l)
+        sib_placeholders = ",".join("?" * len(siblings))
+        loc_placeholders = ",".join("?" * len(location_ids))
+        sql = (
+            f"SELECT location_id, MIN(seen_at) FROM observations "
+            f"WHERE kind=? AND seen_at >= ? "
+            f"AND device_id IN ({sib_placeholders}) "
+            f"AND location_id IN ({loc_placeholders}) "
+            f"GROUP BY location_id"
+        )
+        args = [kind, since_iso, *siblings, *location_ids]
+        async with db.execute(sql, args) as cur:
+            return {int(r[0]): r[1] for r in await cur.fetchall()}
+
+
+async def count_novel_locations(
+    kind: str, device_id: str, *, window_hours: int, location_max_age_hours: int,
+) -> int:
+    """Distinct locations the device (or BLE siblings) appeared at within
+    the last `window_hours`, restricted to sensor_locations whose
+    `created_at` is itself within the last `location_max_age_hours`.
+
+    "Novel" = the location is one you started visiting recently. A device
+    that hits ≥N of these is following you through new ground rather than
+    being part of the regular furniture of an established area.
+
+    Used by the novel_location_chain rule."""
+    if window_hours < 1 or location_max_age_hours < 1:
+        return 0
+    obs_cutoff = (datetime.now() - timedelta(hours=window_hours)).isoformat()
+    loc_cutoff = (datetime.now() - timedelta(hours=location_max_age_hours)).isoformat()
+    device_id_l = (device_id or "").lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        siblings = await _ble_signature_siblings(db, kind, device_id_l)
+        sib_placeholders = ",".join("?" * len(siblings))
+        sql = (
+            f"SELECT COUNT(DISTINCT o.location_id) FROM observations o "
+            f"JOIN sensor_locations l ON l.id = o.location_id "
+            f"WHERE o.kind=? AND o.seen_at >= ? AND l.created_at >= ? "
+            f"AND o.device_id IN ({sib_placeholders})"
+        )
+        args = [kind, obs_cutoff, loc_cutoff, *siblings]
+        async with db.execute(sql, args) as cur:
+            row = await cur.fetchone()
+            return int(row[0]) if row else 0
+
+
+async def count_signature_macs(
+    kind: str, device_id: str, *, window_hours: int,
+) -> int:
+    """How many distinct MACs share this device's BLE adv-data signature
+    and were seen within the last `window_hours`. A non-BLE device or a
+    BLE device with no signature always returns 1 (itself).
+
+    A burst of new private-address MACs sharing one signature is the
+    classic shape of a rotation-mode follower. Used by the
+    mac_rotation_rate rule."""
+    if window_hours < 1:
+        return 1
+    cutoff = (datetime.now() - timedelta(hours=window_hours)).isoformat()
+    device_id_l = (device_id or "").lower()
+    if kind != "bluetooth":
+        return 1
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT signature FROM devices WHERE kind=? AND device_id=? "
+            "AND signature IS NOT NULL LIMIT 1",
+            (kind, device_id_l),
+        ) as cur:
+            row = await cur.fetchone()
+        sig = row[0] if row else None
+        if not sig:
+            return 1
+        async with db.execute(
+            "SELECT COUNT(DISTINCT o.device_id) FROM observations o "
+            "JOIN devices d ON d.kind = o.kind AND d.device_id = o.device_id "
+            "WHERE o.kind='bluetooth' AND o.seen_at >= ? AND d.signature = ?",
+            (cutoff, sig),
+        ) as cur:
+            row = await cur.fetchone()
+            return int(row[0]) if row else 1
+
+
+async def find_cross_kind_partner(
+    kind: str, device_id: str, *, window_hours: int, min_overlap: int,
+) -> dict | None:
+    """Find the strongest cross-kind partner — a device of a different
+    kind co-observed at ≥ `min_overlap` of this device's locations within
+    the last `window_hours`. Useful for catching a follower that's running
+    both a phone (BLE) and a WiFi-broadcasting accessory (e.g. a hotspot
+    or laptop) — neither alone might trip the persistent_companion
+    threshold, but together they confirm a single carrier.
+
+    Returns `{"kind", "device_id", "overlap"}` for the best partner, or
+    None when nothing meets the threshold. Used by cross_kind_co_travel.
+    """
+    if window_hours < 1 or min_overlap < 1:
+        return None
+    cutoff = (datetime.now() - timedelta(hours=window_hours)).isoformat()
+    device_id_l = (device_id or "").lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        siblings = await _ble_signature_siblings(db, kind, device_id_l)
+        sib_placeholders = ",".join("?" * len(siblings))
+        # Step 1: locations where THIS device (or BLE siblings) appeared
+        # within the window.
+        async with db.execute(
+            f"SELECT DISTINCT location_id FROM observations "
+            f"WHERE kind=? AND seen_at >= ? AND device_id IN ({sib_placeholders})",
+            [kind, cutoff, *siblings],
+        ) as cur:
+            my_locs = [int(r[0]) for r in await cur.fetchall()]
+        if len(my_locs) < min_overlap:
+            return None
+        loc_placeholders = ",".join("?" * len(my_locs))
+        # Step 2: cross-kind devices observed at those same locations in
+        # the same window, grouped by overlap count. Exclude the device
+        # itself from the sibling set so a wifi/bluetooth alias of the
+        # carrier never partners with itself.
+        sql = (
+            f"SELECT kind, device_id, COUNT(DISTINCT location_id) AS overlap "
+            f"FROM observations "
+            f"WHERE kind != ? AND seen_at >= ? "
+            f"AND location_id IN ({loc_placeholders}) "
+            f"GROUP BY kind, device_id "
+            f"HAVING overlap >= ? "
+            f"ORDER BY overlap DESC, device_id ASC "
+            f"LIMIT 1"
+        )
+        args = [kind, cutoff, *my_locs, min_overlap]
+        async with db.execute(sql, args) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return {"kind": row[0], "device_id": row[1], "overlap": int(row[2])}
+
+
 async def purge_old_data(
     *, observation_days: int = 0, device_days: int = 0,
 ) -> dict:

@@ -13,7 +13,8 @@ import logging
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import database as db
@@ -21,6 +22,17 @@ from config import settings_store
 from services.location_manager import location_manager
 
 log = logging.getLogger(__name__)
+
+# Per-device rolling buffer caps for the travel_time_companion and
+# approach_vector rules. Both rules look back ≤ ~10 minutes; 240 samples
+# is well past that even at a 2-second scan cadence and bounds memory
+# regardless of how many devices the sensor is tracking.
+_OBS_BUFFER_MAX = 240
+_OBS_BUFFER_AGE_S = 900.0
+# Speed thresholds used as fallback defaults when match_value doesn't
+# carry one explicitly. Stationary cutoff is generous (sub-walking pace)
+# so a drifting GPS fix at rest doesn't void approach-vector trends.
+_STATIONARY_MAX_MPS = 0.6
 
 
 class AlertService:
@@ -38,6 +50,11 @@ class AlertService:
         # Cached whitelist as (kind, lowercased target). Targets match either
         # exactly or as a prefix (so "aa:bb:cc" whitelists the whole OUI).
         self._whitelist: list[tuple[str, str]] = []
+        # Per-device rolling samples of (t_unix, rssi, speed_mps). Feeds
+        # travel_time_companion (look for sustained sightings at speed) and
+        # approach_vector (RSSI improving while stationary). Bounded per
+        # device and pruned by age in _record_sample.
+        self._obs_buffer: dict[tuple[str, str], deque[tuple[float, int, float]]] = {}
 
     async def load_rules(self) -> None:
         self._rules = await db.list_alert_rules()
@@ -89,6 +106,7 @@ class AlertService:
         location_id: int | None,
         details: dict,
         is_new: bool = False,
+        speed_mps: float | None = None,
     ) -> list[int]:
         """Run all enabled rules against a single device sighting. Returns
         a list of newly-inserted alert_events ids (after latch filtering)."""
@@ -107,6 +125,12 @@ class AlertService:
         ssid_or_name = (details.get("ssid") or details.get("name") or "")
         vendor = (details.get("vendor") or "")
         location_age_s: float | None = None  # lazily fetched
+        # Record this sighting in the per-device rolling buffer so the
+        # motion-aware rules below have a window of history to read.
+        # Speed defaults to 0 when GPS doesn't provide one — that biases
+        # toward "stationary", which only affects approach_vector (more
+        # likely to fire) and travel_time_companion (less likely to fire).
+        self._record_sample(device_kind, device_id_l, rssi, speed_mps)
 
         for rule in self._rules:
             if not rule.get("enabled"):
@@ -167,6 +191,132 @@ class AlertService:
                     "_companion_count": count,
                     "_companion_window_h": window_h,
                 }
+            elif mt == "co_arrival_transit":
+                # match_value: "M/N/W" — device first-sighted within W seconds
+                # of arrival at ≥ M of the last N location transitions. Catches
+                # a follower who reliably surfaces at fresh stops shortly
+                # after you do, while staying invisible at long-occupied
+                # locations where lots of devices accumulate.
+                min_m, n_arrivals, window_s = _parse_co_arrival_value(rule.get("match_value") or "")
+                if min_m is None:
+                    continue
+                hits, checked, hit_locs = await self._eval_co_arrival(
+                    device_kind, device_id_l, n_arrivals, window_s,
+                )
+                if hits < min_m:
+                    continue
+                details = {
+                    **details,
+                    "_co_arrival_hits": hits,
+                    "_co_arrival_checked": checked,
+                    "_co_arrival_window_s": window_s,
+                    "_co_arrival_locations": hit_locs,
+                }
+            elif mt == "travel_time_companion":
+                # match_value: "T/V" — device tracked for ≥ T seconds while
+                # GPS speed was ≥ V m/s for every sample in that window.
+                # Strong signal that the device is moving WITH the sensor
+                # (riding in the same vehicle, walking in formation) rather
+                # than being a static fixture being passed by.
+                min_s, min_v = _parse_travel_value(rule.get("match_value") or "")
+                if min_s is None:
+                    continue
+                span_s, sample_count = self._eval_travel_companion(
+                    device_kind, device_id_l, min_v,
+                )
+                if span_s < min_s:
+                    continue
+                details = {
+                    **details,
+                    "_travel_seconds": round(span_s, 1),
+                    "_travel_min_speed_mps": min_v,
+                    "_travel_samples": sample_count,
+                }
+            elif mt == "approach_vector":
+                # match_value: "D/T" — RSSI improved by ≥ D dB across a
+                # window of T seconds while the sensor was effectively
+                # stationary (so the improvement is the device moving
+                # closer, not us walking toward a static AP). Catches a
+                # static-bluetooth-tag follower closing in on a parked
+                # operator.
+                min_db, win_s = _parse_approach_value(rule.get("match_value") or "")
+                if min_db is None:
+                    continue
+                delta_db, samples = self._eval_approach_vector(
+                    device_kind, device_id_l, win_s,
+                )
+                if delta_db is None or delta_db < min_db:
+                    continue
+                details = {
+                    **details,
+                    "_approach_delta_db": delta_db,
+                    "_approach_window_s": win_s,
+                    "_approach_samples": samples,
+                }
+            elif mt == "novel_location_chain":
+                # match_value: "N/H" — device appears at ≥ N distinct
+                # locations that were *first created* within the last H
+                # hours. A device that keeps showing up at brand-new places
+                # you've never been before is following the route, not the
+                # neighbourhood.
+                min_n, window_h = _parse_novel_value(rule.get("match_value") or "")
+                if min_n is None:
+                    continue
+                count = await db.count_novel_locations(
+                    device_kind, device_id_l,
+                    window_hours=window_h, location_max_age_hours=window_h,
+                )
+                if count < min_n:
+                    continue
+                details = {
+                    **details,
+                    "_novel_count": count,
+                    "_novel_window_h": window_h,
+                }
+            elif mt == "mac_rotation_rate":
+                # match_value: "K/H" — BLE adv-data signature has ≥ K
+                # distinct MACs in the last H hours. A device cycling
+                # through K private MACs near you is either an Apple
+                # device in rotation-mode (very common) or a follower
+                # deliberately trying to evade per-MAC tracking. The
+                # K threshold lets the user tune away from the baseline
+                # noise of their own iPhone.
+                min_k, window_h = _parse_rotation_value(rule.get("match_value") or "")
+                if min_k is None or device_kind != "bluetooth":
+                    continue
+                count = await db.count_signature_macs(
+                    device_kind, device_id_l, window_hours=window_h,
+                )
+                if count < min_k:
+                    continue
+                details = {
+                    **details,
+                    "_rotation_macs": count,
+                    "_rotation_window_h": window_h,
+                }
+            elif mt == "cross_kind_co_travel":
+                # match_value: "M/H" — a device of the *other* kind shares
+                # ≥ M of this device's locations within the last H hours.
+                # Catches followers who carry both a BLE-emitting tag and
+                # a WiFi-broadcasting device: neither alone might trip the
+                # persistent_companion threshold, but the pair confirms a
+                # single carrier moving through your locations.
+                min_m, window_h = _parse_cross_kind_value(rule.get("match_value") or "")
+                if min_m is None:
+                    continue
+                partner = await db.find_cross_kind_partner(
+                    device_kind, device_id_l,
+                    window_hours=window_h, min_overlap=min_m,
+                )
+                if partner is None:
+                    continue
+                details = {
+                    **details,
+                    "_cross_kind_partner": partner["device_id"],
+                    "_cross_kind_partner_kind": partner["kind"],
+                    "_cross_kind_overlap": partner["overlap"],
+                    "_cross_kind_window_h": window_h,
+                }
             elif not _matches(rule, device_id_l, ssid_or_name, vendor, rssi):
                 continue
 
@@ -210,6 +360,121 @@ class AlertService:
                 ))
 
         return emitted
+
+    def _record_sample(
+        self, kind: str, device_id_l: str,
+        rssi: int, speed_mps: float | None,
+    ) -> None:
+        """Append a sighting to the per-device rolling buffer used by
+        travel_time_companion and approach_vector. Speed missing = 0 so
+        approach_vector still works on offline (no-GPS) sensors."""
+        key = (kind, device_id_l)
+        buf = self._obs_buffer.get(key)
+        if buf is None:
+            buf = deque(maxlen=_OBS_BUFFER_MAX)
+            self._obs_buffer[key] = buf
+        now = time.time()
+        buf.append((now, int(rssi), float(speed_mps or 0.0)))
+        # Drop entries older than the cap window so a long-stale buffer
+        # can't keep alerting on history the operator has moved past.
+        cutoff = now - _OBS_BUFFER_AGE_S
+        while buf and buf[0][0] < cutoff:
+            buf.popleft()
+
+    async def _eval_co_arrival(
+        self, kind: str, device_id_l: str,
+        n_arrivals: int, window_s: float,
+    ) -> tuple[int, int, list[int]]:
+        """Return (hits, checked, hit_location_ids). 'hits' = how many of
+        the last n_arrivals had a first-sighting of the device within
+        `window_s` of the arrival timestamp. 'checked' = how many recent
+        arrivals were actually considered (may be < n_arrivals on a fresh
+        process)."""
+        recent = location_manager.recent_arrivals()
+        if not recent:
+            return 0, 0, []
+        recent = recent[-n_arrivals:]
+        loc_ids = [lid for (lid, _) in recent]
+        # Pull observation cutoffs from the oldest arrival timestamp so
+        # one DB query covers the whole window.
+        oldest_t = min(t for (_, t) in recent)
+        since_iso = datetime.fromtimestamp(oldest_t).isoformat()
+        firsts = await db.first_sightings_at_locations(
+            kind, device_id_l, loc_ids, since_iso,
+        )
+        hits = 0
+        hit_locs: list[int] = []
+        for lid, arrived_t in recent:
+            first_iso = firsts.get(lid)
+            if not first_iso:
+                continue
+            try:
+                first_t = datetime.fromisoformat(first_iso).timestamp()
+            except ValueError:
+                continue
+            if 0 <= (first_t - arrived_t) <= window_s:
+                hits += 1
+                hit_locs.append(lid)
+        return hits, len(recent), hit_locs
+
+    def _eval_travel_companion(
+        self, kind: str, device_id_l: str, min_speed_mps: float,
+    ) -> tuple[float, int]:
+        """Return (span_seconds, sample_count) for the longest contiguous
+        tail of buffer samples whose speed >= min_speed_mps. Span is the
+        timestamp delta from the oldest qualifying sample to the newest;
+        sample_count is how many samples fed into it."""
+        key = (kind, device_id_l)
+        buf = self._obs_buffer.get(key)
+        if not buf or len(buf) < 2:
+            return 0.0, 0
+        # Walk from the newest sample backward; stop at the first sample
+        # that breaks the speed floor. The remaining tail is one
+        # contiguous in-motion stretch ending "now".
+        items = list(buf)
+        cut = len(items)
+        for i in range(len(items) - 1, -1, -1):
+            if items[i][2] < min_speed_mps:
+                cut = i + 1
+                break
+            else:
+                cut = i
+        tail = items[cut:]
+        if len(tail) < 2:
+            return 0.0, len(tail)
+        span = tail[-1][0] - tail[0][0]
+        return span, len(tail)
+
+    def _eval_approach_vector(
+        self, kind: str, device_id_l: str, window_s: float,
+    ) -> tuple[float | None, int]:
+        """Return (delta_db, sample_count). Positive delta means the
+        signal got STRONGER (less-negative RSSI) over the window. Only
+        considers samples taken while effectively stationary — a sensor
+        in motion can produce arbitrary RSSI trends from its own
+        movement, not the target's. Returns (None, 0) when there isn't
+        enough stationary data to judge."""
+        key = (kind, device_id_l)
+        buf = self._obs_buffer.get(key)
+        if not buf or len(buf) < 2:
+            return None, 0
+        now = time.time()
+        cutoff = now - window_s
+        # All samples within the window AND stationary at sample time.
+        samples = [
+            (t, r) for (t, r, sp) in buf
+            if t >= cutoff and sp <= _STATIONARY_MAX_MPS
+        ]
+        if len(samples) < 2:
+            return None, len(samples)
+        # Need to cover most of the window — short bursts of stationary
+        # data near a moving sensor would otherwise be misleading.
+        span = samples[-1][0] - samples[0][0]
+        if span < window_s * 0.5:
+            return None, len(samples)
+        oldest_rssi = samples[0][1]
+        newest_rssi = samples[-1][1]
+        return float(newest_rssi - oldest_rssi), len(samples)
 
     async def _location_age_seconds(self, location_id: int | None) -> float:
         """Seconds since the given location's row was created. Cached per id."""
@@ -556,6 +821,75 @@ def build_discord_payload(
                 "name": "Persistent companion",
                 "value": f"{c} locations in last {h}h", "inline": True,
             })
+    if match_type == "co_arrival_transit":
+        hits = details.get("_co_arrival_hits")
+        checked = details.get("_co_arrival_checked")
+        win = details.get("_co_arrival_window_s")
+        locs = details.get("_co_arrival_locations") or []
+        if hits is not None and checked is not None:
+            fields.append({
+                "name": "Co-arrival",
+                "value": f"{hits} of last {checked} arrivals (within {win:g}s)",
+                "inline": True,
+            })
+        if locs:
+            shown = ", ".join(f"#{l}" for l in locs[:6])
+            if len(locs) > 6:
+                shown += f" (+{len(locs) - 6})"
+            fields.append({
+                "name": "Co-arrival locations", "value": shown, "inline": True,
+            })
+    if match_type == "travel_time_companion":
+        secs = details.get("_travel_seconds")
+        mv = details.get("_travel_min_speed_mps")
+        n = details.get("_travel_samples")
+        if secs is not None:
+            fields.append({
+                "name": "Co-travel",
+                "value": f"{secs:g}s sustained · ≥{mv:g} m/s · {n} samples",
+                "inline": True,
+            })
+    if match_type == "approach_vector":
+        delta = details.get("_approach_delta_db")
+        win = details.get("_approach_window_s")
+        n = details.get("_approach_samples")
+        if delta is not None:
+            fields.append({
+                "name": "Approach",
+                "value": f"+{delta:g} dB over {win:g}s while stationary "
+                         f"({n} samples)",
+                "inline": True,
+            })
+    if match_type == "novel_location_chain":
+        c = details.get("_novel_count")
+        h = details.get("_novel_window_h")
+        if c is not None and h is not None:
+            fields.append({
+                "name": "Novel-location chain",
+                "value": f"{c} brand-new locations in last {h}h",
+                "inline": True,
+            })
+    if match_type == "mac_rotation_rate":
+        c = details.get("_rotation_macs")
+        h = details.get("_rotation_window_h")
+        if c is not None and h is not None:
+            fields.append({
+                "name": "MAC rotation",
+                "value": f"{c} distinct MACs share this BLE signature in last {h}h",
+                "inline": True,
+            })
+    if match_type == "cross_kind_co_travel":
+        partner = details.get("_cross_kind_partner")
+        pkind = details.get("_cross_kind_partner_kind")
+        overlap = details.get("_cross_kind_overlap")
+        h = details.get("_cross_kind_window_h")
+        if partner and overlap is not None:
+            fields.append({
+                "name": "Cross-kind partner",
+                "value": f"`{partner}` ({_KIND_LABELS.get(pkind, pkind)}) — "
+                         f"{overlap} shared locations in last {h}h",
+                "inline": False,
+            })
 
     # Description: include match_value so operators see *what* triggered,
     # the rule's scope, and any tracker classification up front.
@@ -646,6 +980,92 @@ def _parse_companion_value(value: str) -> tuple[int | None, int]:
     try:
         m = int(parts[0]) if parts and parts[0] else 2
         h = int(parts[1]) if len(parts) > 1 and parts[1] else 4
+    except (ValueError, IndexError):
+        return None, 0
+    if m < 2 or h < 1:
+        return None, 0
+    return m, h
+
+
+def _parse_co_arrival_value(value: str) -> tuple[int | None, int, float]:
+    """Parse 'M/N/W' into (min_hits, n_arrivals, window_seconds). Defaults:
+    M=2, N=5, W=120. Returns (None, 0, 0.0) on invalid input. M ≥ 2 to
+    avoid alerting on a single coincidence."""
+    parts = [p.strip() for p in (value or "").split("/")]
+    try:
+        m = int(parts[0]) if parts and parts[0] else 2
+        n = int(parts[1]) if len(parts) > 1 and parts[1] else 5
+        w = float(parts[2]) if len(parts) > 2 and parts[2] else 120.0
+    except (ValueError, IndexError):
+        return None, 0, 0.0
+    if m < 2 or n < m or w <= 0:
+        return None, 0, 0.0
+    return m, n, w
+
+
+def _parse_travel_value(value: str) -> tuple[float | None, float]:
+    """Parse 'T/V' into (min_seconds, min_speed_mps). Defaults: T=60s, V=2.0.
+    Returns (None, 0) on invalid input."""
+    parts = [p.strip() for p in (value or "").split("/")]
+    try:
+        t = float(parts[0]) if parts and parts[0] else 60.0
+        v = float(parts[1]) if len(parts) > 1 and parts[1] else 2.0
+    except (ValueError, IndexError):
+        return None, 0.0
+    if t <= 0 or v <= 0:
+        return None, 0.0
+    return t, v
+
+
+def _parse_approach_value(value: str) -> tuple[float | None, float]:
+    """Parse 'D/T' into (min_delta_db, window_seconds). Defaults: D=8 dB,
+    T=30s. Returns (None, 0) on invalid input."""
+    parts = [p.strip() for p in (value or "").split("/")]
+    try:
+        d = float(parts[0]) if parts and parts[0] else 8.0
+        t = float(parts[1]) if len(parts) > 1 and parts[1] else 30.0
+    except (ValueError, IndexError):
+        return None, 0.0
+    if d <= 0 or t <= 0:
+        return None, 0.0
+    return d, t
+
+
+def _parse_novel_value(value: str) -> tuple[int | None, int]:
+    """Parse 'N/H' into (min_novel_locations, window_hours). Defaults: N=2, H=24.
+    Returns (None, 0) on invalid input. Window covers BOTH the observation
+    range and the location-creation freshness."""
+    parts = [p.strip() for p in (value or "").split("/")]
+    try:
+        n = int(parts[0]) if parts and parts[0] else 2
+        h = int(parts[1]) if len(parts) > 1 and parts[1] else 24
+    except (ValueError, IndexError):
+        return None, 0
+    if n < 2 or h < 1:
+        return None, 0
+    return n, h
+
+
+def _parse_rotation_value(value: str) -> tuple[int | None, int]:
+    """Parse 'K/H' into (min_distinct_macs, window_hours). Defaults: K=3, H=4.
+    K ≥ 2 (a signature with one MAC isn't rotating)."""
+    parts = [p.strip() for p in (value or "").split("/")]
+    try:
+        k = int(parts[0]) if parts and parts[0] else 3
+        h = int(parts[1]) if len(parts) > 1 and parts[1] else 4
+    except (ValueError, IndexError):
+        return None, 0
+    if k < 2 or h < 1:
+        return None, 0
+    return k, h
+
+
+def _parse_cross_kind_value(value: str) -> tuple[int | None, int]:
+    """Parse 'M/H' into (min_overlap_locations, window_hours). Defaults: M=2, H=24."""
+    parts = [p.strip() for p in (value or "").split("/")]
+    try:
+        m = int(parts[0]) if parts and parts[0] else 2
+        h = int(parts[1]) if len(parts) > 1 and parts[1] else 24
     except (ValueError, IndexError):
         return None, 0
     if m < 2 or h < 1:

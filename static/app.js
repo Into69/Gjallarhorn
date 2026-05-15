@@ -1548,6 +1548,13 @@ const MATCH_TYPE_LABEL = {
   rssi_above: "RSSI ≥",
   new_device: "new device (after Ns)",
   cross_location: "cross-location M/N",
+  persistent_companion: "persistent companion M/H",
+  co_arrival_transit: "co-arrival M/N/Ws",
+  travel_time_companion: "travel-time T/V",
+  approach_vector: "approach D/T",
+  novel_location_chain: "novel-locations N/H",
+  mac_rotation_rate: "MAC rotation K/H",
+  cross_kind_co_travel: "cross-kind co-travel M/H",
 };
 let alertsLastSeenId = 0;
 
@@ -2162,12 +2169,24 @@ const MATCH_TYPE_PLACEHOLDERS = {
   new_device: "300 (seconds the location must be established first; 0 = arm immediately)",
   cross_location: "5/2 — appears in at least 2 of the last 5 locations",
   persistent_companion: "3/4 — seen at ≥3 distinct locations within the last 4 hours (BLE rotating MACs counted together)",
+  co_arrival_transit: "2/5/120 — co-arrives within 120s of you at 2 of the last 5 location transitions",
+  travel_time_companion: "60/2 — sighted for ≥60s while GPS speed ≥2 m/s (riding with you)",
+  approach_vector: "8/30 — RSSI improved by ≥8 dB over 30s while you were stationary (closing in)",
+  novel_location_chain: "2/24 — shows up at ≥2 places you only started visiting in the last 24h",
+  mac_rotation_rate: "3/4 — ≥3 distinct MACs sharing one BLE signature in the last 4h (BLE only)",
+  cross_kind_co_travel: "2/24 — pairs with a device of the other kind at ≥2 of your last-24h locations",
 };
 const MATCH_TYPE_DEFAULTS = {
   rssi_above: "-60",
   new_device: "300",
   cross_location: "5/2",
   persistent_companion: "3/4",
+  co_arrival_transit: "2/5/120",
+  travel_time_companion: "60/2",
+  approach_vector: "8/30",
+  novel_location_chain: "2/24",
+  mac_rotation_rate: "3/4",
+  cross_kind_co_travel: "2/24",
 };
 
 function applyMatchTypeUI(matchType) {
