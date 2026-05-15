@@ -835,28 +835,71 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .alert-device { font-family: ui-monospace, Consolas, monospace; color: var(--fg); }
 .alert-rssi { color: var(--warn); font-family: ui-monospace, Consolas, monospace; }
 
-/* Settings: auto-fitting fieldset grid so panels flow into multiple columns
-   on wide displays (auto-fit collapses to one column on narrow viewports
-   without needing a media query). */
-#settings-form {
-  display: grid;
+/* Settings tab: single-column flow inside a max-width container. The
+   previous layout was an auto-fit 2-column grid, which produced ragged
+   rows because fieldsets vary wildly in height (Probe scanner vs. GPS),
+   and only the Update + OUI panels got margin-top — the whitelist /
+   silenced panels butted directly against whatever was above them. The
+   wrapper centres the content on wide displays without sprawling. */
+.settings-page {
+  max-width: 720px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  align-items: start;
+}
+#settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+/* Every panel under #tab-settings gets the same spacing — the old
+   selector list only covered Update + OUI, which is what made the
+   Whitelist / Silenced panels appear to overlap. */
+#tab-settings .settings-page > fieldset {
+  margin: 0;
 }
 .form-actions {
-  grid-column: 1 / -1;
+  /* Sticky bottom Save bar so the action stays in reach on long forms. */
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(180deg, transparent 0, var(--bg) 12px, var(--bg) 100%);
+  padding: 10px 0 4px;
+  margin-top: 4px;
   display: flex; align-items: center; gap: 12px;
+  z-index: 5;
 }
-#tab-settings > #update-panel,
-#tab-settings > #oui-panel {
-  /* Side panels span full width below the form. */
-  margin-top: 16px;
-}
-fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--panel); }
-legend { color: var(--muted); padding: 0 6px; }
-fieldset label { display: grid; gap: 4px; margin-bottom: 8px; }
+fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; background: var(--panel); }
+legend { color: var(--muted); padding: 0 6px; font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; }
+fieldset label { display: grid; gap: 4px; margin-bottom: 10px; }
 fieldset label.check { grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
+fieldset > label:last-child { margin-bottom: 0; }
+/* Sub-section headings inside a fieldset (e.g. Wi-Fi / BLE / Classic
+   under Sensors). Tight visual rhythm — sits flush above its inputs
+   without burning a whole row of padding like another fieldset would. */
+.subsection-h {
+  margin: 14px 0 8px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  font-weight: 600;
+}
+.subsection-h:first-child,
+fieldset > legend + .subsection-h {
+  margin-top: 0; padding-top: 0; border-top: none;
+}
+/* Two paired inputs on one row (e.g. interval + duration) — collapses
+   to one column on narrow viewports via the existing media query. */
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 12px;
+  margin-bottom: 10px;
+}
+.field-row > label { margin-bottom: 0; }
 #save-status { color: var(--muted); }
 .muted { color: var(--muted); }
 
@@ -1361,10 +1404,14 @@ select option:disabled { color: var(--muted); }
   }
   .feed-filters input[type="search"] { min-width: 0; flex: 1 1 100%; }
 
-  /* Settings: tighten gaps for narrow viewports (auto-fit grid already
-     collapses to a single column when no two ≥360px columns fit). */
+  /* Settings: tighten gaps for narrow viewports and collapse paired
+     field-rows so each input gets full width instead of fighting for
+     half on a phone. */
+  .settings-page { gap: 10px; }
   #settings-form { gap: 10px; }
-  fieldset { padding: 8px 10px; }
+  fieldset { padding: 10px 12px; }
+  .field-row { grid-template-columns: 1fr; gap: 0; }
+  .field-row > label { margin-bottom: 10px; }
 
   /* Larger tap targets on primary controls. */
   button {

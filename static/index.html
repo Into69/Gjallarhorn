@@ -404,6 +404,7 @@
     </section>
 
     <section id="tab-settings" class="tab">
+      <div class="settings-page">
       <form id="settings-form">
         <fieldset>
           <legend>Map</legend>
@@ -425,39 +426,56 @@
 
         <fieldset>
           <legend>Sensors</legend>
+
+          <h4 class="subsection-h">Wi-Fi</h4>
           <label>WiFi interface
             <select name="wifi_interface" id="set-wifi-iface"></select>
             <div id="wifi-iface-info" class="iface-info"></div>
           </label>
+          <label>Scan interval (s)
+            <input type="number" name="wifi_scan_interval_s" min="3" max="600" />
+          </label>
+
+          <h4 class="subsection-h">Bluetooth Low Energy (BLE)</h4>
           <label>Bluetooth adapter
             <select name="bluetooth_adapter" id="set-bt-adapter"></select>
             <div id="bt-adapter-info" class="iface-info"></div>
           </label>
-          <label>WiFi scan interval (s)
-            <input type="number" name="wifi_scan_interval_s" min="3" max="600" />
-          </label>
-          <label>Bluetooth scan interval (s)
-            <input type="number" name="bluetooth_scan_interval_s" min="3" max="600" />
-          </label>
-          <label>Bluetooth scan duration (s)
-            <input type="number" name="bluetooth_scan_duration_s" min="2" max="60" />
-          </label>
+          <div class="field-row">
+            <label>Scan interval (s)
+              <input type="number" name="bluetooth_scan_interval_s" min="3" max="600" />
+            </label>
+            <label>Scan duration (s)
+              <input type="number" name="bluetooth_scan_duration_s" min="2" max="60" />
+            </label>
+          </div>
+
+          <h4 class="subsection-h">Bluetooth Classic (BR/EDR)</h4>
           <label class="check">
             <input type="checkbox" name="bluetooth_classic_enabled" />
-            Bluetooth Classic (BR/EDR) inquiry — Linux/BlueZ only. Most paired devices stay silent; only finds devices in discoverable / pairing mode. Briefly stalls BLE while running.
+            Enable BR/EDR inquiry
           </label>
-          <label>Bluetooth Classic scan interval (s)
-            <input type="number" name="bluetooth_classic_scan_interval_s" min="15" max="3600" />
-          </label>
-          <label>Bluetooth Classic scan duration (s)
-            <input type="number" name="bluetooth_classic_scan_duration_s" min="3" max="60" />
-          </label>
+          <p class="hint">
+            Linux / BlueZ only. Most already-paired devices stay silent — Classic
+            inquiry only finds devices in discoverable / pairing mode. Briefly
+            stalls the BLE scanner while the controller switches transports.
+          </p>
+          <div class="field-row">
+            <label>Scan interval (s)
+              <input type="number" name="bluetooth_classic_scan_interval_s" min="15" max="3600" />
+            </label>
+            <label>Scan duration (s)
+              <input type="number" name="bluetooth_classic_scan_duration_s" min="3" max="60" />
+            </label>
+          </div>
         </fieldset>
 
         <fieldset>
           <legend>GPS</legend>
-          <label>gpsd host <input type="text" name="gpsd_host" /></label>
-          <label>gpsd port <input type="number" name="gpsd_port" min="1" max="65535" /></label>
+          <div class="field-row">
+            <label>gpsd host <input type="text" name="gpsd_host" /></label>
+            <label>gpsd port <input type="number" name="gpsd_port" min="1" max="65535" /></label>
+          </div>
           <label>Poll interval (s)
             <input type="number" step="0.1" name="gps_poll_interval_s" min="0.2" max="10" />
           </label>
@@ -555,12 +573,14 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             either to <code>0</code> to keep that table forever. Whitelisted
             devices are exempt from the device sweep.
           </p>
-          <label>Observation retention (days)
-            <input type="number" name="observation_retention_days" min="0" max="3650" />
-          </label>
-          <label>Device retention (days, 0 = forever)
-            <input type="number" name="device_retention_days" min="0" max="3650" />
-          </label>
+          <div class="field-row">
+            <label>Observation retention (days)
+              <input type="number" name="observation_retention_days" min="0" max="3650" />
+            </label>
+            <label>Device retention (days, 0 = forever)
+              <input type="number" name="device_retention_days" min="0" max="3650" />
+            </label>
+          </div>
           <div class="toolbar">
             <button type="button" id="purge-now" class="secondary">Purge now</button>
             <span id="purge-status" class="muted"></span>
@@ -704,6 +724,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
           <span id="oui-test-result" class="muted"></span>
         </div>
       </fieldset>
+      </div>
     </section>
 
     <section id="tab-logs" class="tab">
