@@ -409,6 +409,7 @@
         <div class="settings-nav-group">
           <h3 class="settings-nav-heading">Sensors &amp; data</h3>
           <button type="button" class="settings-nav-item active" data-section="map">Map</button>
+          <button type="button" class="settings-nav-item" data-section="appearance">Appearance</button>
           <button type="button" class="settings-nav-item" data-section="sensors">Sensors</button>
           <button type="button" class="settings-nav-item" data-section="gps">GPS</button>
           <button type="button" class="settings-nav-item" data-section="probe">Probe scanner</button>
@@ -447,6 +448,25 @@
             <button type="button" id="tc-clear" class="danger">Clear cache</button>
             <span id="tc-status" class="muted"></span>
           </div>
+        </fieldset>
+        </div>
+
+        <div class="settings-section" data-section="appearance">
+        <fieldset>
+          <legend>Appearance</legend>
+          <label>Font size
+            <select name="font_scale" id="set-font-scale">
+              <option value="small">Small</option>
+              <option value="default" selected>Default</option>
+              <option value="large">Large</option>
+              <option value="x-large">Extra large</option>
+            </select>
+          </label>
+          <p class="hint">
+            Scales the whole UI via CSS <code>zoom</code>. Applies immediately
+            and persists with the rest of your settings — Save isn't required
+            for the preview, but you'll lose the choice on refresh unless you do.
+          </p>
         </fieldset>
         </div>
 

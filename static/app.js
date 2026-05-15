@@ -1330,9 +1330,21 @@ async function loadSettings() {
   await applyMapProvider(s.map_provider);
   applyLocDynamicEnabled();
   applyBtcTriggerMode();
+  applyFontScale(s.font_scale || "default");
   // Kick off the probe channel checkbox grid for the saved interface (if any).
   refreshProbeChannelsForIface((s.probe_interface || "").trim() || null);
 }
+
+// Set the body[data-font-scale] attribute that drives the global zoom
+// CSS rules. "default" is the no-zoom path, so we clear the attribute
+// instead of setting it — keeps the DOM clean in the common case.
+function applyFontScale(value) {
+  const valid = new Set(["small", "default", "large", "x-large"]);
+  const v = valid.has(value) ? value : "default";
+  if (v === "default") document.body.removeAttribute("data-font-scale");
+  else document.body.setAttribute("data-font-scale", v);
+}
+$("#set-font-scale")?.addEventListener("change", (e) => applyFontScale(e.target.value));
 
 function applyLocDynamicEnabled() {
   const cb = $("#set-loc-dynamic");

@@ -15,6 +15,15 @@
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
   font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 
+/* Global UI scale — controlled by the font_scale setting via a
+   data-font-scale attribute on <body>. Uses `zoom` rather than
+   font-size because the rest of the CSS is in px (not rem/em), so a
+   pure font-size change wouldn't scale buttons, table cells, etc.
+   Modern browsers (incl. Firefox 126+) all support `zoom`. */
+body[data-font-scale="small"]   { zoom: 0.88; }
+body[data-font-scale="large"]   { zoom: 1.15; }
+body[data-font-scale="x-large"] { zoom: 1.30; }
+
 header {
   display: flex; align-items: center; gap: 16px;
   padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border);

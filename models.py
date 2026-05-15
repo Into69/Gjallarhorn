@@ -105,6 +105,11 @@ class AppSettings(BaseModel):
         "google_roadmap", "google_satellite", "google_hybrid", "google_terrain"
     ] = "osm"
 
+    # Global UI scale — applied as a CSS `zoom` on <body>. Server-side
+    # so the chosen size sticks across page refreshes and other sessions
+    # the operator opens on the same install.
+    font_scale: Literal["small", "default", "large", "x-large"] = "default"
+
     # interfaces
     # wifi_interface: null = disabled (no scanning); "auto" = pick first
     # non-associated wireless interface at scan time; otherwise the literal
