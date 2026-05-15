@@ -577,13 +577,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .rule-form {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0,1fr) so a long <option> label inside the Match-type select
+     can't force a grid cell wider than its share — otherwise the form
+     spills past its column and pushes adjacent fields out of alignment. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px 12px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px;
 }
+.rule-form select,
+.rule-form input[type="text"],
+.rule-form input[type="number"] { min-width: 0; width: 100%; box-sizing: border-box; }
 .rule-form h4 {
   grid-column: 1 / -1;
   margin: 0;
@@ -591,7 +597,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-transform: uppercase; letter-spacing: 1.5px;
 }
 .rule-form label { display: grid; gap: 4px; font-size: 11px; color: var(--muted); }
-.rule-form button[type=submit] { grid-column: 1 / -1; justify-self: start; }
+/* Checkbox rows in the rule form need horizontal layout — without this,
+   the inherited grid rule above stacks the box above its text label and
+   the row balloons in height, pushing surrounding fields out of line. */
+.rule-form label.check {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.rule-form label.check input[type="checkbox"] { margin: 0; }
+.rule-form button[type=submit],
+.rule-form button[type=button] { justify-self: start; }
 .rule-form .muted { grid-column: 1 / -1; }
 
 .feed-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
