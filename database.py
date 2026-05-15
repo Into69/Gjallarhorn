@@ -225,6 +225,27 @@ _MFG_TILE = 1660     # 0x067C
 _MFG_SAMSUNG = 117   # 0x0075
 
 
+def kind_label(kind: str, address_type: Optional[str] = None) -> str:
+    """Human-friendly label for a device kind. BLE devices get split by
+    address_type since the scanner is BLE-only and the public/random
+    distinction is the most useful breakdown the operator has — public
+    addresses are usually fixed-MAC dual-mode peripherals (speakers,
+    keyboards), random addresses are modern privacy-mode BLE (phones,
+    AirTags). Mirrors formatKindLabel() in static/app.js."""
+    if kind == "wifi":
+        return "WiFi AP"
+    if kind == "wifi_client":
+        return "WiFi client (probe)"
+    if kind == "bluetooth":
+        at = (address_type or "").lower()
+        if at == "public":
+            return "BLE (public)"
+        if at == "random":
+            return "BLE (random)"
+        return "BLE"
+    return kind or ""
+
+
 def classify_tracker(kind: str, details: dict) -> Optional[str]:
     """Identify known commercial trackers from BLE advertising data.
 

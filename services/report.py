@@ -370,7 +370,7 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
     total_cl = sum(int(l.get("wifi_client_count") or 0) for l in locations)
     if total_wifi or total_bt or total_cl:
         out.append(
-            f"<b>By kind:</b> {total_wifi} Wi-Fi APs, {total_bt} Bluetooth devices, "
+            f"<b>By kind:</b> {total_wifi} Wi-Fi APs, {total_bt} BLE devices, "
             f"{total_cl} Wi-Fi clients (passive probe captures)."
         )
 
@@ -410,11 +410,10 @@ def _render_suspect(sus: dict, s: dict, *, total_locations: int):
     det = sus.get("details") or {}
     merged_count = sus.get("_merged_count") or 1
     members = sus.get("_members") or []
-    kind_label = {
-        "wifi": "Wi-Fi AP",
-        "bluetooth": "Bluetooth",
-        "wifi_client": "Wi-Fi client",
-    }.get(sus.get("kind", ""), sus.get("kind", "") or "device")
+    # Pull the BLE address_type from the device's details so the label
+    # splits "BLE (public)" / "BLE (random)" — matches what the Devices
+    # tab and Discord embeds show.
+    kind_label = db.kind_label(sus.get("kind", ""), det.get("address_type"))
     name = det.get("ssid") or det.get("name") or ""
     vendor = det.get("vendor") or ""
     n_locs = sus.get("n_locations") or 0
@@ -575,7 +574,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
     flow.append(Paragraph(_summary_blurb(locations, common), s["caption"]))
 
     flow.append(_table(
-        ["Locations", "Wi-Fi APs", "Bluetooth", "Wi-Fi clients", "Observations", "Recurring"],
+        ["Locations", "Wi-Fi APs", "BLE", "Wi-Fi clients", "Observations", "Recurring"],
         [(
             str(len(locations)),
             str(total_wifi),

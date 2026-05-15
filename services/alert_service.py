@@ -616,12 +616,15 @@ def build_discord_payload(
     name_or_ssid = details.get("ssid") or details.get("name") or ""
     vendor = details.get("vendor") or ""
     tracker_type = context.get("tracker_type")
+    # BLE devices get split by address_type — public is dual-mode hardware
+    # (speakers, peripherals), random is privacy-mode BLE (phones, AirTags).
+    # Falls back to plain "BLE" / "Bluetooth" when the type is missing.
+    kind_display = db.kind_label(device_kind, details.get("address_type"))
 
     fields: list[dict] = [
         {"name": "Device", "value": f"`{device_id}`", "inline": True},
         {"name": "RSSI",   "value": f"{rssi} dBm",   "inline": True},
-        {"name": "Kind",   "value": _KIND_LABELS.get(device_kind, device_kind),
-         "inline": True},
+        {"name": "Kind",   "value": kind_display, "inline": True},
     ]
     if name_or_ssid:
         fields.append({"name": "Name / SSID",
@@ -886,14 +889,14 @@ def build_discord_payload(
         if partner and overlap is not None:
             fields.append({
                 "name": "Cross-kind partner",
-                "value": f"`{partner}` ({_KIND_LABELS.get(pkind, pkind)}) — "
+                "value": f"`{partner}` ({db.kind_label(pkind)}) — "
                          f"{overlap} shared locations in last {h}h",
                 "inline": False,
             })
 
     # Description: include match_value so operators see *what* triggered,
     # the rule's scope, and any tracker classification up front.
-    desc_parts = [f"`{match_type}` matched on **{_KIND_LABELS.get(device_kind, device_kind)}**"]
+    desc_parts = [f"`{match_type}` matched on **{kind_display}**"]
     if match_value:
         desc_parts.append(f"value: `{match_value}`")
     rule_loc = rule.get("location_id")
@@ -926,11 +929,6 @@ def build_discord_payload(
     return {"username": username, "embeds": [embed]}
 
 
-_KIND_LABELS = {
-    "wifi": "WiFi AP",
-    "bluetooth": "Bluetooth",
-    "wifi_client": "WiFi client (probe)",
-}
 _TRACKER_LABELS = {
     "airtag": "AirTag / FindMy",
     "tile": "Tile",

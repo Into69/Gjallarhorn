@@ -535,11 +535,27 @@ async function refreshDevices() {
   await loadLocationOptions();
   const id = $("#dev-location").value;
   if (!id) return;
-  const kind = $("#dev-kind").value;
+  // The Kind filter accepts compound 'bluetooth:public' / 'bluetooth:random'
+  // pseudo-kinds in addition to the real DB kinds. The server side only
+  // knows wifi/bluetooth/wifi_client, so we send the base kind and
+  // post-filter rows by address_type in JS.
+  const rawKind = $("#dev-kind").value;
+  let kind = rawKind;
+  let bleAddrFilter = null;
+  if (rawKind && rawKind.startsWith("bluetooth:")) {
+    bleAddrFilter = rawKind.split(":")[1];
+    kind = "bluetooth";
+  }
   const q = kind ? `?kind=${kind}` : "";
-  const { devices } = id === PRESERVED_SENTINEL
+  let { devices } = id === PRESERVED_SENTINEL
     ? await api(`/api/preserved-devices${q}`)
     : await api(`/api/locations/${id}/devices${q}`);
+  if (bleAddrFilter) {
+    devices = devices.filter(d => {
+      const at = (d.details && d.details.address_type) || "";
+      return at === bleAddrFilter;
+    });
+  }
   const tbody = $("#dev-table tbody");
   tbody.innerHTML = "";
 
@@ -696,7 +712,7 @@ function renderDeviceRow(d) {
     : (linkedCount > 0 ? `linked aliases + JSON` : "JSON");
 
   tr.innerHTML = `
-    <td>${escapeHtml(d.kind)}</td>
+    <td>${escapeHtml(formatKindLabel(d.kind, det))}</td>
     <td>${idCell}</td>
     <td>${escapeHtml(nameOrSsid)}</td>
     <td>${escapeHtml(det.vendor || "")}</td>
@@ -2553,7 +2569,7 @@ async function refreshTempWhitelist() {
     panel.hidden = false;
     tbody.innerHTML = entries.map(e => `
       <tr>
-        <td>${escapeHtml(e.kind)}</td>
+        <td>${escapeHtml(formatKindLabel(e.kind, null))}</td>
         <td class="mono">${escapeHtml(e.device_id)}</td>
         <td>${escapeHtml(e.note || "")}</td>
         <td class="mono">${escapeHtml(formatTime(e.created_at))}</td>
@@ -2639,7 +2655,7 @@ function _makeWhitelistRow(e) {
       + ` <span class="muted">→ ${escapeHtml(e.sample_device_id)}</span>`
     : `<span class="mono">${escapeHtml(e.device_id)}</span>${trackerBadge}`;
   tr.innerHTML = `
-    <td>${escapeHtml(e.kind)}</td>
+    <td>${escapeHtml(formatKindLabel(e.kind, null))}</td>
     <td>${idCell}</td>
     <td>${escapeHtml(e.note || "")}</td>
     <td>${matchCell}</td>
@@ -3240,10 +3256,15 @@ function renderBaselineResult(devices) {
     const trackerBadge = d.tracker_type
       ? ` <span class="tracker-tag">${escapeHtml(d.tracker_type)}</span>`
       : "";
+    // Baseline scan rows put address_type at the top of `d` (it's the
+    // BluetoothDevice model coming straight from the scanner), not inside
+    // a nested `.details` like the Devices-tab rows do. Passing `d` itself
+    // works because formatKindLabel just reads `.address_type` off whatever
+    // it gets handed.
     return `
       <tr>
         <td><input type="checkbox" class="baseline-pick" data-i="${i}" checked /></td>
-        <td>${escapeHtml(d.kind)}</td>
+        <td>${escapeHtml(formatKindLabel(d.kind, d))}</td>
         <td class="mono">${escapeHtml(d.device_id)}${trackerBadge}</td>
         <td>${escapeHtml(d.name || "")}</td>
         <td>${escapeHtml(d.vendor || "")}</td>
@@ -3585,6 +3606,23 @@ function renderRssiSparkline(observations) {
         <span>${escapeHtml(tLast)}</span>
       </div>
     </div>`;
+}
+
+// Human-friendly Kind label for table rows. The DB stores the kind as
+// 'wifi' | 'bluetooth' | 'wifi_client' (kept stable for filtering and
+// alert rules), but the Devices tab renders a richer string — BLE devices
+// get split by address_type since the scanner is BLE-only and the
+// public/random distinction is the most useful breakdown the user has.
+function formatKindLabel(kind, details) {
+  if (kind === "wifi") return "WiFi";
+  if (kind === "wifi_client") return "WiFi client";
+  if (kind === "bluetooth") {
+    const at = (details && details.address_type) || "";
+    if (at === "public") return "BLE (public)";
+    if (at === "random") return "BLE (random)";
+    return "BLE";
+  }
+  return kind || "";
 }
 
 // ---------- utils ----------
