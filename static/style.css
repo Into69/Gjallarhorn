@@ -28,9 +28,11 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
    system so the rendered (zoomed) sizes still fill the visual
    viewport. --ui-zoom carries the factor through calc() so each rule
    only mentions the unscaled formula once. */
+body[data-font-scale="x-small"] { --ui-zoom: 0.78; }
 body[data-font-scale="small"]   { --ui-zoom: 0.88; }
 body[data-font-scale="large"]   { --ui-zoom: 1.15; }
 body[data-font-scale="x-large"] { --ui-zoom: 1.30; }
+body[data-font-scale="x-small"],
 body[data-font-scale="small"],
 body[data-font-scale="large"],
 body[data-font-scale="x-large"] {
@@ -38,11 +40,13 @@ body[data-font-scale="x-large"] {
   height: calc(100vh / var(--ui-zoom));
   width:  calc(100vw / var(--ui-zoom));
 }
+body[data-font-scale="x-small"] main,
 body[data-font-scale="small"] main,
 body[data-font-scale="large"] main,
 body[data-font-scale="x-large"] main {
   height: calc(100vh / var(--ui-zoom) - 53px);
 }
+body[data-font-scale="x-small"] .log-list,
 body[data-font-scale="small"] .log-list,
 body[data-font-scale="large"] .log-list,
 body[data-font-scale="x-large"] .log-list {

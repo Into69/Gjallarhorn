@@ -1406,7 +1406,7 @@ async function loadSettings() {
 // CSS rules. "default" is the no-zoom path, so we clear the attribute
 // instead of setting it — keeps the DOM clean in the common case.
 function applyFontScale(value) {
-  const valid = new Set(["small", "default", "large", "x-large"]);
+  const valid = new Set(["x-small", "small", "default", "large", "x-large"]);
   const v = valid.has(value) ? value : "default";
   if (v === "default") document.body.removeAttribute("data-font-scale");
   else document.body.setAttribute("data-font-scale", v);
@@ -1958,6 +1958,8 @@ const MATCH_TYPE_LABEL = {
   novel_location_chain: "novel-locations N/H",
   mac_rotation_rate: "MAC rotation K/H",
   cross_kind_co_travel: "cross-kind co-travel M/H",
+  arrival_after_gap: "arrival after N min gap",
+  absence_gap: "absence ≥ N min",
 };
 let alertsLastSeenId = 0;
 
@@ -2578,6 +2580,8 @@ const MATCH_TYPE_PLACEHOLDERS = {
   novel_location_chain: "2/24 — shows up at ≥2 places you only started visiting in the last 24h",
   mac_rotation_rate: "3/4 — ≥3 distinct MACs sharing one BLE signature in the last 4h (BLE only)",
   cross_kind_co_travel: "2/24 — pairs with a device of the other kind at ≥2 of your last-24h locations",
+  arrival_after_gap: "30 — fire when this device shows up after ≥30 min away (0 = every sighting)",
+  absence_gap: "30 — fire when this device hasn't been seen at the location for ≥30 min",
 };
 const MATCH_TYPE_DEFAULTS = {
   rssi_above: "-60",
@@ -2590,6 +2594,8 @@ const MATCH_TYPE_DEFAULTS = {
   novel_location_chain: "2/24",
   mac_rotation_rate: "3/4",
   cross_kind_co_travel: "2/24",
+  arrival_after_gap: "30",
+  absence_gap: "30",
 };
 
 function applyMatchTypeUI(matchType) {

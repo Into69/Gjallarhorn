@@ -108,7 +108,7 @@ class AppSettings(BaseModel):
     # Global UI scale — applied as a CSS `zoom` on <body>. Server-side
     # so the chosen size sticks across page refreshes and other sessions
     # the operator opens on the same install.
-    font_scale: Literal["small", "default", "large", "x-large"] = "default"
+    font_scale: Literal["x-small", "small", "default", "large", "x-large"] = "default"
 
     # interfaces
     # wifi_interface: null = disabled (no scanning); "auto" = pick first

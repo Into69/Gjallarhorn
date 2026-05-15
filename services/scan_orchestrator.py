@@ -113,6 +113,7 @@ class ScanOrchestrator:
             asyncio.create_task(self._bt_classic_loop()),
             asyncio.create_task(self._probe_loop()),
             asyncio.create_task(self._purge_loop()),
+            asyncio.create_task(self._absence_loop()),
         ]
 
     async def stop(self) -> None:
@@ -356,6 +357,26 @@ class ScanOrchestrator:
                 log.exception("purge loop error: %s", e)
             # 24h between sweeps. Cancellation-aware sleep so stop() returns fast.
             if not await self._sleep(24 * 3600):
+                return
+
+    async def _absence_loop(self) -> None:
+        """Drive the absence_gap rule type. Absence isn't observable from
+        a single sighting — it's defined by the *lack* of one — so a
+        sighting-driven evaluate() can't catch it. This loop polls every
+        ~30s and asks alert_service to check every enabled absence_gap
+        rule against the current `devices` table. Cheap: bounded by the
+        number of absence rules × matching devices, and the DB query is
+        indexed on last_seen."""
+        # Stagger the first run so it doesn't compete with startup.
+        if not await self._sleep(20.0):
+            return
+        while not self._stop.is_set():
+            try:
+                if not self._paused:
+                    await alert_service.check_absence_rules()
+            except Exception as e:
+                log.exception("absence loop error: %s", e)
+            if not await self._sleep(30.0):
                 return
 
     async def _probe_loop(self) -> None:

@@ -294,6 +294,50 @@ class AlertService:
                     "_rotation_macs": count,
                     "_rotation_window_h": window_h,
                 }
+            elif mt == "arrival_after_gap":
+                # match_value: N minutes. Fires when a sighting comes in at a
+                # location and the previous observation of this device at the
+                # same location was more than N minutes ago (or never). N=0
+                # collapses to "every sighting" so the rule is also usable as
+                # a 'fire on any arrival' notifier.
+                gap_min = _parse_arrival_gap_value(rule.get("match_value") or "")
+                if gap_min is None or location_id is None:
+                    continue
+                prior_iso = await db.previous_observation_at_location(
+                    device_kind, device_id_l, location_id,
+                )
+                gap_seconds: float | None = None
+                if prior_iso is not None:
+                    try:
+                        prior_t = datetime.fromisoformat(prior_iso).timestamp()
+                        gap_seconds = max(0.0, time.time() - prior_t)
+                    except ValueError:
+                        gap_seconds = None
+                # "Never seen here before" counts as an arrival.
+                if prior_iso is not None and gap_seconds is not None:
+                    if gap_seconds < gap_min * 60.0:
+                        continue
+                details = {
+                    **details,
+                    "_arrival_gap_minutes": gap_min,
+                    "_arrival_prior_seen": prior_iso,
+                    "_arrival_gap_seconds": gap_seconds,
+                }
+            elif mt == "absence_gap":
+                # Absence is evaluated by the orchestrator's _absence_loop —
+                # it doesn't trigger from a live sighting. Skip this rule in
+                # the sighting-driven path so we don't accidentally fire on
+                # arrival. If a sighting comes in for a device that's already
+                # latched by an absence alert, clear the latch so the next
+                # absence can fire fresh.
+                key = (rule["id"], device_id_l)
+                if key in self._latched:
+                    self._latched.discard(key)
+                    try:
+                        await db.clear_alert_pair(rule["id"], device_id_l)
+                    except Exception:
+                        pass
+                continue
             elif mt == "cross_kind_co_travel":
                 # match_value: "M/H" — a device of the *other* kind shares
                 # ≥ M of this device's locations within the last H hours.
@@ -491,6 +535,106 @@ class AlertService:
                 return 0.0
             self._location_created[location_id] = cached
         return max(0.0, time.time() - cached)
+
+    async def check_absence_rules(self) -> list[int]:
+        """Scan every enabled absence_gap rule for devices that have
+        crossed their no-sighting threshold and fire alerts for the ones
+        that aren't already latched. Called by the orchestrator on a
+        steady cadence — absence is, by definition, the absence of a
+        sighting, so we can't piggy-back on the sighting-driven
+        evaluate() path."""
+        if not self._rules_loaded:
+            await self.load_rules()
+            await self.load_whitelist()
+            await self.load_latches()
+        if not self._rules:
+            return []
+        emitted: list[int] = []
+        for rule in self._rules:
+            if not rule.get("enabled"):
+                continue
+            if rule.get("match_type") != "absence_gap":
+                continue
+            gap_min = _parse_absence_gap_value(rule.get("match_value") or "")
+            if gap_min is None:
+                continue
+            kind_filter = rule.get("kind")
+            loc_filter = rule.get("location_id")
+            location_id: int | None = None
+            if loc_filter == -1:
+                # "Active location" sentinel — resolve at check time.
+                location_id = location_manager.active_id
+                if location_id is None:
+                    continue
+            elif loc_filter is not None:
+                location_id = int(loc_filter)
+            # Cap the lookback so a forever-stale device doesn't keep
+            # re-surfacing every tick — threshold + 24h is wide enough to
+            # catch every device whose absence just crossed the line.
+            max_age_minutes = gap_min + 24 * 60
+            try:
+                candidates = await db.find_absent_devices_at_location(
+                    kind=kind_filter,
+                    location_id=location_id,
+                    min_age_minutes=gap_min,
+                    max_age_minutes=max_age_minutes,
+                )
+            except Exception as e:
+                log.warning("absence query failed for rule %d: %s", rule.get("id"), e)
+                continue
+            for c in candidates:
+                device_kind = c["kind"]
+                device_id = (c.get("device_id") or "")
+                device_id_l = device_id.lower()
+                if self.is_whitelisted(device_kind, device_id_l):
+                    continue
+                # Apply extra value-match conditions so a rule like
+                # "absence_gap for vendor=Apple" only fires on the
+                # devices the operator actually cares about.
+                cdetails = c.get("details") or {}
+                cname = (cdetails.get("ssid") or cdetails.get("name") or "")
+                cvendor = (cdetails.get("vendor") or "")
+                crssi = c.get("last_rssi") or 0
+                extras = rule.get("extra_conditions") or []
+                if extras and not all(
+                    _matches(x, device_id_l, cname, cvendor, crssi) for x in extras
+                ):
+                    continue
+                key = (rule["id"], device_id_l)
+                if key in self._latched:
+                    continue
+                self._latched.add(key)
+                last_seen = c.get("last_seen")
+                try:
+                    gap_actual = max(
+                        0.0,
+                        time.time() - datetime.fromisoformat(last_seen).timestamp(),
+                    )
+                except (TypeError, ValueError):
+                    gap_actual = gap_min * 60.0
+                details = {
+                    **cdetails,
+                    "_absence_threshold_minutes": gap_min,
+                    "_absence_minutes": round(gap_actual / 60.0, 1),
+                    "_absence_last_seen": last_seen,
+                }
+                event_id = await db.insert_alert_event(
+                    rule_id=rule["id"],
+                    location_id=c.get("location_id"),
+                    device_kind=device_kind, device_id=device_id,
+                    rssi=crssi, details=details,
+                )
+                log.info(
+                    "ALERT '%s' (rule %d) absence %s/%s last_seen=%s",
+                    rule["name"], rule["id"], device_kind, device_id, last_seen,
+                )
+                emitted.append(event_id)
+                if rule.get("notify_discord"):
+                    asyncio.create_task(_dispatch_discord(
+                        rule=rule, device_kind=device_kind, device_id=device_id,
+                        rssi=crssi, location_id=c.get("location_id"), details=details,
+                    ))
+        return emitted
 
 
 # ── Discord webhook ───────────────────────────────────────────────
@@ -893,6 +1037,36 @@ def build_discord_payload(
                          f"{overlap} shared locations in last {h}h",
                 "inline": False,
             })
+    if match_type == "arrival_after_gap":
+        gap_min = details.get("_arrival_gap_minutes")
+        prev = details.get("_arrival_prior_seen")
+        gap_s = details.get("_arrival_gap_seconds")
+        if gap_min is not None:
+            value = f"threshold ≥ {gap_min} min"
+            if gap_s is None and prev is None:
+                value += " · first time at this location"
+            elif gap_s is not None:
+                value += f" · last seen here {gap_s / 60.0:.1f} min ago"
+            fields.append({
+                "name": "Arrival", "value": value, "inline": True,
+            })
+    if match_type == "absence_gap":
+        thr = details.get("_absence_threshold_minutes")
+        actual = details.get("_absence_minutes")
+        last_seen = details.get("_absence_last_seen")
+        if thr is not None and actual is not None:
+            fields.append({
+                "name": "Absence",
+                "value": f"silent for {actual:g} min "
+                         f"(threshold ≥ {thr} min)",
+                "inline": True,
+            })
+        if last_seen:
+            fields.append({
+                "name": "Last sighting",
+                "value": _short_time(last_seen),
+                "inline": True,
+            })
 
     # Description: include match_value so operators see *what* triggered,
     # the rule's scope, and any tracker classification up front.
@@ -983,6 +1157,36 @@ def _parse_companion_value(value: str) -> tuple[int | None, int]:
     if m < 2 or h < 1:
         return None, 0
     return m, h
+
+
+def _parse_arrival_gap_value(value: str) -> int | None:
+    """Parse 'N' (minutes) for the arrival_after_gap rule. N must be a
+    non-negative integer; N=0 means 'fire on every sighting'. Returns
+    None on bad input."""
+    s = (value or "").strip()
+    if not s:
+        return None
+    try:
+        n = int(s)
+    except ValueError:
+        return None
+    if n < 0:
+        return None
+    return n
+
+
+def _parse_absence_gap_value(value: str) -> int | None:
+    """Parse 'N' (minutes) for the absence_gap rule. Must be >= 1."""
+    s = (value or "").strip()
+    if not s:
+        return None
+    try:
+        n = int(s)
+    except ValueError:
+        return None
+    if n < 1:
+        return None
+    return n
 
 
 def _parse_co_arrival_value(value: str) -> tuple[int | None, int, float]:

@@ -1606,6 +1606,76 @@ async def count_alert_events_for_rule_device(
             return int(row[0]) if row else 0
 
 
+async def previous_observation_at_location(
+    kind: str, device_id: str, location_id: int,
+) -> str | None:
+    """ISO timestamp of the second-most-recent observation of this device
+    at this location — i.e. the sighting right before the one currently
+    being processed. Used by the arrival_after_gap rule to measure the
+    gap since the device's previous visit. Returns None when there's no
+    prior observation (the device is brand new at this location)."""
+    device_id_l = (device_id or "").lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT seen_at FROM observations "
+            "WHERE kind=? AND device_id=? AND location_id=? "
+            "ORDER BY seen_at DESC LIMIT 1 OFFSET 1",
+            (kind, device_id_l, location_id),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+
+async def find_absent_devices_at_location(
+    *, kind: str | None, location_id: int | None, min_age_minutes: int,
+    max_age_minutes: int | None = None,
+) -> list[dict]:
+    """Devices whose last_seen at the matching location(s) is older than
+    `min_age_minutes` and (optionally) newer than `max_age_minutes`.
+
+    Used by the absence_gap alert loop — the orchestrator polls this on
+    a steady cadence, and the upper bound stops the query returning
+    every device ever seen (we don't want a rule that fires once when
+    Alice leaves to also fire forever for everyone who's ever been
+    here)."""
+    if min_age_minutes < 1:
+        return []
+    now = datetime.now()
+    upper = (now - timedelta(minutes=min_age_minutes)).isoformat()
+    lower = (
+        (now - timedelta(minutes=max_age_minutes)).isoformat()
+        if max_age_minutes else None
+    )
+    conds = ["d.last_seen < ?"]
+    args: list = [upper]
+    if lower is not None:
+        conds.append("d.last_seen >= ?")
+        args.append(lower)
+    if kind:
+        conds.append("d.kind = ?")
+        args.append(kind)
+    if location_id is not None:
+        conds.append("d.location_id = ?")
+        args.append(location_id)
+    sql = (
+        "SELECT d.location_id, d.kind, d.device_id, d.last_seen, "
+        "       d.last_rssi, d.details_json, l.label "
+        "FROM devices d LEFT JOIN sensor_locations l ON l.id = d.location_id "
+        f"WHERE {' AND '.join(conds)} "
+        "ORDER BY d.last_seen DESC"
+    )
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(sql, tuple(args)) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    for r in rows:
+        try:
+            r["details"] = json.loads(r.pop("details_json") or "{}")
+        except (TypeError, ValueError):
+            r["details"] = {}
+    return rows
+
+
 async def about_stats() -> dict:
     """Cheap aggregate counts for the About tab. One round-trip, a handful
     of COUNT(*) queries — fine to call on every tab open."""

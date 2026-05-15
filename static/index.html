@@ -334,6 +334,8 @@
                   <option value="new_device">new device at location</option>
                   <option value="cross_location">cross-location: in M of last N</option>
                   <option value="persistent_companion">persistent companion: M locations within H hours</option>
+                  <option value="arrival_after_gap">arrival at location (after N min gap)</option>
+                  <option value="absence_gap">absence at location (no sighting for N min)</option>
                 </optgroup>
                 <optgroup label="Follower detection">
                   <option value="co_arrival_transit">co-arrival on transit: M of last N arrivals within W s</option>
@@ -459,6 +461,7 @@
           <legend>Appearance</legend>
           <label>Font size
             <select name="font_scale" id="set-font-scale">
+              <option value="x-small">Extra small</option>
               <option value="small">Small</option>
               <option value="default" selected>Default</option>
               <option value="large">Large</option>
