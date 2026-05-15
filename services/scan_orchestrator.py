@@ -86,6 +86,13 @@ class ScanOrchestrator:
         # can render both with the same widget. Stays "idle" until the
         # user enables the Classic scanner from Settings.
         self.bt_classic_stats = ScannerStats()
+        # Event signalled by the BLE loop when its scan count crosses the
+        # configured N threshold — wakes the Classic loop early when the
+        # user selected the "after_ble_scans" trigger mode. The Classic
+        # loop waits on whichever fires first: this event, the fallback
+        # interval, or the global stop.
+        self._classic_trigger = asyncio.Event()
+        self._ble_scans_since_classic = 0
 
     @property
     def paused(self) -> bool:
@@ -227,6 +234,18 @@ class ScanOrchestrator:
                         )
                         kept += 1
                     self.bt_stats.end(kept, duration_s=time.time() - t0)
+                    # Optional piggy-back trigger: in "after_ble_scans" mode
+                    # the Classic inquiry runs once every N completed BLE
+                    # scans. Signalling via an Event keeps the two loops
+                    # decoupled — the Classic loop still owns its own
+                    # task / stats / error handling.
+                    if (s.bluetooth_classic_enabled
+                            and s.bluetooth_classic_trigger == "after_ble_scans"):
+                        self._ble_scans_since_classic += 1
+                        n = max(1, int(s.bluetooth_classic_every_n_ble_scans or 1))
+                        if self._ble_scans_since_classic >= n:
+                            self._ble_scans_since_classic = 0
+                            self._classic_trigger.set()
             except Exception as e:
                 log.exception("bt loop error: %s", e)
                 self.bt_stats.fail(f"{type(e).__name__}: {e}")
@@ -284,10 +303,30 @@ class ScanOrchestrator:
             except Exception as e:
                 log.exception("bt classic loop error: %s", e)
                 self.bt_classic_stats.fail(f"{type(e).__name__}: {e}")
-            # When disabled the loop still ticks on the configured interval
-            # so toggling enabled doesn't require a restart to pick up.
-            interval = (await settings_store.load()).bluetooth_classic_scan_interval_s
-            if not await self._sleep(interval):
+            # Wait until either:
+            #   • the global stop fires (exit cleanly)
+            #   • the configured fallback interval elapses
+            #   • the BLE loop signals _classic_trigger (after-N-scans mode)
+            # In "interval" mode the trigger never fires, so this collapses
+            # to the existing interval sleep. In "after_ble_scans" mode the
+            # interval acts as a safety cap — we fall back to running at the
+            # interval if the BLE loop hasn't ticked enough scans in time.
+            s = await settings_store.load()
+            interval = s.bluetooth_classic_scan_interval_s
+            stop_wait = asyncio.create_task(self._stop.wait())
+            trig_wait = asyncio.create_task(self._classic_trigger.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    {stop_wait, trig_wait},
+                    timeout=interval,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for t in (stop_wait, trig_wait):
+                    if not t.done():
+                        t.cancel()
+            self._classic_trigger.clear()
+            if self._stop.is_set():
                 return
 
     async def _purge_loop(self) -> None:

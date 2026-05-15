@@ -1329,6 +1329,7 @@ async function loadSettings() {
   }
   await applyMapProvider(s.map_provider);
   applyLocDynamicEnabled();
+  applyBtcTriggerMode();
   // Kick off the probe channel checkbox grid for the saved interface (if any).
   refreshProbeChannelsForIface((s.probe_interface || "").trim() || null);
 }
@@ -1341,6 +1342,17 @@ function applyLocDynamicEnabled() {
   t.style.opacity = cb.checked ? "1" : "0.5";
 }
 $("#set-loc-dynamic")?.addEventListener("change", applyLocDynamicEnabled);
+
+// Bluetooth Classic trigger mode — show the "every N BLE scans" field
+// only when that mode is selected. The scan-interval input stays visible
+// in both modes (it's a safety-net fallback in after_ble_scans mode).
+function applyBtcTriggerMode() {
+  const sel = $("#set-btc-trigger");
+  const wrap = $("#set-btc-every-n-wrap");
+  if (!sel || !wrap) return;
+  wrap.hidden = sel.value !== "after_ble_scans";
+}
+$("#set-btc-trigger")?.addEventListener("change", applyBtcTriggerMode);
 
 $("#settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();

@@ -926,6 +926,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; background: var(--panel); }
 legend { color: var(--muted); padding: 0 6px; font-size: 12px; letter-spacing: 1.2px; text-transform: uppercase; }
 fieldset label { display: grid; gap: 4px; margin-bottom: 10px; }
+/* `fieldset label { display: grid }` outranks the browser's default
+   `[hidden] { display: none }`, so without this override a labelled
+   input toggled via the HTML `hidden` attribute stays visible. */
+fieldset label[hidden] { display: none; }
 fieldset label.check { grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
 fieldset > label:last-child { margin-bottom: 0; }
 /* Sub-section headings inside a fieldset (e.g. Wi-Fi / BLE / Classic

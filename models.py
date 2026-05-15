@@ -127,6 +127,17 @@ class AppSettings(BaseModel):
     bluetooth_classic_enabled: bool = False
     bluetooth_classic_scan_interval_s: int = 60
     bluetooth_classic_scan_duration_s: int = 10
+    # How the Classic inquiry decides when to run:
+    #   "interval"        — independent timer, fires every
+    #                        bluetooth_classic_scan_interval_s seconds.
+    #   "after_ble_scans" — piggy-backs on the BLE loop; after every
+    #                        N successful BLE scans the BLE loop signals
+    #                        the Classic loop to run immediately. Keeps
+    #                        Classic activity correlated with BLE so the
+    #                        controller transport-switch noise lands at
+    #                        predictable cadence instead of drifting.
+    bluetooth_classic_trigger: Literal["interval", "after_ble_scans"] = "interval"
+    bluetooth_classic_every_n_ble_scans: int = 5
 
     # location clustering
     new_location_distance_m: float = 25.0  # if sensor moves more than this, open a new list

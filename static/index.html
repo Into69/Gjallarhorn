@@ -487,6 +487,12 @@
             inquiry only finds devices in discoverable / pairing mode. Briefly
             stalls the BLE scanner while the controller switches transports.
           </p>
+          <label>Trigger
+            <select name="bluetooth_classic_trigger" id="set-btc-trigger">
+              <option value="interval">Fixed interval</option>
+              <option value="after_ble_scans">After every N BLE scans</option>
+            </select>
+          </label>
           <div class="field-row">
             <label>Scan interval (s)
               <input type="number" name="bluetooth_classic_scan_interval_s" min="15" max="3600" />
@@ -495,6 +501,15 @@
               <input type="number" name="bluetooth_classic_scan_duration_s" min="3" max="60" />
             </label>
           </div>
+          <label id="set-btc-every-n-wrap" hidden>Run every N BLE scans
+            <input type="number" name="bluetooth_classic_every_n_ble_scans" min="1" max="100" />
+          </label>
+          <p class="hint">
+            <b>Fixed interval</b>: independent timer, fires every <em>Scan interval</em>
+            seconds. <b>After N BLE scans</b>: the BLE loop signals this scan once
+            every N completed BLE scans — the <em>Scan interval</em> stays as a
+            safety-net fallback if BLE scans stop coming in.
+          </p>
         </fieldset>
         </div>
 
