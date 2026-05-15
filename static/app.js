@@ -3622,6 +3622,13 @@ function formatKindLabel(kind, details) {
     if (at === "random") return "BLE (random)";
     return "BLE";
   }
+  if (kind === "bluetooth_classic") {
+    // Append the CoD major-class when the inquiry reported one — e.g.
+    // "Bluetooth Classic (Audio/Video)" — so the table tells the user
+    // what it is at a glance.
+    const sub = details && details.device_class_label;
+    return sub ? `Bluetooth Classic (${sub})` : "Bluetooth Classic";
+  }
   return kind || "";
 }
 

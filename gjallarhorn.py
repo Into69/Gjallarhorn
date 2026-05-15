@@ -843,7 +843,7 @@ ALLOWED_MATCH_TYPES = {
 COMPOUND_MATCH_TYPES = {
     "device_id", "name_contains", "vendor_contains", "rssi_above",
 }
-ALLOWED_KINDS = {None, "wifi", "bluetooth", "wifi_client"}
+ALLOWED_KINDS = {None, "wifi", "bluetooth", "wifi_client", "bluetooth_classic"}
 
 
 def _validate_extra_conditions(raw) -> list[dict]:

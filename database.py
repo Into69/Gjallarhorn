@@ -243,6 +243,8 @@ def kind_label(kind: str, address_type: Optional[str] = None) -> str:
         if at == "random":
             return "BLE (random)"
         return "BLE"
+    if kind == "bluetooth_classic":
+        return "Bluetooth Classic"
     return kind or ""
 
 

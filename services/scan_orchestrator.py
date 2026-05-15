@@ -10,6 +10,7 @@ from services.location_manager import location_manager
 from services.gps_service import GPSService
 from services.wifi_scanner import scan_wifi, pick_wifi_interface
 from services.bluetooth_scanner import scan_bluetooth
+from services.bluetooth_classic_scanner import scan_bluetooth_classic
 from services.alert_service import alert_service
 from services.probe_scanner import probe_scanner, parse_channels
 from services.oui import oui_service
@@ -81,6 +82,10 @@ class ScanOrchestrator:
         self._paused: bool = False
         self.wifi_stats = ScannerStats()
         self.bt_stats = ScannerStats()
+        # Bluetooth Classic stats live alongside BLE so the map sidebar
+        # can render both with the same widget. Stays "idle" until the
+        # user enables the Classic scanner from Settings.
+        self.bt_classic_stats = ScannerStats()
 
     @property
     def paused(self) -> bool:
@@ -98,6 +103,7 @@ class ScanOrchestrator:
             asyncio.create_task(self._gps_loop()),
             asyncio.create_task(self._wifi_loop()),
             asyncio.create_task(self._bt_loop()),
+            asyncio.create_task(self._bt_classic_loop()),
             asyncio.create_task(self._probe_loop()),
             asyncio.create_task(self._purge_loop()),
         ]
@@ -225,6 +231,63 @@ class ScanOrchestrator:
                 log.exception("bt loop error: %s", e)
                 self.bt_stats.fail(f"{type(e).__name__}: {e}")
             if not await self._sleep((await settings_store.load()).bluetooth_scan_interval_s):
+                return
+
+    async def _bt_classic_loop(self) -> None:
+        """Bluetooth Classic (BR/EDR) inquiry on its own cadence. Stays
+        idle until `bluetooth_classic_enabled` flips on — Classic
+        discovery only finds devices in pairing/discoverable mode, so
+        running it constantly is mostly wasted cycles. When enabled, we
+        run a short inquiry on the configured interval and upsert every
+        device the controller reports."""
+        while not self._stop.is_set():
+            try:
+                s = await settings_store.load()
+                self.bt_classic_stats.interface = (
+                    s.bluetooth_adapter or None
+                )
+                loc_id = location_manager.active_id
+                if (not self._paused and s.bluetooth_classic_enabled
+                        and loc_id is not None):
+                    self.bt_classic_stats.begin(s.bluetooth_adapter or None)
+                    t0 = time.time()
+                    try:
+                        devs = await scan_bluetooth_classic(
+                            s.bluetooth_adapter,
+                            s.bluetooth_classic_scan_duration_s,
+                        )
+                    except Exception:
+                        self.bt_classic_stats.fail("scan_bluetooth_classic raised")
+                        raise
+                    fix = self.gps.fix
+                    kept = 0
+                    for d in devs:
+                        if d.rssi < s.min_rssi:
+                            continue
+                        details = d.model_dump(mode="json")
+                        is_new = await db.upsert_device(
+                            location_id=loc_id, kind="bluetooth_classic",
+                            device_id=d.address, rssi=d.rssi, details=details,
+                        )
+                        await db.insert_observation(
+                            location_id=loc_id, kind="bluetooth_classic",
+                            device_id=d.address, rssi=d.rssi,
+                            lat=fix.lat, lon=fix.lon, raw=details,
+                        )
+                        await alert_service.evaluate(
+                            device_kind="bluetooth_classic", device_id=d.address,
+                            rssi=d.rssi, location_id=loc_id, details=details,
+                            is_new=is_new, speed_mps=fix.speed,
+                        )
+                        kept += 1
+                    self.bt_classic_stats.end(kept, duration_s=time.time() - t0)
+            except Exception as e:
+                log.exception("bt classic loop error: %s", e)
+                self.bt_classic_stats.fail(f"{type(e).__name__}: {e}")
+            # When disabled the loop still ticks on the configured interval
+            # so toggling enabled doesn't require a restart to pick up.
+            interval = (await settings_store.load()).bluetooth_classic_scan_interval_s
+            if not await self._sleep(interval):
                 return
 
     async def _purge_loop(self) -> None:

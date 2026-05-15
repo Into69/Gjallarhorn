@@ -214,6 +214,7 @@
             <option value="bluetooth">BLE (any)</option>
             <option value="bluetooth:public">BLE (public)</option>
             <option value="bluetooth:random">BLE (random)</option>
+            <option value="bluetooth_classic">Bluetooth Classic</option>
             <option value="wifi_client">wifi client (probe)</option>
           </select>
         </label>
@@ -312,7 +313,8 @@
               <select name="kind">
                 <option value="">any</option>
                 <option value="wifi">wifi</option>
-                <option value="bluetooth">bluetooth</option>
+                <option value="bluetooth">BLE</option>
+                <option value="bluetooth_classic">Bluetooth Classic</option>
                 <option value="wifi_client">wifi client</option>
               </select>
             </label>
@@ -377,7 +379,8 @@
             <select id="alerts-kind" title="Filter by device kind">
               <option value="">any kind</option>
               <option value="wifi">wifi</option>
-              <option value="bluetooth">bluetooth</option>
+              <option value="bluetooth">BLE</option>
+              <option value="bluetooth_classic">Bluetooth Classic</option>
             </select>
             <select id="alerts-rule" title="Filter by rule">
               <option value="">any rule</option>
@@ -437,6 +440,16 @@
           </label>
           <label>Bluetooth scan duration (s)
             <input type="number" name="bluetooth_scan_duration_s" min="2" max="60" />
+          </label>
+          <label class="check">
+            <input type="checkbox" name="bluetooth_classic_enabled" />
+            Bluetooth Classic (BR/EDR) inquiry — Linux/BlueZ only. Most paired devices stay silent; only finds devices in discoverable / pairing mode. Briefly stalls BLE while running.
+          </label>
+          <label>Bluetooth Classic scan interval (s)
+            <input type="number" name="bluetooth_classic_scan_interval_s" min="15" max="3600" />
+          </label>
+          <label>Bluetooth Classic scan duration (s)
+            <input type="number" name="bluetooth_classic_scan_duration_s" min="3" max="60" />
           </label>
         </fieldset>
 
@@ -614,7 +627,8 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
           <label>Kind
             <select name="kind">
               <option value="wifi">wifi</option>
-              <option value="bluetooth">bluetooth</option>
+              <option value="bluetooth">BLE</option>
+              <option value="bluetooth_classic">Bluetooth Classic</option>
               <option value="wifi_client">wifi client</option>
             </select>
           </label>

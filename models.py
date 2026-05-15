@@ -66,6 +66,26 @@ class BluetoothDevice(BaseModel):
     seen_count: int = 1
 
 
+class BluetoothClassicDevice(BaseModel):
+    """One BR/EDR sighting from a BlueZ inquiry. Classic devices broadcast
+    only when in discoverable / pairing mode, so the population is sparse
+    compared to BLE — but when one does show up we get the CoD (Class of
+    Device) bitfield, which decodes into a useful peripheral category
+    (audio / phone / peripheral / etc.) that BLE doesn't expose."""
+    address: str
+    name: Optional[str] = None
+    rssi: int
+    vendor: Optional[str] = None
+    # 24-bit Bluetooth Class of Device; BlueZ exposes it as a single int.
+    # Decoded into the major-device-class string in `device_class_label`.
+    device_class: Optional[int] = None
+    device_class_label: Optional[str] = None
+    paired: Optional[bool] = None
+    connected: Optional[bool] = None
+    last_seen: datetime
+    seen_count: int = 1
+
+
 class DeviceObservation(BaseModel):
     """A single sighting tied to a sensor location."""
     location_id: int
@@ -97,6 +117,16 @@ class AppSettings(BaseModel):
     bluetooth_scan_interval_s: int = 15
     bluetooth_scan_duration_s: int = 8
     gps_poll_interval_s: float = 1.0
+
+    # Bluetooth Classic (BR/EDR) inquiry — separate loop because Classic
+    # discovery only finds devices in discoverable / pairing mode and
+    # requires switching the controller out of LE mode, which can briefly
+    # stall the BLE scan. Off by default; longer interval than BLE since
+    # the device population is sparse and short bursts work better than
+    # the constant 8s scan the BLE loop runs.
+    bluetooth_classic_enabled: bool = False
+    bluetooth_classic_scan_interval_s: int = 60
+    bluetooth_classic_scan_duration_s: int = 10
 
     # location clustering
     new_location_distance_m: float = 25.0  # if sensor moves more than this, open a new list

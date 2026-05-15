@@ -367,10 +367,12 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
     # Per-kind totals as a one-liner
     total_wifi = sum(int(l.get("wifi_count") or 0) for l in locations)
     total_bt = sum(int(l.get("bt_count") or 0) for l in locations)
+    total_bt_classic = sum(int(l.get("bt_classic_count") or 0) for l in locations)
     total_cl = sum(int(l.get("wifi_client_count") or 0) for l in locations)
-    if total_wifi or total_bt or total_cl:
+    if total_wifi or total_bt or total_bt_classic or total_cl:
         out.append(
             f"<b>By kind:</b> {total_wifi} Wi-Fi APs, {total_bt} BLE devices, "
+            f"{total_bt_classic} Bluetooth Classic, "
             f"{total_cl} Wi-Fi clients (passive probe captures)."
         )
 
@@ -541,6 +543,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
         # SQL aggregate from list_locations is unaware of either.
         loc["wifi_count"] = sum(1 for d in kept if d.get("kind") == "wifi")
         loc["bt_count"] = sum(1 for d in kept if d.get("kind") == "bluetooth")
+        loc["bt_classic_count"] = sum(1 for d in kept if d.get("kind") == "bluetooth_classic")
         loc["wifi_client_count"] = sum(1 for d in kept if d.get("kind") == "wifi_client")
         loc["total_observations"] = sum(int(d.get("seen_count") or 0) for d in kept)
 
@@ -567,6 +570,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
     # ── Executive summary (first thing after the title) ──
     total_wifi = sum(int(l.get("wifi_count") or 0) for l in locations)
     total_bt = sum(int(l.get("bt_count") or 0) for l in locations)
+    total_bt_classic = sum(int(l.get("bt_classic_count") or 0) for l in locations)
     total_clients = sum(int(l.get("wifi_client_count") or 0) for l in locations)
     total_obs = sum(int(l.get("total_observations") or 0) for l in locations)
 
@@ -574,16 +578,17 @@ async def build_report_pdf(*, group_bssids: bool = True,
     flow.append(Paragraph(_summary_blurb(locations, common), s["caption"]))
 
     flow.append(_table(
-        ["Locations", "Wi-Fi APs", "BLE", "Wi-Fi clients", "Observations", "Recurring"],
+        ["Locations", "Wi-Fi APs", "BLE", "BT Classic", "Wi-Fi clients", "Observations", "Recurring"],
         [(
             str(len(locations)),
             str(total_wifi),
             str(total_bt),
+            str(total_bt_classic),
             str(total_clients),
             str(total_obs),
             str(len(common)),
         )],
-        col_widths=[1.18 * inch] * 6,
+        col_widths=[1.0 * inch] * 7,
     ))
     flow.append(Spacer(1, 8))
     findings = _summary_findings(locations, per_loc_devices, common)
