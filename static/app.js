@@ -569,7 +569,34 @@ async function loadLocationOptions() {
   }
 }
 
+// Toggles the thin progress bar above the devices table. Reference-counted
+// so overlapping debounce + fetch paths don't tug the bar's visibility
+// against each other — it only hides when every show() has paired with a
+// hide().
+let _devProgressCount = 0;
+function showDevProgress() {
+  _devProgressCount++;
+  const el = document.getElementById("dev-progress");
+  if (el) el.hidden = false;
+}
+function hideDevProgress() {
+  _devProgressCount = Math.max(0, _devProgressCount - 1);
+  if (_devProgressCount === 0) {
+    const el = document.getElementById("dev-progress");
+    if (el) el.hidden = true;
+  }
+}
+
 async function refreshDevices() {
+  showDevProgress();
+  try {
+    await _refreshDevicesInner();
+  } finally {
+    hideDevProgress();
+  }
+}
+
+async function _refreshDevicesInner() {
   await loadLocationOptions();
   const id = $("#dev-location").value;
   if (!id) return;
@@ -835,9 +862,23 @@ $("#dev-group-bssid").addEventListener("change", refreshDevices);
 // Search, RSSI, time-range, and toggle filters are local to the rendered
 // set, so refilter without re-fetching. Debounce text/number inputs.
 let _devSearchTimer = null;
+let _devDebouncePending = false;
 const _devDebounce = () => {
+  // Show the progress bar immediately so typing feels responsive, even
+  // before the debounce window elapses and the actual fetch fires.
+  if (!_devDebouncePending) {
+    _devDebouncePending = true;
+    showDevProgress();
+  }
   clearTimeout(_devSearchTimer);
-  _devSearchTimer = setTimeout(refreshDevices, 150);
+  _devSearchTimer = setTimeout(async () => {
+    try {
+      await refreshDevices();
+    } finally {
+      _devDebouncePending = false;
+      hideDevProgress();
+    }
+  }, 150);
 };
 $("#dev-search")?.addEventListener("input", _devDebounce);
 $("#dev-min-rssi")?.addEventListener("input", _devDebounce);

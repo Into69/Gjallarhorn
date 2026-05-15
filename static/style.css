@@ -19,10 +19,35 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
    data-font-scale attribute on <body>. Uses `zoom` rather than
    font-size because the rest of the CSS is in px (not rem/em), so a
    pure font-size change wouldn't scale buttons, table cells, etc.
-   Modern browsers (incl. Firefox 126+) all support `zoom`. */
-body[data-font-scale="small"]   { zoom: 0.88; }
-body[data-font-scale="large"]   { zoom: 1.15; }
-body[data-font-scale="x-large"] { zoom: 1.30; }
+   Modern browsers (incl. Firefox 126+) all support `zoom`.
+
+   `vh` and `vw` units don't scale with `zoom`, so a naive `zoom: 0.88`
+   would leave 12% of the viewport blank in both axes (and zoom > 1
+   would overflow). To compensate, body, main, and every other element
+   sized in vh/vw are counter-scaled in their pre-zoom coordinate
+   system so the rendered (zoomed) sizes still fill the visual
+   viewport. --ui-zoom carries the factor through calc() so each rule
+   only mentions the unscaled formula once. */
+body[data-font-scale="small"]   { --ui-zoom: 0.88; }
+body[data-font-scale="large"]   { --ui-zoom: 1.15; }
+body[data-font-scale="x-large"] { --ui-zoom: 1.30; }
+body[data-font-scale="small"],
+body[data-font-scale="large"],
+body[data-font-scale="x-large"] {
+  zoom: var(--ui-zoom);
+  height: calc(100vh / var(--ui-zoom));
+  width:  calc(100vw / var(--ui-zoom));
+}
+body[data-font-scale="small"] main,
+body[data-font-scale="large"] main,
+body[data-font-scale="x-large"] main {
+  height: calc(100vh / var(--ui-zoom) - 53px);
+}
+body[data-font-scale="small"] .log-list,
+body[data-font-scale="large"] .log-list,
+body[data-font-scale="x-large"] .log-list {
+  height: calc(100vh / var(--ui-zoom) - 160px);
+}
 
 header {
   display: flex; align-items: center; gap: 16px;
@@ -357,6 +382,35 @@ main { height: calc(100vh - 53px); }
 .gj-tip-stat-value.bt     { color: #b8a3ff; }
 .gj-tip-stat-value.client { color: var(--warn); }
 .gj-tip-unit { font-size: 10px; color: var(--muted); margin-left: 2px; }
+
+/* ── indeterminate progress bar ───────────────────────
+   Reusable thin bar with a sliding gradient. Used on the Devices tab
+   above the table while a fetch / filter pass is in flight. Visible
+   only when the host element doesn't have the `hidden` attribute. */
+.progress-bar {
+  position: relative;
+  height: 3px;
+  margin: 0 0 6px;
+  background: var(--panel-2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-bar[hidden] { display: none; }
+.progress-bar .progress-bar-track {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -40%;
+  width: 40%;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    var(--accent) 50%,
+    transparent 100%);
+  animation: progress-bar-slide 1.1s ease-in-out infinite;
+}
+@keyframes progress-bar-slide {
+  0%   { left: -40%; }
+  100% { left: 100%; }
+}
 
 /* ── floating alert toast stack on the map ─────────── */
 .alert-toasts {
