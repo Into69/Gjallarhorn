@@ -26,6 +26,43 @@ $$(".tab-btn").forEach((btn) => {
   });
 });
 
+// ---------- settings tab — sidebar nav ----------
+// The settings tab now has a left-side nav with one section visible at a
+// time. activateSettingsSection() toggles the active nav button + section
+// panel, hides the form Save bar when the active section is outside the
+// form (whitelist / silenced / updates / oui), and persists the last
+// pick in localStorage so refreshing keeps you where you were.
+function activateSettingsSection(name) {
+  const navBtns = $$(".settings-nav-item");
+  let matched = false;
+  for (const b of navBtns) {
+    const active = b.dataset.section === name && !b.hidden;
+    b.classList.toggle("active", active);
+    if (active) matched = true;
+  }
+  // Fall back to 'map' if the requested section doesn't exist or is hidden
+  // (e.g. 'silenced' when there are no silenced entries).
+  if (!matched) name = "map";
+  for (const sec of $$(".settings-section")) {
+    sec.classList.toggle("active", sec.dataset.section === name);
+  }
+  // Mirror the active section on .settings-content so CSS can hide the
+  // Save bar when an auxiliary panel is showing.
+  const content = document.querySelector(".settings-content");
+  if (content) content.dataset.activeSection = name;
+  try { localStorage.setItem("settingsActiveSection", name); } catch {}
+}
+$$(".settings-nav-item").forEach(b => {
+  b.addEventListener("click", () => activateSettingsSection(b.dataset.section));
+});
+// Initial selection — restore from localStorage if it points at a still-
+// visible section, otherwise default to 'map'.
+(function restoreSettingsSection() {
+  let saved = null;
+  try { saved = localStorage.getItem("settingsActiveSection"); } catch {}
+  activateSettingsSection(saved || "map");
+})();
+
 // ---------- map ----------
 let map, tileLayer, sensorMarker, accuracyCircle;
 const locationMarkers = new Map();
@@ -2558,16 +2595,23 @@ let isWhitelisted = (_k, _d) => false;
 async function refreshTempWhitelist() {
   const panel = $("#wl-temp-panel");
   const tbody = $("#wl-temp-table tbody");
+  const navBtn = $("#nav-silenced");
   if (!panel || !tbody) return;
   try {
     const r = await api("/api/whitelist/temp");
     const entries = r.entries || [];
     if (!entries.length) {
       panel.hidden = true;
+      if (navBtn) navBtn.hidden = true;
       tbody.innerHTML = "";
+      // If the silenced section was active, fall back to whitelist.
+      if (navBtn && navBtn.classList.contains("active")) {
+        activateSettingsSection("whitelist");
+      }
       return;
     }
     panel.hidden = false;
+    if (navBtn) navBtn.hidden = false;
     tbody.innerHTML = entries.map(e => `
       <tr>
         <td>${escapeHtml(formatKindLabel(e.kind, null))}</td>

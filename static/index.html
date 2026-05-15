@@ -404,8 +404,33 @@
     </section>
 
     <section id="tab-settings" class="tab">
-      <div class="settings-page">
+      <div class="settings-layout">
+      <nav class="settings-nav" aria-label="Settings sections">
+        <div class="settings-nav-group">
+          <h3 class="settings-nav-heading">Sensors &amp; data</h3>
+          <button type="button" class="settings-nav-item active" data-section="map">Map</button>
+          <button type="button" class="settings-nav-item" data-section="sensors">Sensors</button>
+          <button type="button" class="settings-nav-item" data-section="gps">GPS</button>
+          <button type="button" class="settings-nav-item" data-section="probe">Probe scanner</button>
+          <button type="button" class="settings-nav-item" data-section="clustering">Location clustering</button>
+          <button type="button" class="settings-nav-item" data-section="filtering">Filtering</button>
+          <button type="button" class="settings-nav-item" data-section="retention">Retention</button>
+          <button type="button" class="settings-nav-item" data-section="notifications">Notifications</button>
+        </div>
+        <div class="settings-nav-group">
+          <h3 class="settings-nav-heading">Devices</h3>
+          <button type="button" class="settings-nav-item" data-section="whitelist">Device whitelist</button>
+          <button type="button" class="settings-nav-item" data-section="silenced" id="nav-silenced" hidden>Silenced (temp)</button>
+        </div>
+        <div class="settings-nav-group">
+          <h3 class="settings-nav-heading">System</h3>
+          <button type="button" class="settings-nav-item" data-section="updates">Updates</button>
+          <button type="button" class="settings-nav-item" data-section="oui">OUI database</button>
+        </div>
+      </nav>
+      <div class="settings-content">
       <form id="settings-form">
+        <div class="settings-section active" data-section="map">
         <fieldset>
           <legend>Map</legend>
           <label>Tile provider
@@ -423,7 +448,9 @@
             <span id="tc-status" class="muted"></span>
           </div>
         </fieldset>
+        </div>
 
+        <div class="settings-section" data-section="sensors">
         <fieldset>
           <legend>Sensors</legend>
 
@@ -469,7 +496,9 @@
             </label>
           </div>
         </fieldset>
+        </div>
 
+        <div class="settings-section" data-section="gps">
         <fieldset>
           <legend>GPS</legend>
           <div class="field-row">
@@ -480,7 +509,9 @@
             <input type="number" step="0.1" name="gps_poll_interval_s" min="0.2" max="10" />
           </label>
         </fieldset>
+        </div>
 
+        <div class="settings-section" data-section="probe">
         <fieldset>
           <legend>Probe scanner — passive WiFi client detection</legend>
           <p class="hint">
@@ -531,7 +562,9 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <dt>scapy</dt><dd id="probe-scapy">—</dd>
           </dl>
         </fieldset>
+        </div>
 
+        <div class="settings-section" data-section="clustering">
         <fieldset>
           <legend>Location clustering</legend>
           <label>New-location distance threshold (m)
@@ -555,7 +588,9 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <input type="text" name="location_label_template" />
           </label>
         </fieldset>
+        </div>
 
+        <div class="settings-section" data-section="filtering">
         <fieldset>
           <legend>Filtering</legend>
           <label>Minimum RSSI (dBm)
@@ -565,7 +600,9 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <input type="checkbox" name="hide_random_bt_addresses" /> Hide BLE random addresses
           </label>
         </fieldset>
+        </div>
 
+        <div class="settings-section" data-section="retention">
         <fieldset>
           <legend>Retention</legend>
           <p class="hint">
@@ -586,7 +623,9 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <span id="purge-status" class="muted"></span>
           </div>
         </fieldset>
+        </div>
 
+        <div class="settings-section" data-section="notifications">
         <fieldset>
           <legend>Notifications — Discord</legend>
           <label>Webhook URL
@@ -600,6 +639,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <span id="discord-test-status" class="muted"></span>
           </div>
         </fieldset>
+        </div>
 
         <div class="form-actions">
           <button type="submit">Save</button>
@@ -607,6 +647,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
         </div>
       </form>
 
+      <div class="settings-section" data-section="updates">
       <fieldset id="update-panel">
         <legend>Updates</legend>
         <p class="muted">Pulls the latest commits from <code>origin</code> and restarts the app. The working tree must be clean. Do not expose this server to untrusted networks.</p>
@@ -636,7 +677,9 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
           <span id="upd-status" class="muted"></span>
         </div>
       </fieldset>
+      </div>
 
+      <div class="settings-section" data-section="whitelist">
       <fieldset id="whitelist-panel">
         <legend>Device whitelist</legend>
         <p class="muted">
@@ -681,7 +724,9 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
           <tbody></tbody>
         </table>
       </fieldset>
+      </div>
 
+      <div class="settings-section" data-section="silenced">
       <fieldset id="wl-temp-panel" hidden>
         <legend>Silenced (temporary)</legend>
         <p class="muted">
@@ -702,7 +747,9 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
           <span id="wl-temp-status" class="muted"></span>
         </div>
       </fieldset>
+      </div>
 
+      <div class="settings-section" data-section="oui">
       <fieldset id="oui-panel">
         <legend>OUI / vendor database</legend>
         <p class="muted">Downloads IEEE registries (MA-L, MA-M, MA-S) and resolves WiFi BSSIDs and Bluetooth MACs to vendor names. A scheduled agent refreshes this monthly.</p>
@@ -724,6 +771,8 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
           <span id="oui-test-result" class="muted"></span>
         </div>
       </fieldset>
+      </div>
+      </div>
       </div>
     </section>
 

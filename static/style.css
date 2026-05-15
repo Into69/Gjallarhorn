@@ -835,29 +835,83 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .alert-device { font-family: ui-monospace, Consolas, monospace; color: var(--fg); }
 .alert-rssi { color: var(--warn); font-family: ui-monospace, Consolas, monospace; }
 
-/* Settings tab: single-column flow inside a max-width container. The
-   previous layout was an auto-fit 2-column grid, which produced ragged
-   rows because fieldsets vary wildly in height (Probe scanner vs. GPS),
-   and only the Update + OUI panels got margin-top — the whitelist /
-   silenced panels butted directly against whatever was above them. The
-   wrapper centres the content on wide displays without sprawling. */
-.settings-page {
-  max-width: 720px;
+/* Settings tab: sidebar nav on the left, one section at a time on the
+   right. The previous layout stacked every fieldset in one long column,
+   which made the tab unwieldy as sections grew. Splitting into a list
+   of named sections lets users jump straight to what they want and keeps
+   each section visually compact. */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 20px;
+  max-width: 960px;
   margin: 0 auto;
+  align-items: start;
+}
+.settings-nav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 6px 0;
+}
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-nav-heading {
+  margin: 0 0 4px;
+  padding: 0 10px;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  font-weight: 600;
+}
+.settings-nav-item {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  padding: 7px 10px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.settings-nav-item:hover { color: var(--fg); background: var(--panel); }
+.settings-nav-item.active {
+  background: var(--panel);
+  border-color: var(--border);
+  border-left: 3px solid var(--accent);
+  padding-left: 7px;            /* compensate for the 3px left border */
+  color: var(--fg);
+}
+.settings-content {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
 }
 #settings-form {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
-/* Every panel under #tab-settings gets the same spacing — the old
-   selector list only covered Update + OUI, which is what made the
-   Whitelist / Silenced panels appear to overlap. */
-#tab-settings .settings-page > fieldset {
-  margin: 0;
+/* One section visible at a time; the rest stay in the DOM (so the form
+   submit picks up every field) but render display:none. */
+.settings-section { display: none; }
+.settings-section.active { display: block; }
+/* When the active section is outside the form, hide the Save bar — it
+   would otherwise float at the bottom of an unrelated panel. JS toggles
+   data-active-section on .settings-content so the rule below kicks in. */
+.settings-content[data-active-section="whitelist"] #settings-form .form-actions,
+.settings-content[data-active-section="silenced"] #settings-form .form-actions,
+.settings-content[data-active-section="updates"] #settings-form .form-actions,
+.settings-content[data-active-section="oui"] #settings-form .form-actions {
+  display: none;
 }
 .form-actions {
   /* Sticky bottom Save bar so the action stays in reach on long forms. */
@@ -1404,10 +1458,21 @@ select option:disabled { color: var(--muted); }
   }
   .feed-filters input[type="search"] { min-width: 0; flex: 1 1 100%; }
 
-  /* Settings: tighten gaps for narrow viewports and collapse paired
-     field-rows so each input gets full width instead of fighting for
-     half on a phone. */
-  .settings-page { gap: 10px; }
+  /* Settings: stack the sidebar nav above the content on narrow
+     viewports — keeping it side-by-side at <360px would crush both. */
+  .settings-layout { grid-template-columns: 1fr; gap: 12px; }
+  .settings-nav { position: static; flex-direction: column; }
+  /* Render the nav as a horizontal scroller of pills on phones so the
+     group headings stay readable without taking the full height. */
+  .settings-nav-group {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    align-items: center;
+  }
+  .settings-nav-heading { padding: 0; flex-basis: 100%; }
+  .settings-nav-item { padding: 6px 10px; }
+  .settings-nav-item.active { padding-left: 7px; }
   #settings-form { gap: 10px; }
   fieldset { padding: 10px 12px; }
   .field-row { grid-template-columns: 1fr; gap: 0; }
