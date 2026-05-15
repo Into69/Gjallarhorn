@@ -872,6 +872,23 @@ async def update_location_label(location_id: int, label: str) -> None:
         await db.commit()
 
 
+async def update_location_radius(location_id: int, radius_m: float) -> bool:
+    """Resize a manual (drawn) geofence. Auto-cluster locations are skipped
+    — their radius is governed by the clustering tunables; letting the user
+    nudge it from the map UI would just be overwritten on the next fix.
+    Returns True if a row was updated, False if the id was missing OR the
+    row was auto-sourced."""
+    radius_m = round(float(radius_m), 2)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE sensor_locations SET radius_m=? "
+            "WHERE id=? AND source='manual'",
+            (radius_m, location_id),
+        )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+
+
 async def upsert_device(
     location_id: int,
     kind: str,

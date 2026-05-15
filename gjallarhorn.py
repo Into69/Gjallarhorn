@@ -445,11 +445,37 @@ async def api_locations():
 
 
 @app.patch("/api/locations/{loc_id}")
-async def api_label_location(loc_id: int, payload: dict):
-    label = payload.get("label", "").strip()
-    if not label:
-        raise HTTPException(400, "label required")
-    await db.update_location_label(loc_id, label)
+async def api_patch_location(loc_id: int, payload: dict):
+    """Update a location's label and/or its radius. Both fields are
+    optional but at least one is required. Radius edits are only honored
+    for drawn (manual) geofences — auto-clustered locations have their
+    radius governed by the clustering tunables and would just be
+    overwritten on the next fix."""
+    did_something = False
+    if "label" in payload:
+        label = (payload.get("label") or "").strip()
+        if not label:
+            raise HTTPException(400, "label cannot be empty")
+        await db.update_location_label(loc_id, label)
+        did_something = True
+    if "radius_m" in payload:
+        raw = payload.get("radius_m")
+        if raw is None:
+            raise HTTPException(400, "radius_m must be a number")
+        try:
+            radius_m = float(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "radius_m must be a number")
+        if not (1 <= radius_m <= 100000):
+            raise HTTPException(400, "radius_m must be between 1 and 100000")
+        ok = await db.update_location_radius(loc_id, radius_m)
+        if not ok:
+            raise HTTPException(
+                400, "radius_m can only be changed on drawn (manual) geofences",
+            )
+        did_something = True
+    if not did_something:
+        raise HTTPException(400, "label or radius_m required")
     return {"ok": True}
 
 

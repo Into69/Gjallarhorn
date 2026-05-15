@@ -216,16 +216,134 @@ function locationPopupHtml(loc) {
   const note = isManual
     ? `<div class="loc-popup-note">Drawn geofence — can absorb other locations, but can't be merged away itself.</div>`
     : "";
-  const disabled = isManual ? ' disabled title="Drawn geofences cannot be merged away"' : "";
+  const mergeDisabled = isManual ? ' disabled title="Drawn geofences cannot be merged away"' : "";
+  // Only manual geofences expose the resize action — auto-cluster radii
+  // are governed by the clustering tunables and would just be overwritten
+  // on the next fix, so resizing them from the map would be misleading.
+  const resizeBtn = isManual
+    ? `<button type="button" class="loc-popup-resize">Adjust size…</button>`
+    : "";
   return `
     <div class="loc-popup">
       <div class="loc-popup-title">#${loc.id} · ${label}</div>
       <div class="loc-popup-coords mono">${loc.lat.toFixed(5)}, ${loc.lon.toFixed(5)} · r=${Math.round(loc.radius_m)} m</div>
       ${note}
       <div class="loc-popup-actions">
-        <button type="button" class="loc-popup-merge"${disabled}>Merge into…</button>
+        <button type="button" class="loc-popup-merge"${mergeDisabled}>Merge into…</button>
+        ${resizeBtn}
       </div>
     </div>`;
+}
+
+// Resize-pick state. Set when the user picks "Adjust size…" on a drawn
+// geofence's popup; while active, the geofence's circle is the only live
+// element on the map — every mousemove redraws it at the new radius, and
+// the next map click commits. Esc / Cancel reverts.
+let resizeState = null;
+
+function showResizeBanner(loc, radius) {
+  const banner = $("#resize-banner");
+  const text = banner?.querySelector(".merge-banner-text");
+  if (!banner || !text) return;
+  const label = loc.label || `Location ${loc.id}`;
+  text.textContent =
+    `Resizing #${loc.id} (${label}) — move the mouse to set radius, `
+    + `click to commit. Esc to cancel.`;
+  updateResizeBannerRadius(radius);
+  banner.hidden = false;
+}
+
+function updateResizeBannerRadius(radius_m) {
+  const el = $("#resize-banner-radius");
+  if (el) el.textContent = `${Math.round(radius_m)} m`;
+}
+
+function hideResizeBanner() {
+  const banner = $("#resize-banner");
+  if (banner) banner.hidden = true;
+}
+
+async function enterResizeMode(loc) {
+  if (loc.source !== "manual") return;
+  if (resizeState) return;
+  if (mergeState) exitMergeMode();   // mutually exclusive modes
+  const center = L.latLng(loc.lat, loc.lon);
+  // Reserve the state slot before re-rendering — refreshLocationMarkers
+  // checks resizeState to skip binding a popup on the source marker and
+  // on every other marker too (a click on another bubble during resize
+  // should not pop up its info card).
+  resizeState = {
+    locId: loc.id,
+    sourceLoc: loc,
+    originalRadius: loc.radius_m,
+    lastRadius: loc.radius_m,
+    center,
+    handlers: null,
+  };
+  await refreshLocationMarkers();
+  const marker = locationMarkers.get(loc.id);
+  if (!marker) { resizeState = null; return; }
+  const handlers = {
+    move: (e) => {
+      if (!resizeState) return;
+      const r = Math.max(1, center.distanceTo(e.latlng));
+      marker.setRadius(r);
+      resizeState.lastRadius = r;
+      updateResizeBannerRadius(r);
+    },
+    click: async (e) => {
+      if (!resizeState) return;
+      const r = Math.max(1, center.distanceTo(e.latlng));
+      await commitResize(loc.id, r);
+    },
+    keydown: (e) => {
+      if (e.key === "Escape") exitResizeMode({ commit: false });
+    },
+  };
+  resizeState.handlers = handlers;
+  // The same cursor styling the draw flow uses — signals "the map is in a
+  // capture mode right now".
+  map.getContainer().classList.add("drawing");
+  map.dragging.disable();
+  showResizeBanner(loc, loc.radius_m);
+  map.on("mousemove", handlers.move);
+  map.on("click", handlers.click);
+  document.addEventListener("keydown", handlers.keydown);
+}
+
+function exitResizeMode({ commit = false } = {}) {
+  if (!resizeState) return;
+  const { handlers } = resizeState;
+  if (handlers) {
+    map.off("mousemove", handlers.move);
+    map.off("click", handlers.click);
+    document.removeEventListener("keydown", handlers.keydown);
+  }
+  map.getContainer().classList.remove("drawing");
+  map.dragging.enable();
+  hideResizeBanner();
+  resizeState = null;
+  // Always re-render: on cancel this snaps the radius back to the DB value
+  // (originalRadius); on commit it rebinds the popup with the new size. The
+  // commit caller awaits this same path after the PATCH succeeds.
+  if (!commit) refreshLocationMarkers();
+}
+
+async function commitResize(locId, radius_m) {
+  try {
+    await api(`/api/locations/${locId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ radius_m: Math.round(radius_m * 10) / 10 }),
+    });
+    exitResizeMode({ commit: true });
+    await refreshLocationMarkers();
+    if (document.querySelector("#tab-locations.active")) {
+      try { await refreshLocations(); } catch {}
+    }
+  } catch (e) {
+    alert("Resize failed: " + (e.message || e));
+    exitResizeMode({ commit: false });
+  }
 }
 
 // Merge-pick state. Set when the user picks a source location from a
@@ -299,20 +417,28 @@ async function refreshLocationMarkers() {
       const isActive = loc.id === active_id;
       const isManual = loc.source === "manual";
       const isMergeSource = mergeState && mergeState.sourceId === loc.id;
+      const isResizeSource = resizeState && resizeState.locId === loc.id;
       // Drawn geofences are styled distinctly (dashed accent stroke) so a
       // glance at the map tells you which circles you placed yourself vs.
-      // which ones the auto-clusterer made. In merge-pick mode the source
-      // bubble is recoloured red so the user can see which one they're
-      // moving; everything else stays normal and is clickable as a target.
-      const color = isMergeSource ? "#ff6b6b"
-        : (isActive ? "#79e08c" : (isManual ? "#5cd1ff" : "#ffb86b"));
+      // which ones the auto-clusterer made. The two interactive modes get
+      // their own emphasis: red while merging-from this bubble, cyan
+      // (solid stroke) while live-resizing it. Resize switches the dash
+      // off so the moving edge reads as solid as it grows / shrinks.
+      const color = isResizeSource ? "#5cd1ff"
+        : isMergeSource ? "#ff6b6b"
+        : isActive ? "#79e08c"
+        : isManual ? "#5cd1ff"
+        : "#ffb86b";
       const c = L.circle([loc.lat, loc.lon], {
         radius: loc.radius_m,
         color,
-        weight: isMergeSource ? 3 : (isManual ? 2 : 1.5),
-        dashArray: isManual ? "6,4" : null,
-        fillOpacity: isMergeSource ? 0.18
-          : (isActive ? 0.12 : (isManual ? 0.05 : 0.06)),
+        weight: (isMergeSource || isResizeSource) ? 3 : (isManual ? 2 : 1.5),
+        dashArray: (isManual && !isResizeSource) ? "6,4" : null,
+        fillOpacity: isResizeSource ? 0.12
+          : isMergeSource ? 0.18
+          : isActive ? 0.12
+          : isManual ? 0.05
+          : 0.06,
       }).bindTooltip(locationTooltipHtml(loc, isActive), {
         className: "gj-tip",
         direction: "top",
@@ -320,26 +446,37 @@ async function refreshLocationMarkers() {
         opacity: 1,
         sticky: true,
       });
-      // Suppress the info popup while merge-picking — a bubble click in
-      // that mode is a target selection, not an "open info" gesture.
-      if (!mergeState) {
+      // Suppress the info popup while merge-picking or resizing — a
+      // bubble click in those modes is a gesture (target selection /
+      // commit), not an "open info" intent.
+      if (!mergeState && !resizeState) {
         c.bindPopup(locationPopupHtml(loc), {
           className: "loc-popup-wrap",
           autoClose: true, closeButton: true,
         });
         c.on("popupopen", (ev) => {
           const el = ev.popup.getElement();
-          const btn = el && el.querySelector(".loc-popup-merge");
-          if (btn) {
-            btn.addEventListener("click", () => {
+          if (!el) return;
+          const mergeBtn = el.querySelector(".loc-popup-merge");
+          if (mergeBtn) {
+            mergeBtn.addEventListener("click", () => {
               c.closePopup();
               enterMergeMode(loc);
+            });
+          }
+          const resizeBtn = el.querySelector(".loc-popup-resize");
+          if (resizeBtn) {
+            resizeBtn.addEventListener("click", () => {
+              c.closePopup();
+              enterResizeMode(loc);
             });
           }
         });
       }
       c.on("click", () => {
         if (mergeState) pickMergeTarget(loc);
+        // In resize mode the map.click handler does the work; this
+        // marker.click fires alongside it but should not re-trigger anything.
       });
       c.addTo(map);
       locationMarkers.set(loc.id, c);
@@ -348,9 +485,14 @@ async function refreshLocationMarkers() {
 }
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && mergeState) exitMergeMode();
+  if (e.key !== "Escape") return;
+  // Resize first — both modes shouldn't be active at once, but if they
+  // somehow are, prefer the more-recent (resize) mode for Escape.
+  if (resizeState) exitResizeMode({ commit: false });
+  else if (mergeState) exitMergeMode();
 });
 $("#merge-banner-cancel")?.addEventListener("click", () => exitMergeMode());
+$("#resize-banner-cancel")?.addEventListener("click", () => exitResizeMode({ commit: false }));
 
 // ---------- devices tab ----------
 const PRESERVED_SENTINEL = "__preserved__";

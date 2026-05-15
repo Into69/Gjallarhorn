@@ -382,6 +382,17 @@ main { height: calc(100vh - 53px); }
 }
 .merge-banner .merge-banner-text { line-height: 1.35; }
 .merge-banner .secondary { padding: 4px 10px; font-size: 12px; }
+/* Resize banner reuses .merge-banner but uses an accent border so the
+   two modes are visually distinct at a glance. */
+.merge-banner.resize-banner { border-color: var(--accent); border-left-color: var(--accent); }
+.resize-banner-radius {
+  font-size: 13px; font-weight: 600;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  min-width: 56px; text-align: center;
+}
 
 /* Leaflet popup contents shown when a location bubble is clicked.
    Standalone — doesn't share .alert-popup's flash animation. */
