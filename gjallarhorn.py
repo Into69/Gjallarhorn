@@ -264,6 +264,27 @@ async def api_scanners_status():
             "scan_interval_s": s.bluetooth_scan_interval_s,
             "scan_duration_s": s.bluetooth_scan_duration_s,
             "configured_adapter": s.bluetooth_adapter,
+            # Bluetooth Classic (BR/EDR) is a separate scanner that runs
+            # against the same adapter. Surfaced under the BLE card on the
+            # map so operators can see at a glance which transport just
+            # scanned — both modes are unified into one Bluetooth panel.
+            "classic_enabled": s.bluetooth_classic_enabled,
+            "classic_running": (
+                orchestrator.bt_classic_stats.running if orchestrator else False
+            ),
+            "classic_scan_interval_s": s.bluetooth_classic_scan_interval_s,
+            "classic_scan_duration_s": s.bluetooth_classic_scan_duration_s,
+            "classic_trigger": s.bluetooth_classic_trigger,
+            "classic_every_n_ble_scans": s.bluetooth_classic_every_n_ble_scans,
+            "classic_last_scan_at": (
+                orchestrator.bt_classic_stats.last_scan_at if orchestrator else None
+            ),
+            "classic_last_scan_devices": (
+                orchestrator.bt_classic_stats.last_scan_devices if orchestrator else 0
+            ),
+            "classic_total_devices_seen": (
+                orchestrator.bt_classic_stats.total_devices_seen if orchestrator else 0
+            ),
         },
     }
     return out

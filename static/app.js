@@ -1771,9 +1771,21 @@ function updateScannerCard(prefix, stats, paused) {
   const stateEl = $(id("state"));
   if (!stateEl) return;
 
-  if (stats.running) {
+  // The Bluetooth card has a secondary transport (BLE vs BR/EDR) the
+  // wifi card doesn't, so the state-pill text includes which transport
+  // is mid-scan and a small badge to the left advertises the active
+  // mode at a glance.
+  const isBT = prefix === "bt";
+  const classicEnabled = isBT && !!stats.classic_enabled;
+  const classicRunning = isBT && !!stats.classic_running;
+  const bleRunning = !!stats.running;
+  const liveTransport = isBT
+    ? (classicRunning ? " · BR/EDR" : (bleRunning ? " · BLE" : ""))
+    : "";
+
+  if (bleRunning || classicRunning) {
     stateEl.className = "probe-state-pill running";
-    stateEl.textContent = "scanning";
+    stateEl.textContent = "scanning" + liveTransport;
   } else if (paused) {
     stateEl.className = "probe-state-pill stopped";
     stateEl.textContent = "paused";
@@ -1788,6 +1800,25 @@ function updateScannerCard(prefix, stats, paused) {
     stateEl.textContent = "waiting";
   }
 
+  // Transport badge (Bluetooth card only). Reflects what's configured to
+  // run, not just what's currently scanning — gives operators a stable
+  // indicator of mode even between scan ticks.
+  if (isBT) {
+    const transportEl = $(id("transport"));
+    if (transportEl) {
+      if (classicRunning) {
+        transportEl.className = "bt-transport-pill classic";
+        transportEl.textContent = "BR/EDR";
+      } else if (classicEnabled) {
+        transportEl.className = "bt-transport-pill dual";
+        transportEl.textContent = "BLE + BR/EDR";
+      } else {
+        transportEl.className = "bt-transport-pill ble";
+        transportEl.textContent = "BLE";
+      }
+    }
+  }
+
   const metaEl = $(id("meta"));
   if (metaEl) {
     const parts = [];
@@ -1795,7 +1826,17 @@ function updateScannerCard(prefix, stats, paused) {
     else if (stats.configured_iface) parts.push(`${stats.configured_iface} (configured)`);
     else if (stats.configured_adapter) parts.push(`${stats.configured_adapter} (configured)`);
     else parts.push(prefix === "wifi" ? "no interface configured" : "default adapter");
-    if (stats.scan_duration_s) parts.push(`scans ${stats.scan_duration_s}s`);
+    if (stats.scan_duration_s) parts.push(`BLE scans ${stats.scan_duration_s}s`);
+    if (isBT && classicEnabled) {
+      // Spell out the Classic cadence so operators can tell from the
+      // card whether BR/EDR is on a fixed interval or piggy-backed on
+      // BLE scans.
+      const dur = stats.classic_scan_duration_s;
+      const trig = stats.classic_trigger === "after_ble_scans"
+        ? `every ${stats.classic_every_n_ble_scans || "?"} BLE scans`
+        : `every ${stats.classic_scan_interval_s || "?"}s`;
+      parts.push(`BR/EDR ${dur ? dur + "s, " : ""}${trig}`);
+    }
     metaEl.textContent = parts.join(" · ");
   }
 

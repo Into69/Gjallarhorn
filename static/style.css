@@ -238,6 +238,28 @@ main { height: calc(100vh - 53px); }
 .probe-state-pill.error   { color: var(--err);   border-color: #5a2828; background: rgba(255, 107, 107, 0.08); }
 .probe-state-pill.starting { color: var(--warn); border-color: #5a4424; background: rgba(255, 184, 107, 0.08); }
 
+/* Bluetooth-card transport indicator — sits next to the state pill so
+   the operator can see which transport the scanner is currently using
+   (BLE alone, or BLE + BR/EDR when Classic is enabled). */
+.bt-transport-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  margin-left: auto;
+  margin-right: 8px;
+}
+.bt-transport-pill.ble { color: #b8a3ff; border-color: #3d2f5a; background: rgba(184, 163, 255, 0.08); }
+.bt-transport-pill.dual { color: var(--accent); border-color: #1e4257; background: rgba(92, 209, 255, 0.08); }
+.bt-transport-pill.classic { color: var(--warn); border-color: #5a4424; background: rgba(255, 184, 107, 0.10); }
+
 .probe-meta {
   font-size: 11px; color: var(--muted);
   font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
