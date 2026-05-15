@@ -17,6 +17,7 @@
       <button class="tab-btn" data-tab="alerts">Alerts <span id="alerts-badge" class="tab-badge" hidden>0</span></button>
       <button class="tab-btn" data-tab="settings">Settings</button>
       <button class="tab-btn" data-tab="logs">Logs</button>
+      <button class="tab-btn" data-tab="about">About</button>
     </nav>
     <div id="status">
       <span id="clock-status" class="pill" title="Local time, updated every second">--:--:--</span>
@@ -729,6 +730,85 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
       </div>
       <div id="log-list" class="log-list">
         <div class="muted">Loading…</div>
+      </div>
+    </section>
+
+    <section id="tab-about" class="tab">
+      <div class="about-page">
+        <header class="about-hero">
+          <h2 id="about-app">Gjallarhorn</h2>
+          <p id="about-tagline" class="about-tagline">…</p>
+        </header>
+
+        <div class="about-grid">
+          <section class="about-card">
+            <h3 class="section-h">What it does</h3>
+            <p>
+              Gjallarhorn is a roaming sensor that catalogues every Wi-Fi
+              and Bluetooth device nearby, clusters sightings into the
+              locations you visit, and raises alerts when a device looks
+              like it's following you between them.
+            </p>
+            <p>
+              Gjallarhorn was the watchman's horn in Norse myth, blown by
+              Heimdall to warn the gods of approaching threats. The intent
+              here is the same — a quiet sentinel that watches the RF
+              spectrum and sounds the alarm when the heuristics flag a
+              follower.
+            </p>
+          </section>
+
+          <section class="about-card">
+            <h3 class="section-h">Capabilities</h3>
+            <ul class="about-features">
+              <li><b>Wi-Fi AP scan</b> — active scan via the OS, BSSID / vendor / encryption.</li>
+              <li><b>BLE</b> — bleak-driven advertising capture, split by public / random address.</li>
+              <li><b>Bluetooth Classic</b> — optional BR/EDR inquiry through BlueZ, with Class-of-Device decoding.</li>
+              <li><b>Probe-request capture</b> — passive Wi-Fi client detection via monitor-mode.</li>
+              <li><b>GPS clustering</b> — gpsd fix stream resolves into location bubbles, auto or drawn.</li>
+              <li><b>Alerts</b> — value, per-location, and follower-detection rule types with Discord delivery.</li>
+              <li><b>Reports</b> — PDF export with maps, recurrence tables, suspect callouts.</li>
+            </ul>
+          </section>
+
+          <section class="about-card">
+            <h3 class="section-h">Build</h3>
+            <dl id="about-build">
+              <dt>Branch</dt><dd id="about-branch">—</dd>
+              <dt>Commit</dt><dd id="about-commit" class="mono">—</dd>
+              <dt>Subject</dt><dd id="about-subject">—</dd>
+              <dt>Working tree</dt><dd id="about-dirty">—</dd>
+              <dt>Remote</dt><dd id="about-remote" class="mono">—</dd>
+            </dl>
+          </section>
+
+          <section class="about-card">
+            <h3 class="section-h">Runtime</h3>
+            <dl>
+              <dt>Uptime</dt><dd id="about-uptime">—</dd>
+              <dt>Server time</dt><dd id="about-server-time" class="mono">—</dd>
+              <dt>Python</dt><dd id="about-python" class="mono">—</dd>
+              <dt>OS</dt><dd id="about-os" class="mono">—</dd>
+            </dl>
+          </section>
+
+          <section class="about-card about-card-wide">
+            <h3 class="section-h">Database</h3>
+            <dl class="about-stats">
+              <div><dt>Locations</dt><dd id="about-stat-locations">—</dd></div>
+              <div><dt>Devices total</dt><dd id="about-stat-devices">—</dd></div>
+              <div><dt>Wi-Fi APs</dt><dd id="about-stat-wifi">—</dd></div>
+              <div><dt>BLE</dt><dd id="about-stat-ble">—</dd></div>
+              <div><dt>Bluetooth Classic</dt><dd id="about-stat-btc">—</dd></div>
+              <div><dt>Wi-Fi clients</dt><dd id="about-stat-clients">—</dd></div>
+              <div><dt>Observations</dt><dd id="about-stat-obs">—</dd></div>
+              <div><dt>Alert rules</dt><dd id="about-stat-rules">—</dd></div>
+              <div><dt>Alert events</dt><dd id="about-stat-events">—</dd></div>
+              <div><dt>Whitelist entries</dt><dd id="about-stat-wl">—</dd></div>
+            </dl>
+            <p class="muted">DB file: <span id="about-db-path" class="mono">—</span> (<span id="about-db-size">—</span>)</p>
+          </section>
+        </div>
       </div>
     </section>
   </main>

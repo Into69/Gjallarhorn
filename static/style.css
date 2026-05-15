@@ -380,6 +380,10 @@ main { height: calc(100vh - 53px); }
   color: var(--fg);
   max-width: calc(100% - 24px);
 }
+/* The `display: flex` above outranks the browser's default
+   [hidden] { display: none }, so without this rule the banner stays
+   visible on page load even with the `hidden` attribute set. */
+.merge-banner[hidden] { display: none; }
 .merge-banner .merge-banner-text { line-height: 1.35; }
 .merge-banner .secondary { padding: 4px 10px; font-size: 12px; }
 /* Resize banner reuses .merge-banner but uses an accent border so the
@@ -392,6 +396,91 @@ main { height: calc(100vh - 53px); }
   border-radius: 4px;
   padding: 2px 8px;
   min-width: 56px; text-align: center;
+}
+
+/* ── About tab ────────────────────────────────────────────
+   Hero banner + a responsive card grid: two columns on wide
+   viewports, one column on phones. Cards use the same panel
+   styling the map sidebar cards do for visual continuity. */
+.about-page {
+  max-width: 980px;
+  margin: 0 auto;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.about-hero {
+  background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  padding: 18px 22px;
+}
+.about-hero h2 {
+  margin: 0 0 4px 0;
+  font-size: 24px;
+  letter-spacing: 1.5px;
+  color: var(--accent);
+}
+.about-tagline {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.about-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+.about-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.about-card-wide { grid-column: 1 / -1; }
+.about-card p { margin: 0 0 8px; }
+.about-card p:last-child { margin-bottom: 0; }
+.about-card dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 14px;
+  row-gap: 4px;
+}
+.about-card dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; padding-top: 3px; }
+.about-card dd { margin: 0; word-break: break-all; }
+.about-features {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.about-features li { color: var(--fg); }
+.about-features li b { color: var(--accent); }
+.about-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.about-stats > div {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.about-stats dt {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  padding-top: 0;
+}
+.about-stats dd {
+  margin: 2px 0 0;
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-size: 18px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Leaflet popup contents shown when a location bubble is clicked.

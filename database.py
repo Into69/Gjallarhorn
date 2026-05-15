@@ -1606,6 +1606,46 @@ async def count_alert_events_for_rule_device(
             return int(row[0]) if row else 0
 
 
+async def about_stats() -> dict:
+    """Cheap aggregate counts for the About tab. One round-trip, a handful
+    of COUNT(*) queries — fine to call on every tab open."""
+    out: dict = {
+        "db_path": str(DB_PATH),
+        "db_size_bytes": 0,
+        "locations": 0,
+        "devices": {"total": 0, "wifi": 0, "bluetooth": 0,
+                    "bluetooth_classic": 0, "wifi_client": 0},
+        "observations": 0,
+        "alert_rules": 0,
+        "alert_events": 0,
+        "whitelist": 0,
+    }
+    try:
+        if DB_PATH.exists():
+            out["db_size_bytes"] = DB_PATH.stat().st_size
+    except OSError:
+        pass
+    async with aiosqlite.connect(DB_PATH) as db:
+        async def _scalar(sql: str, args: tuple = ()) -> int:
+            async with db.execute(sql, args) as cur:
+                row = await cur.fetchone()
+                return int(row[0]) if row and row[0] is not None else 0
+        out["locations"] = await _scalar("SELECT COUNT(*) FROM sensor_locations")
+        out["devices"]["total"] = await _scalar("SELECT COUNT(*) FROM devices")
+        for k in ("wifi", "bluetooth", "bluetooth_classic", "wifi_client"):
+            out["devices"][k] = await _scalar(
+                "SELECT COUNT(*) FROM devices WHERE kind=?", (k,),
+            )
+        out["observations"] = await _scalar("SELECT COUNT(*) FROM observations")
+        out["alert_rules"] = await _scalar("SELECT COUNT(*) FROM alert_rules")
+        out["alert_events"] = await _scalar("SELECT COUNT(*) FROM alert_events")
+        out["whitelist"] = await _scalar(
+            "SELECT (SELECT COUNT(*) FROM device_whitelist) "
+            "+ (SELECT COUNT(*) FROM device_temp_whitelist)",
+        )
+    return out
+
+
 async def alert_event_counts_per_rule() -> list[dict]:
     """Per-rule fire counts and last-fired timestamps. Used by the report
     to show which alert rules are actually doing work."""

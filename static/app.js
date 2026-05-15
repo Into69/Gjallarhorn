@@ -22,6 +22,7 @@ $$(".tab-btn").forEach((btn) => {
     if (id === "locations") refreshLocations();
     if (id === "alerts") refreshAlerts();
     if (id === "logs") refreshLogs();
+    if (id === "about") refreshAbout();
   });
 });
 
@@ -3630,6 +3631,66 @@ function formatKindLabel(kind, details) {
     return sub ? `Bluetooth Classic (${sub})` : "Bluetooth Classic";
   }
   return kind || "";
+}
+
+// ---------- about tab ----------
+async function refreshAbout() {
+  try {
+    const a = await api("/api/about");
+    const setText = (id, v) => { const el = $(`#${id}`); if (el) el.textContent = v ?? "—"; };
+
+    setText("about-app", a.app || "Gjallarhorn");
+    setText("about-tagline", a.tagline || "");
+
+    // Build block — branch / commit / subject / dirty / remote.
+    const b = a.build || {};
+    setText("about-branch", b.branch || "—");
+    const cur = b.current || {};
+    setText("about-commit", cur.short || cur.sha || "—");
+    setText("about-subject", cur.subject || "—");
+    setText("about-dirty", b.dirty ? "uncommitted changes" : "clean");
+    setText("about-remote", b.remote_url || "—");
+
+    // Runtime.
+    setText("about-uptime", formatUptime(a.runtime?.uptime_seconds));
+    setText("about-server-time", a.runtime?.server_time || "—");
+    setText("about-python", a.platform?.python || "—");
+    setText("about-os", `${a.platform?.system || ""} ${a.platform?.release || ""}`.trim() || "—");
+
+    // DB stats.
+    const s = a.stats || {};
+    const d = s.devices || {};
+    setText("about-stat-locations", (s.locations ?? 0).toLocaleString());
+    setText("about-stat-devices",   (d.total ?? 0).toLocaleString());
+    setText("about-stat-wifi",      (d.wifi ?? 0).toLocaleString());
+    setText("about-stat-ble",       (d.bluetooth ?? 0).toLocaleString());
+    setText("about-stat-btc",       (d.bluetooth_classic ?? 0).toLocaleString());
+    setText("about-stat-clients",   (d.wifi_client ?? 0).toLocaleString());
+    setText("about-stat-obs",       (s.observations ?? 0).toLocaleString());
+    setText("about-stat-rules",     (s.alert_rules ?? 0).toLocaleString());
+    setText("about-stat-events",    (s.alert_events ?? 0).toLocaleString());
+    setText("about-stat-wl",        (s.whitelist ?? 0).toLocaleString());
+    setText("about-db-path",        s.db_path || "—");
+    setText("about-db-size",        formatBytes(s.db_size_bytes ?? 0));
+  } catch (e) {
+    const tagline = $("#about-tagline");
+    if (tagline) tagline.textContent = "Could not load /api/about — " + (e.message || e);
+  }
+}
+
+function formatUptime(seconds) {
+  if (!Number.isFinite(seconds)) return "—";
+  const s = Math.floor(seconds);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h || d) parts.push(`${h}h`);
+  if (m || h || d) parts.push(`${m}m`);
+  parts.push(`${sec}s`);
+  return parts.join(" ");
 }
 
 // ---------- utils ----------

@@ -37,6 +37,11 @@ log = logging.getLogger("gjallarhorn")
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
 
+# Process-start timestamp for the About tab's "Uptime" field. Captured at
+# import time so even API calls that arrive before the lifespan startup
+# completes get a sensible value.
+APP_STARTED_AT = time.time()
+
 gps: Optional[GPSService] = None
 orchestrator: Optional[ScanOrchestrator] = None
 
@@ -282,6 +287,42 @@ async def api_set_pause(payload: dict | None = None):
         target = bool(payload.get("paused"))
     orchestrator.set_paused(target)
     return {"paused": orchestrator.paused}
+
+
+# ---------- About ----------
+@app.get("/api/about")
+async def api_about():
+    """Self-description for the About tab: build info (git branch / commit),
+    runtime uptime, aggregate DB counts. The git block reuses the updater
+    service's status probe so we don't duplicate the rev-parse pipeline."""
+    from services import updater
+    try:
+        upd = await updater.get_status(do_fetch=False)
+    except Exception as e:
+        upd = {"ok": False, "error": str(e)}
+    build: dict = {
+        "branch": upd.get("branch") if upd.get("ok") else None,
+        "current": upd.get("current") if upd.get("ok") else None,
+        "remote_url": upd.get("remote_url") if upd.get("ok") else None,
+        "dirty": bool(upd.get("dirty")) if upd.get("ok") else False,
+    }
+    stats = await db.about_stats()
+    return {
+        "app": "Gjallarhorn",
+        "tagline": "Field sensor for detecting devices that follow you.",
+        "platform": {
+            "python": __import__("platform").python_version(),
+            "system": __import__("platform").system(),
+            "release": __import__("platform").release(),
+        },
+        "runtime": {
+            "started_at_unix": APP_STARTED_AT,
+            "uptime_seconds": max(0.0, time.time() - APP_STARTED_AT),
+            "server_time": datetime.now().isoformat(timespec="seconds"),
+        },
+        "build": build,
+        "stats": stats,
+    }
 
 
 # ---------- Self-update ----------
