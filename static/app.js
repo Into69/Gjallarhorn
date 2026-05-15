@@ -689,6 +689,32 @@ async function _refreshDevicesInner() {
   const total = (groupBssid ? groupWifiByApPrefix(devices) : devices).length;
   const filtersActive = sinceSec > 0 || q_search
     || Number.isFinite(minRssi) || hideWl || trackersOnly || linkedOnly;
+  // Empty-state row when nothing renders — distinguishes "no devices
+  // captured here yet" from "filters excluded everything we have". The
+  // tbody colspan needs to cover every column header in #dev-table.
+  if (!rows.length) {
+    const thead = $("#dev-table thead tr");
+    const cols = thead ? thead.children.length : 11;
+    const tr = document.createElement("tr");
+    tr.className = "dev-empty-row";
+    const td = document.createElement("td");
+    td.colSpan = cols;
+    if (total === 0) {
+      td.innerHTML = `
+        <div class="dev-empty">
+          <div class="dev-empty-title">No devices captured at this location yet.</div>
+          <div class="dev-empty-hint">As wifi / bluetooth / probe scans run they'll appear here.</div>
+        </div>`;
+    } else {
+      td.innerHTML = `
+        <div class="dev-empty">
+          <div class="dev-empty-title">No devices match the current filters.</div>
+          <div class="dev-empty-hint">${total} device${total === 1 ? "" : "s"} are hidden — clear a filter to see them.</div>
+        </div>`;
+    }
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  }
   const countEl = $("#dev-count");
   if (countEl) {
     countEl.textContent = filtersActive

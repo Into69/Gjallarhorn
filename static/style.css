@@ -412,6 +412,22 @@ main { height: calc(100vh - 53px); }
   100% { left: 100%; }
 }
 
+/* Empty-state row dropped into a table's tbody when filtering excludes
+   every device, or when no devices have been captured yet. The cell
+   spans every column via colspan; CSS just centres the message and
+   gives it some vertical breathing room so it doesn't read as a stray
+   one-cell row. */
+.dev-empty-row td {
+  background: var(--panel);
+  padding: 28px 16px;
+  text-align: center;
+}
+.dev-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.dev-empty-title { color: var(--fg); font-size: 13px; font-weight: 500; }
+.dev-empty-hint  { color: var(--muted); font-size: 11px; }
+
 /* ── floating alert toast stack on the map ─────────── */
 .alert-toasts {
   position: absolute;
