@@ -114,14 +114,18 @@ class AlertService:
             await self.load_rules()
             await self.load_whitelist()
             await self.load_latches()
-        # Whitelist gate: silently skip every rule for whitelisted devices.
-        if self.is_whitelisted(device_kind, (device_id or "").lower()):
-            return []
         if not self._rules:
             return []
 
         emitted: list[int] = []
         device_id_l = (device_id or "").lower()
+        # Whitelist is now a per-rule decision rather than a global gate:
+        # the default still suppresses (rule.include_whitelist == 0), but a
+        # rule can opt in to fire on whitelisted devices — useful for
+        # things like "alert when my own phone goes silent" where the
+        # device is whitelisted to keep regular rules quiet but you still
+        # want a specific rule to track it.
+        whitelisted = self.is_whitelisted(device_kind, device_id_l)
         ssid_or_name = (details.get("ssid") or details.get("name") or "")
         vendor = (details.get("vendor") or "")
         location_age_s: float | None = None  # lazily fetched
@@ -134,6 +138,11 @@ class AlertService:
 
         for rule in self._rules:
             if not rule.get("enabled"):
+                continue
+            # Per-rule whitelist gate: only opted-in rules see whitelisted
+            # devices. Cheap when the device isn't whitelisted (one bool
+            # check against the precomputed flag).
+            if whitelisted and not int(rule.get("include_whitelist", 0) or 0):
                 continue
             kind_filter = rule.get("kind")
             if kind_filter and kind_filter != device_kind:
@@ -378,11 +387,15 @@ class AlertService:
             # Latch: a (rule, device) pair only fires once per latch
             # cycle. Persists in alert_events.cleared so latches survive
             # restarts. The user clears via /api/alerts/clear or the
-            # per-row button in the live feed.
+            # per-row button in the live feed. Rules with latch=0 skip
+            # this entirely and fire every time the conditions match —
+            # useful for things you want pinged on regardless of state.
             key = (rule["id"], device_id_l)
-            if key in self._latched:
-                continue
-            self._latched.add(key)
+            latch_enabled = int(rule.get("latch", 1) or 0) == 1
+            if latch_enabled:
+                if key in self._latched:
+                    continue
+                self._latched.add(key)
 
             event_id = await db.insert_alert_event(
                 rule_id=rule["id"], location_id=location_id,
@@ -582,11 +595,15 @@ class AlertService:
             except Exception as e:
                 log.warning("absence query failed for rule %d: %s", rule.get("id"), e)
                 continue
+            include_wl = int(rule.get("include_whitelist", 0) or 0) == 1
             for c in candidates:
                 device_kind = c["kind"]
                 device_id = (c.get("device_id") or "")
                 device_id_l = device_id.lower()
-                if self.is_whitelisted(device_kind, device_id_l):
+                # Whitelist gate, per-rule: only opted-in rules fire on
+                # whitelisted devices. Default keeps the historical
+                # behaviour (whitelist = silent for every rule).
+                if not include_wl and self.is_whitelisted(device_kind, device_id_l):
                     continue
                 # Apply extra value-match conditions so a rule like
                 # "absence_gap for vendor=Apple" only fires on the
@@ -601,9 +618,11 @@ class AlertService:
                 ):
                     continue
                 key = (rule["id"], device_id_l)
-                if key in self._latched:
-                    continue
-                self._latched.add(key)
+                latch_enabled = int(rule.get("latch", 1) or 0) == 1
+                if latch_enabled:
+                    if key in self._latched:
+                        continue
+                    self._latched.add(key)
                 last_seen = c.get("last_seen")
                 try:
                     gap_actual = max(

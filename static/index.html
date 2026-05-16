@@ -306,6 +306,8 @@
                 <th>Location</th>
                 <th title="Send to Discord on match">Discord</th>
                 <th title="Play an alarm tone when this rule's popup fires">Audible</th>
+                <th title="When on, each (rule, device) pair only fires once until you clear it. When off, the rule fires on every match.">Latch</th>
+                <th title="When on, this rule fires on whitelisted devices too. When off (default), the whitelist mutes the rule.">Whitelist</th>
                 <th>Created</th><th></th>
               </tr>
             </thead>
@@ -367,6 +369,12 @@
             </label>
             <label class="check">
               <input type="checkbox" name="audible" /> Play audible alarm on match
+            </label>
+            <label class="check" title="When on (default), each (rule, device) pair only fires once until you clear it from the live feed. When off, the rule fires on every match — useful for ‘ping me every time’ rules but can be noisy.">
+              <input type="checkbox" name="latch" checked /> Latch — fire once per device until cleared
+            </label>
+            <label class="check" title="When on, this rule fires even on whitelisted devices. Useful for rules that track a known device (e.g. ‘alert when my own phone leaves home’) without un-whitelisting it.">
+              <input type="checkbox" name="include_whitelist" /> Include whitelisted devices
             </label>
             <button type="submit" id="rule-form-submit">Add rule</button>
             <button type="button" id="rule-form-cancel" class="secondary" hidden>Cancel</button>

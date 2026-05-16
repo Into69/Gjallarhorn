@@ -80,6 +80,22 @@ async function initMap() {
   }
   map = L.map("map", { zoomControl: true }).setView([0, 0], 2);
   await applyMapProvider("osm");
+  // First-load tile gap: Leaflet reads container size at init time, but
+  // the CSS grid that gives the map its final width (sidebar 320px) and
+  // the `zoom` counter-sizing on body settle a frame or two later, so
+  // tiles past the initially-measured width never get requested. Two
+  // safety nets:
+  //   1. Defer one invalidateSize past the next paint to catch the
+  //      initial layout settle.
+  //   2. Observe future resizes so font-scale changes or window resizes
+  //      keep the map fully covered.
+  const mapEl = document.getElementById("map");
+  const kickInvalidate = () => { try { map.invalidateSize(); } catch {} };
+  requestAnimationFrame(() => requestAnimationFrame(kickInvalidate));
+  setTimeout(kickInvalidate, 250);
+  if (mapEl && "ResizeObserver" in window) {
+    new ResizeObserver(kickInvalidate).observe(mapEl);
+  }
 }
 
 async function applyMapProvider(key) {
@@ -1405,11 +1421,27 @@ async function loadSettings() {
 // Set the body[data-font-scale] attribute that drives the global zoom
 // CSS rules. "default" is the no-zoom path, so we clear the attribute
 // instead of setting it — keeps the DOM clean in the common case.
+//
+// Changing the attribute flips the body's CSS width/height (via the
+// `100vh / var(--ui-zoom)` counter-sizing) and reflows the grid, which
+// resizes the map cell. Leaflet's tile grid was sized for the previous
+// dimensions, so it needs an explicit invalidateSize after the reflow
+// settles or the right-hand tiles never get requested. Two animation
+// frames is enough for the layout to land before we measure.
 function applyFontScale(value) {
   const valid = new Set(["x-small", "small", "default", "large", "x-large"]);
   const v = valid.has(value) ? value : "default";
   if (v === "default") document.body.removeAttribute("data-font-scale");
   else document.body.setAttribute("data-font-scale", v);
+  if (typeof map !== "undefined" && map) {
+    const kick = () => { try { map.invalidateSize(); } catch {} };
+    // Two animation frames covers the layout-settle path; a longer
+    // setTimeout catches the slow case where the body's counter-sized
+    // dimensions haven't propagated to the grid track by the time the
+    // raf chain runs.
+    requestAnimationFrame(() => requestAnimationFrame(kick));
+    setTimeout(kick, 250);
+  }
 }
 $("#set-font-scale")?.addEventListener("change", (e) => applyFontScale(e.target.value));
 
@@ -2032,6 +2064,8 @@ async function refreshAlertRules() {
       <td>${r.location_id == null ? "any" : r.location_id === -1 ? "active" : r.location_id}</td>
       <td><input type="checkbox" class="rule-discord" data-id="${r.id}" ${r.notify_discord ? "checked" : ""}></td>
       <td><input type="checkbox" class="rule-audible" data-id="${r.id}" ${r.audible ? "checked" : ""}></td>
+      <td><input type="checkbox" class="rule-latch" data-id="${r.id}" ${(r.latch ?? 1) ? "checked" : ""}></td>
+      <td><input type="checkbox" class="rule-include-wl" data-id="${r.id}" ${r.include_whitelist ? "checked" : ""}></td>
       <td class="mono">${formatTime(r.created_at)}</td>
       <td><button class="danger rule-delete" data-id="${r.id}">Delete</button></td>
     `;
@@ -2064,6 +2098,20 @@ async function refreshAlertRules() {
       // Resume the audio context on this user gesture so future alarms
       // aren't blocked by browser autoplay policy.
       if (cb.checked) primeAudio();
+    })
+  );
+  $$(".rule-latch").forEach(cb =>
+    cb.addEventListener("change", async () => {
+      await api(`/api/alerts/rules/${cb.dataset.id}`, {
+        method: "PATCH", body: JSON.stringify({ latch: cb.checked }),
+      });
+    })
+  );
+  $$(".rule-include-wl").forEach(cb =>
+    cb.addEventListener("change", async () => {
+      await api(`/api/alerts/rules/${cb.dataset.id}`, {
+        method: "PATCH", body: JSON.stringify({ include_whitelist: cb.checked }),
+      });
     })
   );
   $$(".rule-delete").forEach(b =>
@@ -2544,6 +2592,12 @@ function enterEditRuleMode(rule) {
   form.elements["location_id"].value = rule.location_id != null ? String(rule.location_id) : "";
   form.elements["notify_discord"].checked = !!rule.notify_discord;
   form.elements["audible"].checked = !!rule.audible;
+  // Latch defaults to ON for legacy rules (the DB column was added with
+  // a `DEFAULT 1` migration) so an undefined value should read as latched.
+  form.elements["latch"].checked = rule.latch == null ? true : !!rule.latch;
+  // include_whitelist defaults OFF — historical behaviour was that the
+  // whitelist muted every rule, and legacy rules carry that semantic.
+  form.elements["include_whitelist"].checked = !!rule.include_whitelist;
   setExtraConditions(rule.extra_conditions || []);
   // Update placeholder for the new match_type without clobbering the value.
   $("#rule-match-value").placeholder = MATCH_TYPE_PLACEHOLDERS[rule.match_type] || "";
@@ -2581,6 +2635,8 @@ $("#rule-form").addEventListener("submit", async (e) => {
     location_id: fd.get("location_id") || null,
     notify_discord: fd.get("notify_discord") === "on",
     audible: fd.get("audible") === "on",
+    latch: fd.get("latch") === "on",
+    include_whitelist: fd.get("include_whitelist") === "on",
     extra_conditions: readExtraConditions(),
   };
   $("#rule-form-status").textContent = "saving…";

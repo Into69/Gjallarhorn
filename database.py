@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS alert_rules (
     notify_discord INTEGER NOT NULL DEFAULT 0,
     audible INTEGER NOT NULL DEFAULT 0,
     extra_conditions TEXT NOT NULL DEFAULT '[]',  -- JSON list of {match_type,match_value}; AND-combined with the primary match
+    latch INTEGER NOT NULL DEFAULT 1,       -- 1 = fire once per (rule,device) pair until cleared; 0 = fire every time conditions match
+    include_whitelist INTEGER NOT NULL DEFAULT 0,  -- 1 = this rule sees whitelisted devices; 0 = whitelist suppresses it (default)
     created_at TEXT NOT NULL
 );
 
@@ -167,6 +169,21 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     if "extra_conditions" not in cols:
         await db.execute(
             "ALTER TABLE alert_rules ADD COLUMN extra_conditions TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "latch" not in cols:
+        # Default 1 preserves existing behaviour for pre-migration rules:
+        # every fire is latched until the user clears it. Operators who
+        # want the noisier "fire on every match" can opt in per-rule.
+        await db.execute(
+            "ALTER TABLE alert_rules ADD COLUMN latch INTEGER NOT NULL DEFAULT 1"
+        )
+    if "include_whitelist" not in cols:
+        # Default 0 preserves the historical whitelist-as-mute behaviour:
+        # whitelisted devices stay silent for every rule. Operators who
+        # want a rule to fire on a whitelisted MAC (e.g. "tell me when
+        # my own phone leaves home") opt in per-rule.
+        await db.execute(
+            "ALTER TABLE alert_rules ADD COLUMN include_whitelist INTEGER NOT NULL DEFAULT 0"
         )
 
     async with db.execute("PRAGMA table_info(sensor_locations)") as cur:
@@ -1140,17 +1157,20 @@ async def create_alert_rule(
     name: str, kind: str | None, match_type: str, match_value: str,
     location_id: int | None, notify_discord: bool = False,
     audible: bool = False, extra_conditions: list | None = None,
+    latch: bool = True, include_whitelist: bool = False,
 ) -> int:
     now = datetime.now().isoformat()
     extra_json = json.dumps(extra_conditions or [])
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "INSERT INTO alert_rules(name,enabled,kind,match_type,match_value,"
-            "location_id,notify_discord,audible,extra_conditions,created_at) "
-            "VALUES(?,1,?,?,?,?,?,?,?,?)",
+            "location_id,notify_discord,audible,extra_conditions,latch,"
+            "include_whitelist,created_at) "
+            "VALUES(?,1,?,?,?,?,?,?,?,?,?,?)",
             (name, kind, match_type, match_value, location_id,
              1 if notify_discord else 0, 1 if audible else 0,
-             extra_json, now),
+             extra_json, 1 if latch else 0,
+             1 if include_whitelist else 0, now),
         )
         await db.commit()
         return cur.lastrowid

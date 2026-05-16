@@ -964,9 +964,16 @@ async def api_create_rule(payload: dict):
     notify_discord = bool(payload.get("notify_discord"))
     audible = bool(payload.get("audible"))
     extra_conditions = _validate_extra_conditions(payload.get("extra_conditions"))
+    # Latch defaults to True when the field is missing so existing API
+    # clients keep the historical "fire once until cleared" behaviour.
+    latch = bool(payload.get("latch", True))
+    # include_whitelist defaults False — same legacy behaviour, where the
+    # whitelist mutes every rule unless the rule explicitly opts in.
+    include_whitelist = bool(payload.get("include_whitelist", False))
     rule_id = await db.create_alert_rule(
         name, kind, match_type, match_value, location_id,
         notify_discord, audible, extra_conditions,
+        latch=latch, include_whitelist=include_whitelist,
     )
     await alert_service.reload()
     return {"id": rule_id}
@@ -1007,6 +1014,14 @@ async def api_update_rule(rule_id: int, payload: dict):
                 raise HTTPException(400, "location_id must be int or null")
     if "notify_discord" in payload:
         fields["notify_discord"] = 1 if payload["notify_discord"] else 0
+    if "latch" in payload:
+        # Switching latch off mid-life doesn't auto-clear existing latches —
+        # the user can hit Unlatch in the live feed if they want a clean
+        # slate. Same in reverse: switching back to latched doesn't wipe
+        # history, it just gates the next fire.
+        fields["latch"] = 1 if payload["latch"] else 0
+    if "include_whitelist" in payload:
+        fields["include_whitelist"] = 1 if payload["include_whitelist"] else 0
     if "audible" in payload:
         fields["audible"] = 1 if payload["audible"] else 0
     if "extra_conditions" in payload:
