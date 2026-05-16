@@ -369,6 +369,27 @@ def _parse_iw_scan(text: str) -> Iterable[WifiDevice]:
         cipher = first(r"Pairwise ciphers:\s*(.*)$", re.MULTILINE)
         auth = first(r"Authentication suites:\s*(.*)$", re.MULTILINE)
 
+        # 802.11s mesh detection. iw prints Mesh ID either inline
+        # ("MESH ID: name") or as a hex-dump block; the Mesh
+        # Configuration IE always appears on its own line for true
+        # mesh BSSIDs. Either signal is enough to assert mesh, with
+        # the inline value preferred for display.
+        mesh_id = first(r"(?:MESH\s*ID|Mesh\s*ID):\s*(.*)$",
+                        re.IGNORECASE | re.MULTILINE)
+        if mesh_id and not mesh_id.strip("- 0123456789abcdefABCDEF"):
+            # Likely a leading hex dump, not the SSID string — skip the
+            # cosmetic value; we still know it's a mesh.
+            mesh_id = None
+        is_mesh = bool(
+            mesh_id
+            or re.search(r"Mesh\s*Configuration", blk, re.IGNORECASE)
+            or re.search(r"^\s*Mesh\s*ID\s*:", blk, re.IGNORECASE | re.MULTILINE)
+        )
+        # 802.11r FT mobility domain — federated ESS roaming. Present
+        # on commercial / enterprise / eero-style deployments. The
+        # MDID is a 16-bit hex value rendered as "0xABCD" by iw.
+        mdid = first(r"MDID:\s*(0x[0-9a-fA-F]+)")
+
         yield WifiDevice(
             bssid=bssid,
             ssid=ssid,
@@ -382,5 +403,8 @@ def _parse_iw_scan(text: str) -> Iterable[WifiDevice]:
             vendor_oui=bssid[:8].upper().replace(":", "-") if bssid else None,
             capabilities=capa,
             beacon_interval_ms=int(beacon) if beacon else None,
+            is_mesh=is_mesh,
+            mesh_id=mesh_id,
+            mobility_domain=mdid,
             last_seen=now,
         )

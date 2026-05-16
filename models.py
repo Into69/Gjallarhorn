@@ -46,6 +46,14 @@ class WifiDevice(BaseModel):
     vendor: Optional[str] = None
     capabilities: Optional[str] = None
     beacon_interval_ms: Optional[int] = None
+    # 802.11 information elements that disambiguate mesh / ESS / multi-radio:
+    #   is_mesh + mesh_id     — true 802.11s mesh (Mesh ID / Mesh Configuration IE)
+    #   mobility_domain (MDID) — 802.11r FT roaming (federated ESS / commercial WiFi)
+    # Optional because not every iw build emits every IE, and probe-mode
+    # captures of legacy networks omit them entirely.
+    is_mesh: bool = False
+    mesh_id: Optional[str] = None
+    mobility_domain: Optional[str] = None
     last_seen: datetime
     seen_count: int = 1
 

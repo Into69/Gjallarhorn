@@ -13,6 +13,7 @@
     <nav>
       <button class="tab-btn active" data-tab="map">Map</button>
       <button class="tab-btn" data-tab="devices">Devices</button>
+      <button class="tab-btn" data-tab="wifi-aps">WiFi AP</button>
       <button class="tab-btn" data-tab="locations">Locations</button>
       <button class="tab-btn" data-tab="alerts">Alerts <span id="alerts-badge" class="tab-badge" hidden>0</span></button>
       <button class="tab-btn" data-tab="settings">Settings</button>
@@ -267,6 +268,37 @@
         </thead>
         <tbody></tbody>
       </table>
+    </section>
+
+    <section id="tab-wifi-aps" class="tab">
+      <div class="toolbar">
+        <label>Location:
+          <select id="wap-location">
+            <option value="">all locations</option>
+          </select>
+        </label>
+        <input type="search" id="wap-search" placeholder="search SSID / BSSID / vendor / client MAC…" autocomplete="off" />
+        <label class="check" title="Hide groups where no AP was captured (clients probing for networks we never saw).">
+          <input type="checkbox" id="wap-hide-orphans" /> Hide probe-only SSIDs
+        </label>
+        <button id="wap-refresh">Refresh</button>
+        <button id="wap-expand-all" class="secondary" title="Expand every SSID group">Expand all</button>
+        <button id="wap-collapse-all" class="secondary" title="Collapse every SSID group">Collapse all</button>
+        <span id="wap-count" class="muted"></span>
+      </div>
+      <div id="wap-progress" class="progress-bar" role="progressbar" aria-label="Loading WiFi APs" hidden>
+        <div class="progress-bar-track"></div>
+      </div>
+      <p class="muted wap-hint">
+        Each SSID groups the access points (BSSIDs) advertising it and
+        the WiFi clients that have been seen probing for it. "Associated"
+        is best-effort — we only see probe requests, not association
+        frames, so the link is "this client wanted this network" rather
+        than "this client is connected".
+      </p>
+      <div id="wap-list" class="wap-list">
+        <div class="muted">Loading…</div>
+      </div>
     </section>
 
     <section id="tab-locations" class="tab">

@@ -1805,6 +1805,201 @@ async def oui_counts_by_registry() -> dict[str, int]:
             return {row[0]: row[1] for row in await cur.fetchall()}
 
 
+def _classify_wifi_topology(bssids: list[dict]) -> dict:
+    """Pick a topology label for an SSID group based on the 802.11 IEs we
+    parsed off the BSSIDs. Order of certainty:
+
+      1. mesh — at least one BSSID exposed an 802.11s Mesh ID or Mesh
+         Configuration IE. Effectively zero false positives.
+      2. ess  — multiple BSSIDs share an 802.11r Mobility Domain (MDID),
+         which is the canonical signal for an 802.11r-roaming federated
+         ESS deployment (commercial WiFi, eero-style mesh systems).
+      3. multi_band — multiple BSSIDs from the same OUI on different
+         bands (2.4 / 5 / 6 GHz). Strong indicator of a single physical
+         radio advertising one SSID across its bands.
+      4. multi_ap — generic "more than one BSSID" fallback when none of
+         the above signals apply (different OUIs, missing IEs, etc.).
+      5. single — just one BSSID.
+
+    Returns a dict with `kind` (one of the above) plus collected
+    evidence the UI can show in a tooltip."""
+    if not bssids:
+        return {"kind": "none"}
+    if len(bssids) == 1:
+        return {
+            "kind": "single",
+            "bands": [bssids[0].get("band")] if bssids[0].get("band") else [],
+        }
+    mesh_ids = [b.get("mesh_id") for b in bssids if b.get("is_mesh")]
+    if any(b.get("is_mesh") for b in bssids):
+        return {
+            "kind": "mesh",
+            "mesh_ids": sorted({m for m in mesh_ids if m}),
+            "bands": sorted({b["band"] for b in bssids if b.get("band")}),
+        }
+    mdids = {b.get("mobility_domain") for b in bssids if b.get("mobility_domain")}
+    if len(mdids) == 1 and next(iter(mdids)) is not None:
+        return {
+            "kind": "ess",
+            "mobility_domain": next(iter(mdids)),
+            "bands": sorted({b["band"] for b in bssids if b.get("band")}),
+        }
+    bands = sorted({b["band"] for b in bssids if b.get("band")})
+    ouis = {b["bssid"][:8].lower() for b in bssids if b.get("bssid")}
+    if len(bands) >= 2 and len(ouis) == 1:
+        return {"kind": "multi_band", "bands": bands}
+    return {"kind": "multi_ap", "bands": bands}
+
+
+async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
+    """Pull every captured WiFi AP, group by SSID, and attach the list
+    of wifi_client devices that have probed for that SSID. The
+    "associated clients" link is best-effort — we don't capture 802.11
+    association frames, only probe requests, so a client appears under
+    an AP when its probed-SSID list contains the AP's SSID.
+
+    Hidden APs (empty SSID) and clients that never probed for a named
+    network (`ssids` empty) are bucketed under a single "(hidden)"
+    group so they're not lost from the view. Filtering by location_id
+    scopes both the APs and the client probes to that location.
+    Sorted by best RSSI (strongest first).
+    """
+    sql_aps = (
+        "SELECT location_id, device_id, last_seen, first_seen, "
+        "       best_rssi, last_rssi, seen_count, details_json "
+        "FROM devices WHERE kind='wifi'"
+    )
+    sql_clients = (
+        "SELECT location_id, device_id, last_seen, first_seen, "
+        "       best_rssi, last_rssi, seen_count, details_json "
+        "FROM devices WHERE kind='wifi_client'"
+    )
+    args: tuple = ()
+    if location_id is not None:
+        sql_aps += " AND location_id=?"
+        sql_clients += " AND location_id=?"
+        args = (location_id,)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(sql_aps, args) as cur:
+            ap_rows = [dict(r) for r in await cur.fetchall()]
+        async with db.execute(sql_clients, args) as cur:
+            client_rows = [dict(r) for r in await cur.fetchall()]
+
+    HIDDEN = "(hidden)"
+    groups: dict[str, dict] = {}
+
+    for r in ap_rows:
+        try:
+            det = json.loads(r.pop("details_json") or "{}")
+        except (TypeError, ValueError):
+            det = {}
+        raw_ssid = (det.get("ssid") or "").strip()
+        ssid = raw_ssid or HIDDEN
+        g = groups.setdefault(ssid, {
+            "ssid": raw_ssid,
+            "is_hidden": not raw_ssid,
+            "bssids": [],
+            "clients": [],
+            "client_count": 0,
+            "bssid_count": 0,
+            "best_rssi": None,
+            "last_seen": None,
+        })
+        g["bssids"].append({
+            "bssid": r["device_id"],
+            "location_id": r["location_id"],
+            "vendor": det.get("vendor"),
+            "channel": det.get("channel"),
+            "band": det.get("band"),
+            "encryption": det.get("encryption"),
+            "cipher": det.get("cipher"),
+            "auth": det.get("auth"),
+            "capabilities": det.get("capabilities"),
+            "is_mesh": bool(det.get("is_mesh")),
+            "mesh_id": det.get("mesh_id"),
+            "mobility_domain": det.get("mobility_domain"),
+            "best_rssi": r["best_rssi"],
+            "last_rssi": r["last_rssi"],
+            "seen_count": r["seen_count"],
+            "first_seen": r["first_seen"],
+            "last_seen": r["last_seen"],
+        })
+        # Roll the AP's best signal + last_seen into the group header.
+        if g["best_rssi"] is None or (r["best_rssi"] is not None
+                                     and r["best_rssi"] > g["best_rssi"]):
+            g["best_rssi"] = r["best_rssi"]
+        if g["last_seen"] is None or (r["last_seen"] or "") > g["last_seen"]:
+            g["last_seen"] = r["last_seen"]
+
+    # Index probed-SSIDs to a map ssid → list of client entries. A single
+    # client can probe many networks, so it ends up under every group
+    # whose SSID it ever requested.
+    for r in client_rows:
+        try:
+            det = json.loads(r.pop("details_json") or "{}")
+        except (TypeError, ValueError):
+            det = {}
+        ssids = [s for s in (det.get("ssids") or []) if isinstance(s, str)]
+        entry = {
+            "device_id": r["device_id"],
+            "location_id": r["location_id"],
+            "vendor": det.get("vendor"),
+            "channels": det.get("channels") or [],
+            "ssids": ssids,
+            "randomized": bool(det.get("randomized")),
+            "best_rssi": r["best_rssi"],
+            "last_rssi": r["last_rssi"],
+            "seen_count": r["seen_count"],
+            "first_seen": r["first_seen"],
+            "last_seen": r["last_seen"],
+        }
+        # When the client never named an SSID (broadcast wildcard probes
+        # only), file it under the hidden bucket so the data still
+        # surfaces.
+        targets = [s for s in ssids if s] or [HIDDEN]
+        for target in targets:
+            g = groups.get(target)
+            if g is None:
+                # The client probed for a network we've never seen the
+                # AP for — keep an entry so the SSID still appears, but
+                # the bssids list stays empty (a "wanted but unfound"
+                # row in the output).
+                g = groups.setdefault(target, {
+                    "ssid": "" if target == HIDDEN else target,
+                    "is_hidden": target == HIDDEN,
+                    "bssids": [],
+                    "clients": [],
+                    "client_count": 0,
+                    "bssid_count": 0,
+                    "best_rssi": None,
+                    "last_seen": None,
+                })
+            g["clients"].append(entry)
+
+    # Sort BSSIDs by signal (strongest first), clients by recency.
+    for g in groups.values():
+        g["bssids"].sort(key=lambda b: (b.get("best_rssi") or -999), reverse=True)
+        g["clients"].sort(key=lambda c: c.get("last_seen") or "", reverse=True)
+        g["bssid_count"] = len(g["bssids"])
+        g["client_count"] = len(g["clients"])
+        g["topology"] = _classify_wifi_topology(g["bssids"])
+
+    # Output ordering: groups with the strongest AP signal first, then
+    # client-only "wanted" SSIDs by client count. Pure-wanted groups
+    # drop to the bottom since they have no measured AP.
+    return sorted(
+        groups.values(),
+        key=lambda g: (
+            0 if g["bssid_count"] else 1,
+            -(g["best_rssi"] if g["best_rssi"] is not None else -999),
+            -g["client_count"],
+            g["ssid"].lower(),
+        ),
+    )
+
+
 async def list_common_devices(min_locations: int = 2, limit: int = 50) -> list[dict]:
     """Devices seen at >= min_locations distinct locations.
 

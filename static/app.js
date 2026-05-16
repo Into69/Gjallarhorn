@@ -19,6 +19,7 @@ $$(".tab-btn").forEach((btn) => {
     $$(".tab").forEach((t) => t.classList.toggle("active", t.id === `tab-${id}`));
     if (id === "map" && map) setTimeout(() => map.invalidateSize(), 50);
     if (id === "devices") refreshDevices();
+    if (id === "wifi-aps") refreshWifiAps();
     if (id === "locations") refreshLocations();
     if (id === "alerts") refreshAlerts();
     if (id === "logs") refreshLogs();
@@ -2015,6 +2016,241 @@ $("#discord-test").addEventListener("click", async () => {
   }
   setTimeout(() => (status.textContent = ""), 4000);
 });
+
+// ---------- wifi APs tab ----------
+// Groups WiFi captures (kind='wifi') by SSID and folds the wifi_client
+// probes that named each SSID under it as "associated" clients. Caches
+// the last fetched payload so search/hide-orphans filters can rerender
+// without round-tripping the server.
+let _wapCache = [];
+let _wapExpandedSsids = new Set();   // remembers which groups the user opened
+
+async function refreshWifiAps() {
+  const list = $("#wap-list");
+  const progress = $("#wap-progress");
+  if (progress) progress.hidden = false;
+  try {
+    // Mirror the Devices-tab location dropdown so the user can scope
+    // here too. Reuse loadLocationOptions's API to populate, but with
+    // our own select id.
+    await populateWapLocations();
+    const locVal = $("#wap-location").value;
+    const q = locVal ? `?location_id=${encodeURIComponent(locVal)}` : "";
+    const data = await api(`/api/wifi/aps${q}`);
+    _wapCache = data.aps || [];
+    renderWifiAps();
+  } catch (e) {
+    if (list) list.innerHTML = `<div class="muted">Could not load WiFi APs: ${escapeHtml(e.message || String(e))}</div>`;
+  } finally {
+    if (progress) progress.hidden = true;
+  }
+}
+
+async function populateWapLocations() {
+  const sel = $("#wap-location");
+  if (!sel) return;
+  const prev = sel.value;
+  try {
+    const { locations, active_id } = await api("/api/locations");
+    sel.innerHTML = `<option value="">all locations</option>`;
+    for (const loc of locations || []) {
+      const o = document.createElement("option");
+      o.value = loc.id;
+      o.textContent = `${loc.id} · ${loc.label || ""}`.trim() +
+        (loc.id === active_id ? " (active)" : "");
+      sel.appendChild(o);
+    }
+    if (prev) sel.value = prev;
+  } catch { /* keep whatever's there */ }
+}
+
+function renderWifiAps() {
+  const list = $("#wap-list");
+  const counter = $("#wap-count");
+  if (!list) return;
+  const q = ($("#wap-search")?.value || "").trim().toLowerCase();
+  const hideOrphans = !!$("#wap-hide-orphans")?.checked;
+
+  const filtered = _wapCache.filter(g => {
+    if (hideOrphans && !g.bssid_count) return false;
+    if (!q) return true;
+    if ((g.ssid || "").toLowerCase().includes(q)) return true;
+    if (g.bssids.some(b =>
+      (b.bssid || "").toLowerCase().includes(q) ||
+      (b.vendor || "").toLowerCase().includes(q)
+    )) return true;
+    if (g.clients.some(c =>
+      (c.device_id || "").toLowerCase().includes(q) ||
+      (c.vendor || "").toLowerCase().includes(q)
+    )) return true;
+    return false;
+  });
+
+  if (counter) {
+    // Surface the visible / probe-only split so it's obvious at a glance
+    // how many "wanted but unseen" SSIDs are in view alongside the
+    // captured APs. The split reflects the filtered set, not the
+    // global cache.
+    const visibleCount = filtered.filter(g => g.bssid_count > 0).length;
+    const wantedCount = filtered.length - visibleCount;
+    const total = _wapCache.length;
+    const scope = filtered.length === total
+      ? `${total} SSID${total === 1 ? "" : "s"}`
+      : `${filtered.length} of ${total}`;
+    counter.textContent = `${scope} · ${visibleCount} visible · ${wantedCount} probe-only`;
+  }
+  if (!filtered.length) {
+    list.innerHTML = `<div class="muted">${
+      _wapCache.length ? "No SSIDs match the current filters." : "No WiFi captures yet."
+    }</div>`;
+    return;
+  }
+  list.innerHTML = filtered.map(renderWapGroup).join("");
+  // Wire the open/close persistence on each <details>.
+  for (const det of list.querySelectorAll("details.wap-group")) {
+    const ssid = det.dataset.ssid || "";
+    det.addEventListener("toggle", () => {
+      if (det.open) _wapExpandedSsids.add(ssid);
+      else _wapExpandedSsids.delete(ssid);
+    });
+  }
+}
+
+function renderWapGroup(g) {
+  const ssidLabel = g.is_hidden ? "(hidden / wildcard)" : g.ssid;
+  const opened = _wapExpandedSsids.has(g.ssid) ? " open" : "";
+  const encs = new Set();
+  for (const b of g.bssids) if (b.encryption) encs.add(b.encryption);
+  const encBadge = encs.size
+    ? `<span class="wap-badge enc">${escapeHtml([...encs].join(" / "))}</span>`
+    : (g.bssid_count
+        ? `<span class="wap-badge open">open</span>`
+        : "");
+  // Topology badge — driven by the server-side _classify_wifi_topology
+  // call which inspects the 802.11 IEs we parsed off each BSSID:
+  //   mesh        — Mesh ID / Mesh Configuration IE present (true 802.11s)
+  //   ess         — shared 802.11r Mobility Domain (federated roaming)
+  //   multi_band  — same OUI across ≥2 bands (single radio, multiple bands)
+  //   multi_ap    — ≥2 BSSIDs but none of the above signals (generic)
+  //   single      — just one BSSID; no badge
+  const topo = g.topology || {};
+  const tBands = (topo.bands || []).filter(Boolean);
+  let meshBadge = "";
+  if (topo.kind === "mesh") {
+    const ids = (topo.mesh_ids || []).filter(Boolean);
+    const tip = "802.11s mesh — Mesh ID / Mesh Configuration IE seen"
+      + (ids.length ? ` (${ids.join(", ")})` : "")
+      + (tBands.length ? ` · ${tBands.join(" + ")}` : "");
+    meshBadge = `<span class="wap-badge mesh" title="${escapeAttr(tip)}">mesh · ${g.bssid_count} radios</span>`;
+  } else if (topo.kind === "ess") {
+    const tip = "Federated ESS — shared 802.11r Mobility Domain"
+      + (topo.mobility_domain ? ` (MDID ${topo.mobility_domain})` : "")
+      + (tBands.length ? ` · ${tBands.join(" + ")}` : "");
+    meshBadge = `<span class="wap-badge ess" title="${escapeAttr(tip)}">ESS · ${g.bssid_count} APs</span>`;
+  } else if (topo.kind === "multi_band") {
+    const tip = "Multi-band radio — one device advertising the SSID across "
+      + (tBands.length ? tBands.join(" + ") : "multiple bands");
+    meshBadge = `<span class="wap-badge multiband" title="${escapeAttr(tip)}">multi-band · ${g.bssid_count} radios</span>`;
+  } else if (topo.kind === "multi_ap") {
+    const tip = "Multiple BSSIDs share this SSID, but no mesh / ESS IE was captured. "
+      + "Likely multiple APs federated under one SSID, or scan output missing IEs.";
+    meshBadge = `<span class="wap-badge multiap" title="${escapeAttr(tip)}">multi-AP · ${g.bssid_count} radios</span>`;
+  }
+  // Status dot left of the SSID name — visible when at least one AP
+  // was captured for this SSID, "wanted" when only probe requests
+  // have named it (clients hunting for a network that hasn't been
+  // observed). Uses a colored dot rather than emoji so the icon
+  // matches the rest of the muted/accent palette.
+  const visible = g.bssid_count > 0;
+  const statusDot = visible
+    ? `<span class="wap-state visible" title="Visible — ${g.bssid_count} AP${g.bssid_count === 1 ? "" : "s"} captured for this SSID" aria-label="visible"></span>`
+    : `<span class="wap-state wanted" title="Wanted — clients have probed for this SSID but no AP has been captured" aria-label="probe-only"></span>`;
+  const bestRssi = g.best_rssi != null ? `${g.best_rssi} dBm` : "—";
+  const bssidRows = g.bssids.length
+    ? g.bssids.map(b => `
+        <tr>
+          <td class="mono">${escapeHtml(b.bssid)}</td>
+          <td>${escapeHtml(b.vendor || "")}</td>
+          <td>${b.channel != null ? escapeHtml(String(b.channel)) : ""}${b.band ? ` <span class="muted">${escapeHtml(b.band)}</span>` : ""}</td>
+          <td>${escapeHtml(b.encryption || "open")}</td>
+          <td>${b.best_rssi != null ? b.best_rssi + " dBm" : ""}</td>
+          <td>${b.seen_count ?? ""}</td>
+          <td class="mono">${escapeHtml(formatTime(b.last_seen))}</td>
+          <td>${b.location_id != null ? `#${b.location_id}` : ""}</td>
+        </tr>`).join("")
+    : `<tr><td colspan="8" class="muted">No AP captured for this SSID — clients have been probing for it.</td></tr>`;
+
+  const clientRows = g.clients.length
+    ? g.clients.map(c => {
+        const probed = (c.ssids || []).filter(s => s).slice(0, 6).join(", ");
+        const more = (c.ssids || []).filter(s => s).length > 6 ? ` (+${(c.ssids || []).filter(s => s).length - 6})` : "";
+        return `
+        <tr>
+          <td class="mono">${escapeHtml(c.device_id)}${c.randomized ? ' <span class="wap-badge rand">rand</span>' : ""}</td>
+          <td>${escapeHtml(c.vendor || "")}</td>
+          <td>${(c.channels || []).join(", ")}</td>
+          <td>${c.best_rssi != null ? c.best_rssi + " dBm" : ""}</td>
+          <td>${c.seen_count ?? ""}</td>
+          <td class="mono">${escapeHtml(formatTime(c.last_seen))}</td>
+          <td>${escapeHtml(probed)}${more ? `<span class="muted">${escapeHtml(more)}</span>` : ""}</td>
+        </tr>`;
+      }).join("")
+    : `<tr><td colspan="7" class="muted">No clients have been observed probing for this network.</td></tr>`;
+
+  return `
+    <details class="wap-group"${opened} data-ssid="${escapeAttr(g.ssid)}">
+      <summary>
+        ${statusDot}
+        <span class="wap-ssid">${escapeHtml(ssidLabel)}</span>
+        ${encBadge}
+        ${meshBadge}
+        <span class="wap-stats">
+          <span class="wap-stat" title="Access points (BSSIDs) advertising this SSID">${g.bssid_count} AP${g.bssid_count === 1 ? "" : "s"}</span>
+          <span class="wap-stat" title="WiFi clients seen probing for this SSID">${g.client_count} client${g.client_count === 1 ? "" : "s"}</span>
+          <span class="wap-stat" title="Strongest RSSI across all BSSIDs for this SSID">${bestRssi}</span>
+        </span>
+      </summary>
+      <div class="wap-body">
+        <h4 class="wap-h">Access points</h4>
+        <table class="wap-table">
+          <thead><tr>
+            <th>BSSID</th><th>Vendor</th><th>Channel</th><th>Encryption</th>
+            <th>Best RSSI</th><th>Seen</th><th>Last seen</th><th>Loc</th>
+          </tr></thead>
+          <tbody>${bssidRows}</tbody>
+        </table>
+        <h4 class="wap-h">Clients seen probing for this network</h4>
+        <table class="wap-table">
+          <thead><tr>
+            <th>MAC</th><th>Vendor</th><th>Channels</th><th>Best RSSI</th>
+            <th>Probes</th><th>Last seen</th><th>Other SSIDs probed</th>
+          </tr></thead>
+          <tbody>${clientRows}</tbody>
+        </table>
+      </div>
+    </details>`;
+}
+
+$("#wap-refresh")?.addEventListener("click", refreshWifiAps);
+$("#wap-location")?.addEventListener("change", refreshWifiAps);
+$("#wap-search")?.addEventListener("input", () => {
+  clearTimeout(_wapSearchTimer);
+  _wapSearchTimer = setTimeout(renderWifiAps, 120);
+});
+$("#wap-hide-orphans")?.addEventListener("change", renderWifiAps);
+$("#wap-expand-all")?.addEventListener("click", () => {
+  for (const det of document.querySelectorAll("#wap-list details.wap-group")) {
+    det.open = true;
+    if (det.dataset.ssid != null) _wapExpandedSsids.add(det.dataset.ssid);
+  }
+});
+$("#wap-collapse-all")?.addEventListener("click", () => {
+  for (const det of document.querySelectorAll("#wap-list details.wap-group")) {
+    det.open = false;
+  }
+  _wapExpandedSsids.clear();
+});
+let _wapSearchTimer = null;
 
 // ---------- alerts ----------
 const MATCH_TYPE_LABEL = {

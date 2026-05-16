@@ -546,6 +546,20 @@ async def api_location_devices(loc_id: int, kind: Optional[str] = None):
     return {"devices": await db.devices_at_location(loc_id, kind)}
 
 
+@app.get("/api/wifi/aps")
+async def api_wifi_aps(location_id: Optional[int] = None):
+    """WiFi APs (kind='wifi') grouped by SSID, with the wifi_client
+    probes that named each SSID attached as 'associated' clients.
+
+    The 'associated' link is best-effort — we don't capture 802.11
+    association frames, only probe requests, so a client lands under
+    an AP whenever its probed-SSID list contains the AP's SSID. Useful
+    enough to answer "which devices have been looking for this network"
+    in one place. Optional location_id filter narrows both APs and
+    probes to that bubble."""
+    return {"aps": await db.wifi_aps_grouped(location_id=location_id)}
+
+
 @app.delete("/api/locations/{loc_id}/devices")
 async def api_delete_location_devices(loc_id: int):
     """Wipe every device + observation at this location while keeping
