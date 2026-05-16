@@ -2030,13 +2030,21 @@ async function refreshWifiAps() {
   const progress = $("#wap-progress");
   if (progress) progress.hidden = false;
   try {
-    // Mirror the Devices-tab location dropdown so the user can scope
-    // here too. Reuse loadLocationOptions's API to populate, but with
-    // our own select id.
+    // Mirror the Devices-tab location dropdown so APs and probes are
+    // always scoped to one bubble — matches "where was this AP found"
+    // semantics rather than aggregating across every visit ever.
     await populateWapLocations();
     const locVal = $("#wap-location").value;
-    const q = locVal ? `?location_id=${encodeURIComponent(locVal)}` : "";
-    const data = await api(`/api/wifi/aps${q}`);
+    if (!locVal) {
+      _wapCache = [];
+      if (list) {
+        list.innerHTML = `<div class="muted">No locations yet — capture a fix or draw a geofence to start scoping WiFi APs.</div>`;
+      }
+      const counter = $("#wap-count");
+      if (counter) counter.textContent = "";
+      return;
+    }
+    const data = await api(`/api/wifi/aps?location_id=${encodeURIComponent(locVal)}`);
     _wapCache = data.aps || [];
     renderWifiAps();
   } catch (e) {
@@ -2052,15 +2060,24 @@ async function populateWapLocations() {
   const prev = sel.value;
   try {
     const { locations, active_id } = await api("/api/locations");
-    sel.innerHTML = `<option value="">all locations</option>`;
+    sel.innerHTML = "";
     for (const loc of locations || []) {
       const o = document.createElement("option");
       o.value = loc.id;
-      o.textContent = `${loc.id} · ${loc.label || ""}`.trim() +
-        (loc.id === active_id ? " (active)" : "");
+      o.textContent = `${loc.label || `Loc ${loc.id}`}${loc.id === active_id ? " (active)" : ""}`;
       sel.appendChild(o);
     }
-    if (prev) sel.value = prev;
+    // Default to whichever location is currently selected; otherwise the
+    // active location (matches the Devices-tab default); otherwise the
+    // first one in the list so the user has somewhere to land.
+    const ids = new Set((locations || []).map(l => String(l.id)));
+    if (prev && ids.has(prev)) {
+      sel.value = prev;
+    } else if (active_id != null && ids.has(String(active_id))) {
+      sel.value = String(active_id);
+    } else if (sel.options.length) {
+      sel.value = sel.options[0].value;
+    }
   } catch { /* keep whatever's there */ }
 }
 
