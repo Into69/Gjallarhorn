@@ -12,6 +12,7 @@
     <h1>Gjallarhorn</h1>
     <nav>
       <button class="tab-btn active" data-tab="map">Map</button>
+      <button class="tab-btn" data-tab="mission">Mission</button>
       <button class="tab-btn" data-tab="devices">Devices</button>
       <button class="tab-btn" data-tab="wifi-aps">WiFi AP</button>
       <button class="tab-btn" data-tab="locations">Locations</button>
@@ -206,6 +207,221 @@
       </aside>
     </section>
 
+    <section id="tab-mission" class="tab">
+      <div class="mission-page">
+
+        <header class="mission-hero">
+          <div class="mission-hero-left">
+            <h2>Mission control</h2>
+            <p id="mission-tagline" class="muted">
+              Centralised pause / data management for the current trip.
+            </p>
+          </div>
+          <div class="mission-hero-actions">
+            <button id="mission-pause" type="button" class="secondary">Pause scanning</button>
+            <button id="mission-refresh" type="button" class="secondary">Refresh</button>
+          </div>
+        </header>
+
+        <section class="mission-card mission-ticker-card">
+          <h3 class="section-h">Live activity</h3>
+          <div class="mission-ticker-grid">
+            <div class="mission-ticker">
+              <dt>Latest alert</dt>
+              <dd id="mission-ticker-alert">—</dd>
+            </div>
+            <div class="mission-ticker">
+              <dt>Latest device</dt>
+              <dd id="mission-ticker-device">—</dd>
+            </div>
+            <div class="mission-ticker">
+              <dt>Latest location</dt>
+              <dd id="mission-ticker-location">—</dd>
+            </div>
+          </div>
+        </section>
+
+        <section class="mission-card">
+          <h3 class="section-h">Mission lifecycle</h3>
+          <div id="mission-active-block">
+            <p class="muted small">No mission in progress. Start one to snapshot the DB and tag the report.</p>
+          </div>
+          <form id="mission-start-form" class="mission-start-form">
+            <label>Name <input type="text" name="name" placeholder="e.g. Saturday recon" required /></label>
+            <label>Description <input type="text" name="description" placeholder="optional" /></label>
+            <button type="submit">Start mission</button>
+          </form>
+          <details class="mission-history">
+            <summary>Mission history</summary>
+            <table id="mission-history-table">
+              <thead>
+                <tr>
+                  <th>Name</th><th>Started</th><th>Ended</th><th>Duration</th>
+                  <th title="Difference in observations between start and end of the mission.">Δ obs</th>
+                  <th title="Difference in unique devices captured during the mission window.">Δ devices</th>
+                  <th title="Difference in alert events fired during the mission.">Δ alerts</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </details>
+        </section>
+
+        <section class="mission-card">
+          <h3 class="section-h">Quick toggles</h3>
+          <p class="muted small">Browser-local switches — they only affect this view; the orchestrator keeps doing its thing unless you flip Recording off too.</p>
+          <div class="mission-toggle-grid">
+            <label class="check">
+              <input type="checkbox" id="mission-mute-alarms" />
+              Mute audible alarms (this browser only)
+            </label>
+            <label class="check">
+              <input type="checkbox" id="mission-stealth" />
+              Stealth mode — hide alert badges + device counts in headers
+            </label>
+            <label class="check">
+              <input type="checkbox" id="mission-skip-recording" title="Skips device upserts and observation rows on the server while leaving alert evaluation intact. New devices won't be stored until you turn this off." />
+              Skip recording — evaluate alerts but don't write new rows
+            </label>
+          </div>
+        </section>
+
+        <section class="mission-card">
+          <h3 class="section-h">Status</h3>
+          <dl class="mission-status-grid">
+            <div><dt>Scanning</dt><dd id="mission-stat-state">—</dd></div>
+            <div><dt>Uptime</dt><dd id="mission-stat-uptime">—</dd></div>
+            <div><dt>Active location</dt><dd id="mission-stat-active-loc">—</dd></div>
+            <div><dt>Server time</dt><dd id="mission-stat-time" class="mono">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="mission-card">
+          <h3 class="section-h">Database</h3>
+          <dl class="mission-stats">
+            <div><dt>Locations</dt><dd id="mission-stat-locations">—</dd></div>
+            <div><dt>Devices total</dt><dd id="mission-stat-devices">—</dd></div>
+            <div><dt>Wi-Fi APs</dt><dd id="mission-stat-wifi">—</dd></div>
+            <div><dt>BLE</dt><dd id="mission-stat-ble">—</dd></div>
+            <div><dt>Bluetooth Classic</dt><dd id="mission-stat-btc">—</dd></div>
+            <div><dt>Wi-Fi clients</dt><dd id="mission-stat-clients">—</dd></div>
+            <div><dt>Observations</dt><dd id="mission-stat-obs">—</dd></div>
+            <div><dt>Alert rules</dt><dd id="mission-stat-rules">—</dd></div>
+            <div><dt>Alert events</dt><dd id="mission-stat-events">—</dd></div>
+            <div><dt>Whitelist</dt><dd id="mission-stat-wl">—</dd></div>
+            <div><dt>DB file size</dt><dd id="mission-stat-dbsize">—</dd></div>
+          </dl>
+          <p class="muted mono small" id="mission-stat-dbpath">—</p>
+        </section>
+
+        <section class="mission-card mission-actions-card">
+          <h3 class="section-h">Locations &amp; devices</h3>
+          <p class="muted small">
+            Bulk operations against the captured locations / devices /
+            observations data. All actions are destructive — confirm
+            prompts spell out the exact scope.
+          </p>
+          <div class="mission-action-grid">
+            <button id="mission-reset" type="button" class="danger">
+              Reset auto clusters
+              <span class="mission-action-hint">Wipe auto-clustered locations + their devices/observations. Drawn geofences and whitelist history are preserved.</span>
+            </button>
+            <button id="mission-delete-all" type="button" class="danger">
+              Delete all locations
+              <span class="mission-action-hint">Remove every location, device, and observation. Temp whitelist wiped. Drawn geofences also deleted.</span>
+            </button>
+            <button id="mission-purge" type="button" class="secondary">
+              Purge old data
+              <span class="mission-action-hint">Apply the retention thresholds from Settings now instead of waiting for the daily sweep.</span>
+            </button>
+            <button class="danger mission-kind-delete" data-kind="wifi" type="button">
+              Delete all Wi-Fi APs
+              <span class="mission-action-hint">Removes every kind=wifi device row + their observations.</span>
+            </button>
+            <button class="danger mission-kind-delete" data-kind="bluetooth" type="button">
+              Delete all BLE
+              <span class="mission-action-hint">Removes every kind=bluetooth device row + their observations.</span>
+            </button>
+            <button class="danger mission-kind-delete" data-kind="bluetooth_classic" type="button">
+              Delete all Bluetooth Classic
+              <span class="mission-action-hint">Removes every kind=bluetooth_classic device row + their observations.</span>
+            </button>
+            <button class="danger mission-kind-delete" data-kind="wifi_client" type="button">
+              Delete all Wi-Fi clients
+              <span class="mission-action-hint">Removes every probe-request capture and their observations.</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="mission-card mission-actions-card">
+          <h3 class="section-h">Alerts</h3>
+          <div class="mission-action-grid">
+            <button id="mission-clear-alerts" type="button" class="danger">
+              Clear alert feed
+              <span class="mission-action-hint">Delete every alert_events row. Rule definitions stay.</span>
+            </button>
+            <button id="mission-unlatch-all" type="button" class="secondary">
+              Unlatch all
+              <span class="mission-action-hint">Mark every active latch as acknowledged. History is kept; rules can re-fire.</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="mission-card mission-actions-card">
+          <h3 class="section-h">Storage</h3>
+          <div class="mission-action-grid">
+            <button id="mission-vacuum" type="button" class="secondary">
+              Vacuum database
+              <span class="mission-action-hint">Rewrite the SQLite file to reclaim space freed by deletes. Cheap on a small DB.</span>
+            </button>
+            <button id="mission-integrity" type="button" class="secondary">
+              Integrity check
+              <span class="mission-action-hint">Runs SQLite PRAGMA integrity_check. Reports "ok" or specific corruption findings.</span>
+            </button>
+            <button id="mission-backup" type="button" class="secondary">
+              Download backup (.db)
+              <span class="mission-action-hint">Streams the live SQLite file as a download. Use for transfer between devices or as a pre-restore safety copy.</span>
+            </button>
+            <button id="mission-restore" type="button" class="danger">
+              Restore from backup…
+              <span class="mission-action-hint">Replaces the live DB with an uploaded .db file. Pause + restart strongly recommended after.</span>
+            </button>
+            <input type="file" id="mission-restore-file" accept=".db" hidden />
+          </div>
+          <p id="mission-action-status" class="muted small"></p>
+        </section>
+
+        <section class="mission-card mission-actions-card">
+          <h3 class="section-h">Reports</h3>
+          <div class="mission-action-grid">
+            <button id="mission-report" type="button" class="secondary">
+              Mission report (PDF)
+              <span class="mission-action-hint">Standard PDF report with a cover page summarising the most-recently-ended mission's stats diff.</span>
+            </button>
+          </div>
+          <progress id="mission-report-progress" value="0" max="1" hidden></progress>
+          <span id="mission-report-status" class="muted small"></span>
+        </section>
+
+        <section class="mission-card mission-journal-card">
+          <h3 class="section-h">Mission journal</h3>
+          <p class="muted small">
+            Free-text notes for this session — operator-only, saved in
+            your browser's localStorage. Useful for jotting "left home
+            09:12", "tailed at intersection", "noise spike near
+            shopping plaza".
+          </p>
+          <textarea id="mission-journal" rows="8" placeholder="Field notes…"></textarea>
+          <div class="toolbar">
+            <button id="mission-journal-clear" type="button" class="secondary">Clear notes</button>
+            <span id="mission-journal-status" class="muted small"></span>
+          </div>
+        </section>
+
+      </div>
+    </section>
+
     <section id="tab-devices" class="tab">
       <div class="toolbar">
         <label>Location:
@@ -310,8 +526,7 @@
         <progress id="loc-report-progress" value="0" max="1" hidden></progress>
         <span id="loc-report-progress-label" class="muted" hidden></span>
         <span class="toolbar-spacer"></span>
-        <button id="loc-reset" class="danger" title="Delete every auto-clustered location and its devices/observations. Drawn geofences and the temporary whitelist are kept.">Reset</button>
-        <button id="loc-delete-all" class="danger">Delete all</button>
+        <span class="muted" title="Reset and Delete all moved to the Mission tab.">Bulk actions moved to the Mission tab →</span>
       </div>
       <table id="loc-table">
         <thead>

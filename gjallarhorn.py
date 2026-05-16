@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -308,6 +308,33 @@ async def api_set_pause(payload: dict | None = None):
         target = bool(payload.get("paused"))
     orchestrator.set_paused(target)
     return {"paused": orchestrator.paused}
+
+
+@app.get("/api/system/recording")
+async def api_recording_status():
+    """Returns whether the orchestrator is currently writing device /
+    observation rows. False means scans + alert evaluation are still
+    running, but no new rows land in the DB — the Mission tab's
+    'Skip recording' toggle controls this."""
+    return {"recording": orchestrator.recording if orchestrator else True}
+
+
+@app.post("/api/system/recording")
+async def api_set_recording(payload: dict | None = None):
+    """Toggle or set the recording flag. Body: {recording: bool}; absent
+    toggles. Off = orchestrator skips upsert_device / insert_observation
+    while still calling alert_service.evaluate — alert rules that are
+    purely value-based fire fine; stateful rules (cross_location,
+    persistent_companion, arrival_after_gap, absence_gap) freeze on
+    whatever DB state existed when recording was paused."""
+    if orchestrator is None:
+        raise HTTPException(503, "orchestrator not running")
+    if payload is None or "recording" not in payload:
+        target = not orchestrator.recording
+    else:
+        target = bool(payload.get("recording"))
+    orchestrator.set_recording(target)
+    return {"recording": orchestrator.recording}
 
 
 # ---------- About ----------
@@ -714,6 +741,158 @@ async def api_purge_old_data(payload: dict | None = None):
             "observation_days": obs_d, "device_days": dev_d}
 
 
+# ---------- Missions ----------
+@app.get("/api/missions")
+async def api_list_missions(limit: int = 50):
+    return {"missions": await db.list_missions(limit=limit)}
+
+
+@app.get("/api/missions/active")
+async def api_active_mission():
+    return {"mission": await db.active_mission()}
+
+
+@app.post("/api/missions")
+async def api_start_mission(payload: dict | None = None):
+    """Open a new mission. Rejects if another is already active."""
+    payload = payload or {}
+    name = (payload.get("name") or "").strip() or "Mission"
+    description = payload.get("description")
+    out = await db.create_mission(name, description)
+    if isinstance(out, dict) and out.get("error"):
+        raise HTTPException(409, out["error"])
+    log.info("Mission started: id=%s name=%s", out.get("id"), out.get("name"))
+    return {"mission": out}
+
+
+@app.post("/api/missions/{mission_id}/end")
+async def api_end_mission(mission_id: int):
+    out = await db.end_mission(mission_id)
+    if out is None:
+        raise HTTPException(404, "mission not found or already ended")
+    log.info("Mission ended: id=%s", mission_id)
+    return {"mission": out}
+
+
+@app.get("/api/missions/{mission_id}")
+async def api_get_mission(mission_id: int):
+    out = await db.get_mission(mission_id)
+    if out is None:
+        raise HTTPException(404, "mission not found")
+    return {"mission": out}
+
+
+@app.delete("/api/missions/{mission_id}")
+async def api_delete_mission(mission_id: int):
+    """Delete a mission audit row. Does NOT touch the captured data."""
+    ok = await db.delete_mission(mission_id)
+    if not ok:
+        raise HTTPException(404, "mission not found")
+    return {"ok": True}
+
+
+# ---------- Maintenance: per-kind delete, integrity, DB backup ----------
+@app.post("/api/maintenance/delete-kind")
+async def api_delete_kind(payload: dict):
+    """Wipe every device + observation of one kind. Whitelisted devices
+    follow the same preservation path as location deletion (archived to
+    preserved_devices first)."""
+    kind = (payload or {}).get("kind")
+    if kind not in ("wifi", "bluetooth", "bluetooth_classic", "wifi_client"):
+        raise HTTPException(400, "kind must be wifi / bluetooth / bluetooth_classic / wifi_client")
+    out = await db.delete_devices_by_kind(kind)
+    log.info("Per-kind delete: %s -> %s", kind, out)
+    return out
+
+
+@app.post("/api/maintenance/integrity")
+async def api_integrity_check():
+    return await db.integrity_check()
+
+
+@app.get("/api/maintenance/db/export")
+async def api_db_export():
+    """Stream the live SQLite file as a download. The on-disk file is
+    a single SQLite database; transferring it whole is the simplest
+    backup format. Safe to do while the app is running — SQLite handles
+    concurrent readers fine, and the file we serve is a point-in-time
+    copy via FileResponse's streaming."""
+    if not db.DB_PATH.exists():
+        raise HTTPException(404, "database file not found")
+    return FileResponse(
+        path=str(db.DB_PATH),
+        filename=f"gjallarhorn-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db",
+        media_type="application/octet-stream",
+    )
+
+
+@app.post("/api/maintenance/db/import")
+async def api_db_import(file: UploadFile = File(...)):
+    """Replace the live SQLite file with an uploaded one. Backs up the
+    current file alongside (with `.bak-TIMESTAMP` suffix) before
+    overwriting, and stops the scan orchestrator while the swap
+    happens so no writes race against the replace. Caller must restart
+    the process for the new DB to take effect — the in-memory
+    connections in alert_service / settings_store cache schema state
+    from boot."""
+    raw = await file.read()
+    if not raw or raw[:16] != b"SQLite format 3\x00":
+        raise HTTPException(400, "uploaded file is not a SQLite database (magic header missing)")
+    backup_path = db.DB_PATH.with_suffix(
+        db.DB_PATH.suffix + f".bak-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    )
+    if orchestrator is not None:
+        try:
+            await orchestrator.stop()
+        except Exception as e:
+            log.warning("orchestrator.stop() failed during db import: %s", e)
+    try:
+        if db.DB_PATH.exists():
+            db.DB_PATH.replace(backup_path)
+        db.DB_PATH.write_bytes(raw)
+        log.warning(
+            "DB replaced via /import — previous file at %s. Restart the "
+            "process to reload the new DB.", backup_path,
+        )
+    finally:
+        # Restart orchestrator so the app keeps scanning; alerts/settings
+        # caches are stale until process restart but the worst case is
+        # one orphaned scan against the new file.
+        if orchestrator is not None:
+            try:
+                await orchestrator.start()
+            except Exception as e:
+                log.warning("orchestrator.start() failed after db import: %s", e)
+    return {
+        "ok": True,
+        "size_bytes": len(raw),
+        "backup_path": str(backup_path),
+        "restart_recommended": True,
+    }
+
+
+@app.post("/api/maintenance/vacuum")
+async def api_vacuum_db():
+    """Reclaim free pages and rewrite the SQLite file. Manual trigger
+    after a big delete (Reset / Delete all / Purge) to shrink the file
+    on disk — SQLite keeps the freed pages allocated otherwise. Cheap on
+    a small DB, can take a moment on a large one."""
+    import aiosqlite
+    size_before = db.DB_PATH.stat().st_size if db.DB_PATH.exists() else 0
+    async with aiosqlite.connect(db.DB_PATH) as conn:
+        await conn.execute("VACUUM")
+        await conn.commit()
+    size_after = db.DB_PATH.stat().st_size if db.DB_PATH.exists() else 0
+    log.info("manual VACUUM: %d → %d bytes (saved %d)",
+             size_before, size_after, size_before - size_after)
+    return {
+        "ok": True,
+        "size_before_bytes": size_before,
+        "size_after_bytes": size_after,
+        "saved_bytes": max(0, size_before - size_after),
+    }
+
+
 @app.get("/api/tilecache/status")
 async def api_tilecache_status():
     from services.map_cache import cache_status
@@ -763,8 +942,11 @@ _report_state: dict = {
 }
 
 
-async def _run_report_job(group_bssids: bool) -> None:
-    """Background task: builds the PDF, streaming progress into _report_state."""
+async def _run_report_job(group_bssids: bool, mission: dict | None = None) -> None:
+    """Background task: builds the PDF, streaming progress into _report_state.
+    Optional mission dict is threaded through to the renderer so the
+    Mission tab's "Mission report" button can prepend a cover page
+    summarising the mission's stats diff."""
     from services.report import build_report_pdf
 
     def progress(label: str, n: int, total: int) -> None:
@@ -773,11 +955,17 @@ async def _run_report_job(group_bssids: bool) -> None:
         _report_state["stage_total"] = total
 
     try:
-        pdf = await build_report_pdf(group_bssids=group_bssids, progress=progress)
-        _report_state["result"] = pdf
-        _report_state["filename"] = (
-            f"gjallarhorn-report-{datetime.now().strftime('%Y%m%d-%H%M%S')}.pdf"
+        pdf = await build_report_pdf(
+            group_bssids=group_bssids, progress=progress, mission=mission,
         )
+        _report_state["result"] = pdf
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        if mission and mission.get("name"):
+            safe = "".join(c if c.isalnum() or c in "-_." else "-"
+                           for c in mission["name"])[:40]
+            _report_state["filename"] = f"gjallarhorn-mission-{safe}-{stamp}.pdf"
+        else:
+            _report_state["filename"] = f"gjallarhorn-report-{stamp}.pdf"
         _report_state["stage_label"] = "Done"
     except Exception as e:
         log.exception("report generation failed")
@@ -785,6 +973,27 @@ async def _run_report_job(group_bssids: bool) -> None:
     finally:
         _report_state["running"] = False
         _report_state["finished_at"] = time.time()
+
+
+@app.post("/api/missions/{mission_id}/report/start")
+async def api_mission_report_start(mission_id: int, group_bssids: bool = True):
+    """Kick off a report build scoped to a mission. Same status / result
+    endpoints as the generic /api/locations/report/* flow, but the PDF
+    gets a cover page with the mission's name + stats diff prepended."""
+    mission = await db.get_mission(mission_id)
+    if mission is None:
+        raise HTTPException(404, "mission not found")
+    if _report_state["running"]:
+        raise HTTPException(409, "a report is already being generated")
+    _report_state.update({
+        "running": True,
+        "stage_n": 0, "stage_total": 0, "stage_label": "Starting…",
+        "started_at": time.time(), "finished_at": None,
+        "result": None, "filename": None, "error": None,
+    })
+    log.info("report: start mission=%d (%s)", mission_id, mission.get("name"))
+    asyncio.create_task(_run_report_job(group_bssids, mission=mission))
+    return {"ok": True}
 
 
 @app.post("/api/locations/report/start")

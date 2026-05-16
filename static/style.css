@@ -624,6 +624,228 @@ details.wap-group[open] > summary { border-bottom: 1px solid var(--border); }
 .wap-table tbody tr:last-child td { border-bottom: none; }
 .wap-table .mono { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
 
+/* ── Mission tab ────────────────────────────────────────
+   Centralised mission/trip control panel — hero header, live status
+   + DB stats cards, grouped destructive actions, and a localStorage
+   journal for field notes. Cards reuse the same panel palette as
+   About / map-sidebar for visual continuity. */
+.mission-page {
+  max-width: 980px;
+  margin: 0 auto;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.mission-hero {
+  background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  padding: 18px 22px;
+  display: flex; flex-wrap: wrap; gap: 16px;
+  align-items: center; justify-content: space-between;
+}
+.mission-hero-left h2 {
+  margin: 0 0 4px 0;
+  font-size: 22px;
+  letter-spacing: 1.5px;
+  color: var(--accent);
+}
+.mission-hero-actions {
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+.mission-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.mission-card p.small { font-size: 11.5px; }
+.mission-card .small { font-size: 11.5px; }
+.mission-card dl { margin: 0; }
+.mission-status-grid,
+.mission-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.mission-status-grid > div,
+.mission-stats > div {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.mission-status-grid dt,
+.mission-stats dt {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+}
+.mission-status-grid dd,
+.mission-stats dd {
+  margin: 2px 0 0;
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-size: 16px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.mission-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+.mission-action-grid button {
+  display: flex; flex-direction: column; align-items: flex-start;
+  text-align: left;
+  padding: 10px 14px;
+  line-height: 1.3;
+  gap: 4px;
+}
+.mission-action-hint {
+  font-size: 10.5px;
+  color: var(--muted);
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.mission-action-grid button.danger .mission-action-hint { color: rgba(255, 200, 200, 0.7); }
+#mission-action-status:not(:empty) { margin-top: 10px; }
+.mission-journal-card textarea {
+  width: 100%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-size: 12px;
+  padding: 8px 10px;
+  resize: vertical;
+  box-sizing: border-box;
+  margin-top: 8px;
+}
+
+/* Live activity ticker — three side-by-side tiles on the Mission tab
+   header showing the most-recent alert / device / location. Matches
+   the .mission-stats grid so visual rhythm stays consistent. */
+.mission-ticker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.mission-ticker {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.mission-ticker dt {
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+}
+.mission-ticker dd {
+  margin: 2px 0 0;
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Mission lifecycle card — active mission banner + start form. */
+.mission-active-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: linear-gradient(180deg, rgba(121, 224, 140, 0.06), transparent);
+  border: 1px solid #2e5a35;
+  border-left: 3px solid var(--ok);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.mission-active-row > div:first-child { flex: 1 1 auto; min-width: 0; }
+.mission-active-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--fg);
+}
+.mission-start-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 10px;
+}
+.mission-start-form label {
+  display: grid; gap: 4px;
+  font-size: 11px; color: var(--muted);
+}
+.mission-start-form input {
+  background: var(--panel-2); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 10px; font: inherit;
+}
+@media (max-width: 720px) {
+  .mission-start-form { grid-template-columns: 1fr; }
+}
+
+/* Mission history disclosure. */
+.mission-history { margin-top: 12px; }
+.mission-history summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 0;
+}
+.mission-history table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.mission-history th, .mission-history td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.mission-history th {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+
+/* Quick toggles — checkbox column inside its own card. */
+.mission-toggle-grid {
+  display: flex; flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.mission-toggle-grid label.check {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--fg);
+  padding: 4px 0;
+}
+
+/* Stealth mode — hides alert badges and other "noisy" UI bits so the
+   operator can take screenshots / share a screen without leaking
+   sensitive counts. */
+body.stealth-mode .tab-badge,
+body.stealth-mode #dev-count,
+body.stealth-mode #wap-count,
+body.stealth-mode #alerts-count,
+body.stealth-mode .alert-toasts,
+body.stealth-mode .mission-stats dd,
+body.stealth-mode .mission-status-grid dd { visibility: hidden; }
+
 /* ── About tab ────────────────────────────────────────────
    Hero banner + a responsive card grid: two columns on wide
    viewports, one column on phones. Cards use the same panel

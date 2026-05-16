@@ -18,6 +18,7 @@ $$(".tab-btn").forEach((btn) => {
     const id = btn.dataset.tab;
     $$(".tab").forEach((t) => t.classList.toggle("active", t.id === `tab-${id}`));
     if (id === "map" && map) setTimeout(() => map.invalidateSize(), 50);
+    if (id === "mission") refreshMission();
     if (id === "devices") refreshDevices();
     if (id === "wifi-aps") refreshWifiAps();
     if (id === "locations") refreshLocations();
@@ -1208,7 +1209,11 @@ $("#loc-report").addEventListener("click", async () => {
     btn.disabled = false; btn.textContent = orig;
   }
 });
-$("#loc-reset").addEventListener("click", async () => {
+// Legacy listener — the Reset button moved to the Mission tab so this
+// element may not exist on a fresh load. Optional-chain prevents a
+// startup crash; the click handler below still runs if the element is
+// re-introduced somewhere later.
+$("#loc-reset")?.addEventListener("click", async () => {
   const ok = confirm(
     "Reset auto-clustered locations?\n\n" +
     "Wipes every auto-clustered sensor location and the devices/" +
@@ -1242,7 +1247,9 @@ $("#loc-reset").addEventListener("click", async () => {
   }
 });
 
-$("#loc-delete-all").addEventListener("click", async () => {
+// Legacy listener — same as above, the Delete-all button moved to the
+// Mission tab. Optional-chain so the script doesn't blow up on load.
+$("#loc-delete-all")?.addEventListener("click", async () => {
   const ok = confirm(
     "Delete ALL locations?\n\n" +
     "This permanently removes every sensor location AND every device " +
@@ -2669,6 +2676,10 @@ function primeAudio() {
 document.addEventListener("click", primeAudio, { once: true, capture: true });
 
 function playAlarm() {
+  // Mission tab's "Mute audible alarms" toggle gates this — set
+  // from setupMissionToggles() and read here without an additional
+  // localStorage round-trip on every fire.
+  if (window._missionMuteAlarms) return;
   const ctx = getAudioCtx();
   if (!ctx) return;
   if (ctx.state === "suspended") {
@@ -4137,6 +4148,514 @@ function formatKindLabel(kind, details) {
   }
   return kind || "";
 }
+
+// ---------- mission tab ----------
+// Polls /api/about for live DB stats + runtime info, lays them out in
+// the Mission control panel, and wires the bulk-action buttons that
+// used to live on the Locations tab. Confirm dialogs match the prior
+// scope copy so nothing surprises the operator.
+async function refreshMission() {
+  try {
+    const a = await api("/api/about");
+    const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? "—"; };
+    const s = a.stats || {};
+    const d = s.devices || {};
+    setText("mission-stat-state", "running");
+    setText("mission-stat-uptime", formatUptime(a.runtime?.uptime_seconds));
+    setText("mission-stat-active-loc", "—");
+    setText("mission-stat-time", a.runtime?.server_time || "—");
+    setText("mission-stat-locations", (s.locations ?? 0).toLocaleString());
+    setText("mission-stat-devices",   (d.total ?? 0).toLocaleString());
+    setText("mission-stat-wifi",      (d.wifi ?? 0).toLocaleString());
+    setText("mission-stat-ble",       (d.bluetooth ?? 0).toLocaleString());
+    setText("mission-stat-btc",       (d.bluetooth_classic ?? 0).toLocaleString());
+    setText("mission-stat-clients",   (d.wifi_client ?? 0).toLocaleString());
+    setText("mission-stat-obs",       (s.observations ?? 0).toLocaleString());
+    setText("mission-stat-rules",     (s.alert_rules ?? 0).toLocaleString());
+    setText("mission-stat-events",    (s.alert_events ?? 0).toLocaleString());
+    setText("mission-stat-wl",        (s.whitelist ?? 0).toLocaleString());
+    setText("mission-stat-dbsize",    formatBytes(s.db_size_bytes ?? 0));
+    setText("mission-stat-dbpath",    s.db_path || "—");
+  } catch (e) {
+    const el = document.getElementById("mission-stat-state");
+    if (el) el.textContent = "error";
+  }
+  // Pause state — read from /api/system/pause + active location.
+  try {
+    const [paused, gps] = await Promise.all([
+      api("/api/system/pause").catch(() => ({})),
+      api("/api/gps").catch(() => ({})),
+    ]);
+    const stateEl = document.getElementById("mission-stat-state");
+    if (stateEl) stateEl.textContent = paused.paused ? "paused" : "running";
+    const btn = document.getElementById("mission-pause");
+    if (btn) btn.textContent = paused.paused ? "Resume scanning" : "Pause scanning";
+    const loc = document.getElementById("mission-stat-active-loc");
+    if (loc) loc.textContent = gps.active_location_id != null
+      ? `#${gps.active_location_id}` : "—";
+  } catch {}
+  // Active + historical mission + live ticker — best-effort, each
+  // independently caught so a failed call doesn't break the others.
+  try { await _refreshMissionLifecycle(); } catch {}
+  try { await _refreshMissionTicker(); } catch {}
+}
+
+async function _refreshMissionLifecycle() {
+  const activeBlock = document.getElementById("mission-active-block");
+  const startForm = document.getElementById("mission-start-form");
+  const historyBody = document.querySelector("#mission-history-table tbody");
+  if (!activeBlock || !startForm || !historyBody) return;
+
+  const [activeRes, listRes] = await Promise.all([
+    api("/api/missions/active"),
+    api("/api/missions?limit=50"),
+  ]);
+  const active = activeRes.mission || null;
+  const missions = listRes.missions || [];
+
+  if (active) {
+    const dur = active.started_at
+      ? formatUptime((Date.now() - Date.parse(active.started_at)) / 1000)
+      : "—";
+    activeBlock.innerHTML = `
+      <div class="mission-active-row">
+        <div>
+          <div class="mission-active-name">${escapeHtml(active.name)}</div>
+          <div class="muted small">
+            started ${escapeHtml(formatTime(active.started_at))}
+            · running ${escapeHtml(dur)}
+            ${active.description ? ` · ${escapeHtml(active.description)}` : ""}
+          </div>
+        </div>
+        <button id="mission-end" type="button" class="danger">End mission</button>
+      </div>`;
+    startForm.hidden = true;
+    document.getElementById("mission-end")?.addEventListener("click", _endActiveMission);
+  } else {
+    activeBlock.innerHTML = `<p class="muted small">No mission in progress. Start one to snapshot the DB and tag the report.</p>`;
+    startForm.hidden = false;
+  }
+
+  if (!missions.length) {
+    historyBody.innerHTML = `<tr><td colspan="8" class="muted">No missions yet.</td></tr>`;
+    return;
+  }
+  historyBody.innerHTML = missions.map(m => {
+    const start = m.started_at;
+    const end = m.ended_at;
+    let durStr = "—";
+    if (start && end) {
+      durStr = formatUptime((Date.parse(end) - Date.parse(start)) / 1000);
+    } else if (start && !end) {
+      durStr = formatUptime((Date.now() - Date.parse(start)) / 1000) + " (active)";
+    }
+    const stats0 = m.stats_start || {};
+    const stats1 = m.stats_end || {};
+    const diff = (k, sub) => {
+      const a = sub ? (stats0.devices || {})[sub] : stats0[k];
+      const b = sub ? (stats1.devices || {})[sub] : stats1[k];
+      if (a == null || b == null) return "—";
+      const v = (b || 0) - (a || 0);
+      return v >= 0 ? `+${v.toLocaleString()}` : v.toLocaleString();
+    };
+    return `
+      <tr data-id="${m.id}">
+        <td>${escapeHtml(m.name)}</td>
+        <td class="mono">${escapeHtml(formatTime(start))}</td>
+        <td class="mono">${escapeHtml(end ? formatTime(end) : "—")}</td>
+        <td class="mono">${escapeHtml(durStr)}</td>
+        <td class="mono">${diff("observations")}</td>
+        <td class="mono">${diff(null, "total")}</td>
+        <td class="mono">${diff("alert_events")}</td>
+        <td>
+          <button class="icon-btn mission-delete-row danger" data-id="${m.id}" title="Remove this mission record (data is unaffected)" aria-label="Delete">×</button>
+        </td>
+      </tr>`;
+  }).join("");
+  for (const btn of historyBody.querySelectorAll(".mission-delete-row")) {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Remove this mission record?\n\nMission metadata only — devices, observations, and alert history are untouched.")) return;
+      try {
+        await api(`/api/missions/${btn.dataset.id}`, { method: "DELETE" });
+        await _refreshMissionLifecycle();
+      } catch (e) { alert("Could not delete: " + (e.message || e)); }
+    });
+  }
+}
+
+async function _refreshMissionTicker() {
+  const setTicker = (id, text, title) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    if (title) el.title = title;
+  };
+  // Latest alert
+  try {
+    const r = await api("/api/alerts/events?limit=1");
+    const e = (r.events || [])[0];
+    if (e) {
+      setTicker("mission-ticker-alert",
+        `${e.rule_name || "rule " + e.rule_id} · ${e.device_id}`,
+        `${formatTime(e.triggered_at)} · ${e.device_kind}`);
+    } else {
+      setTicker("mission-ticker-alert", "no alerts yet", "");
+    }
+  } catch {}
+  // Latest device (across kinds) — pulled from the common-devices endpoint
+  // is overkill, so use the active location's devices when available.
+  try {
+    const gps = await api("/api/gps").catch(() => ({}));
+    const lid = gps.active_location_id;
+    if (lid != null) {
+      const dr = await api(`/api/locations/${lid}/devices`);
+      const devs = dr.devices || [];
+      // Pick the most-recently-seen one.
+      devs.sort((a, b) => (b.last_seen || "").localeCompare(a.last_seen || ""));
+      const d = devs[0];
+      if (d) {
+        setTicker("mission-ticker-device",
+          `${formatKindLabel(d.kind, d.details)} · ${d.device_id}`,
+          `${formatTime(d.last_seen)} · loc #${lid}`);
+      } else {
+        setTicker("mission-ticker-device", "no devices at active loc", "");
+      }
+    } else {
+      setTicker("mission-ticker-device", "no active location", "");
+    }
+  } catch {}
+  // Latest location (most recently created/seen)
+  try {
+    const lr = await api("/api/locations");
+    const locs = lr.locations || [];
+    if (locs.length) {
+      locs.sort((a, b) => (b.last_seen_at || "").localeCompare(a.last_seen_at || ""));
+      const l = locs[0];
+      setTicker("mission-ticker-location",
+        `${l.label || ("Loc " + l.id)}`,
+        `seen ${formatTime(l.last_seen_at)} · #${l.id}`);
+    } else {
+      setTicker("mission-ticker-location", "no locations yet", "");
+    }
+  } catch {}
+}
+
+async function _endActiveMission() {
+  const active = (await api("/api/missions/active").catch(() => ({}))).mission;
+  if (!active) return;
+  if (!confirm(`End mission "${active.name}"?\n\nSnapshots the current DB stats and closes the record. New scans keep running.`)) return;
+  try {
+    await api(`/api/missions/${active.id}/end`, { method: "POST" });
+    await refreshMission();
+  } catch (e) {
+    alert("Could not end mission: " + (e.message || e));
+  }
+}
+
+async function _missionAction(btn, label, fn) {
+  const status = document.getElementById("mission-action-status");
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = label;
+  if (status) status.textContent = "";
+  try {
+    const msg = await fn();
+    if (status && msg) status.textContent = msg;
+  } catch (e) {
+    if (status) status.textContent = "error: " + (e.message || String(e));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+    await refreshMission();
+  }
+}
+
+document.getElementById("mission-refresh")?.addEventListener("click", refreshMission);
+
+document.getElementById("mission-pause")?.addEventListener("click", async () => {
+  try {
+    const r = await api("/api/system/pause", { method: "POST" });
+    const btn = document.getElementById("mission-pause");
+    if (btn) btn.textContent = r.paused ? "Resume scanning" : "Pause scanning";
+    const stateEl = document.getElementById("mission-stat-state");
+    if (stateEl) stateEl.textContent = r.paused ? "paused" : "running";
+  } catch (e) {
+    alert("Could not toggle pause: " + (e.message || e));
+  }
+});
+
+document.getElementById("mission-reset")?.addEventListener("click", (e) => {
+  const ok = confirm(
+    "Reset auto-clustered locations?\n\n" +
+    "Wipes every auto-clustered sensor location and the devices/" +
+    "observations attached to them. Drawn geofences are kept, and " +
+    "whitelisted devices' history is archived to the preserved list. " +
+    "The temporary whitelist is left intact.\n\nThis cannot be undone."
+  );
+  if (!ok) return;
+  _missionAction(e.target, "Resetting…", async () => {
+    const res = await api("/api/locations/reset", { method: "POST" });
+    const d = res.deleted || {};
+    return `Removed ${d.locations || 0} location(s), `
+         + `${d.devices || 0} device row(s), `
+         + `${d.observations || 0} observation(s)`
+         + (d.preserved ? ` · archived ${d.preserved} whitelist row(s)` : "");
+  });
+});
+
+document.getElementById("mission-delete-all")?.addEventListener("click", (e) => {
+  const ok = confirm(
+    "Delete ALL locations?\n\n" +
+    "This permanently removes every sensor location AND every device " +
+    "and observation tied to them. The active location will be re-opened " +
+    "from the next GPS fix.\n\nThis cannot be undone."
+  );
+  if (!ok) return;
+  _missionAction(e.target, "Deleting…", async () => {
+    const res = await api("/api/locations", { method: "DELETE" });
+    const d = res.deleted || {};
+    return `Deleted ${d.locations || 0} location(s), `
+         + `${d.devices || 0} device(s), `
+         + `${d.observations || 0} observation(s)`;
+  });
+});
+
+document.getElementById("mission-purge")?.addEventListener("click", (e) => {
+  const ok = confirm(
+    "Run retention purge now?\n\nApplies the observation/device " +
+    "retention thresholds from Settings → Retention immediately. " +
+    "Whitelisted devices are exempt from the device sweep."
+  );
+  if (!ok) return;
+  _missionAction(e.target, "Purging…", async () => {
+    const r = await api("/api/maintenance/purge", { method: "POST", body: "{}" });
+    const rm = r.removed || {};
+    return `Removed ${rm.observations || 0} observation(s) and ${rm.devices || 0} device row(s)`;
+  });
+});
+
+document.getElementById("mission-clear-alerts")?.addEventListener("click", (e) => {
+  if (!confirm("Clear the entire alert feed? Rules will stay.")) return;
+  _missionAction(e.target, "Clearing…", async () => {
+    const r = await api("/api/alerts/events", { method: "DELETE" });
+    return `Cleared ${r.deleted || 0} alert event(s)`;
+  });
+});
+
+document.getElementById("mission-unlatch-all")?.addEventListener("click", (e) => {
+  if (!confirm("Clear every active alarm latch?\n\nHistory is kept; rules can re-fire on those devices.")) return;
+  _missionAction(e.target, "Unlatching…", async () => {
+    const r = await api("/api/alerts/clear-all", { method: "POST" });
+    return `Unlatched ${r.cleared || 0} pair(s)`;
+  });
+});
+
+document.getElementById("mission-vacuum")?.addEventListener("click", (e) => {
+  if (!confirm("Vacuum the database?\n\nRewrites the SQLite file to reclaim free space after large deletes. Can take a few seconds on a big DB.")) return;
+  _missionAction(e.target, "Vacuuming…", async () => {
+    const r = await api("/api/maintenance/vacuum", { method: "POST" });
+    return `Size ${formatBytes(r.size_before_bytes || 0)} → `
+         + `${formatBytes(r.size_after_bytes || 0)} `
+         + `(saved ${formatBytes(r.saved_bytes || 0)})`;
+  });
+});
+
+document.getElementById("mission-integrity")?.addEventListener("click", (e) => {
+  _missionAction(e.target, "Checking…", async () => {
+    const r = await api("/api/maintenance/integrity", { method: "POST" });
+    return r.ok
+      ? "DB integrity: ok"
+      : `DB integrity issues: ${(r.findings || []).join(" · ")}`;
+  });
+});
+
+document.getElementById("mission-backup")?.addEventListener("click", () => {
+  // Direct download — browser handles the file save. No JSON shape here,
+  // just a Content-Disposition: attachment response.
+  window.location.href = "/api/maintenance/db/export";
+});
+
+document.getElementById("mission-restore")?.addEventListener("click", () => {
+  const ok = confirm(
+    "Restore from backup?\n\n" +
+    "Replaces the live SQLite file with the .db you pick. Strongly "
+    + "recommend pausing scanning first and downloading a current "
+    + "backup so you can roll back. After restore you'll need to "
+    + "restart the app to reload the new DB.\n\nContinue?"
+  );
+  if (!ok) return;
+  document.getElementById("mission-restore-file")?.click();
+});
+
+document.getElementById("mission-restore-file")?.addEventListener("change", async (ev) => {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append("file", file);
+  const btn = document.getElementById("mission-restore");
+  await _missionAction(btn, "Restoring…", async () => {
+    const resp = await fetch("/api/maintenance/db/import", {
+      method: "POST", body: fd,
+    });
+    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+    const r = await resp.json();
+    return `Restored ${formatBytes(r.bytes || 0)} — restart the app to pick up the new DB.`;
+  });
+  ev.target.value = "";
+});
+
+// Per-kind delete (Wi-Fi APs / BLE / BR/EDR / Wi-Fi clients).
+document.querySelectorAll(".mission-kind-delete").forEach((btn) => {
+  btn.addEventListener("click", (ev) => {
+    const kind = btn.dataset.kind;
+    if (!kind) return;
+    const label = btn.firstChild ? btn.firstChild.textContent.trim() : `kind=${kind}`;
+    if (!confirm(`${label}?\n\nThis removes every kind="${kind}" device row plus their observations. Whitelisted devices are archived to the preserved list. Cannot be undone.`)) return;
+    _missionAction(btn, "Deleting…", async () => {
+      const r = await api(`/api/maintenance/delete-kind?kind=${encodeURIComponent(kind)}`, {
+        method: "POST",
+      });
+      return `Removed ${r.devices || 0} device row(s) and ${r.observations || 0} observation(s)`;
+    });
+  });
+});
+
+// Mission lifecycle: start form.
+document.getElementById("mission-start-form")?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const payload = {
+    name: (fd.get("name") || "").toString().trim(),
+    description: (fd.get("description") || "").toString().trim() || null,
+  };
+  if (!payload.name) return;
+  try {
+    await api("/api/missions", { method: "POST", body: JSON.stringify(payload) });
+    ev.target.reset();
+    await refreshMission();
+  } catch (e) {
+    alert("Could not start mission: " + (e.message || e));
+  }
+});
+
+// Mission report — reuses the existing PDF report pipeline. V2 idea:
+// pass mission_id and have the renderer scope to the mission's time
+// window with a cover page showing the stats diff.
+document.getElementById("mission-report")?.addEventListener("click", async () => {
+  const status = document.getElementById("mission-report-status");
+  const prog = document.getElementById("mission-report-progress");
+  const btn = document.getElementById("mission-report");
+  if (!btn) return;
+  const origText = btn.textContent;
+  btn.disabled = true; btn.textContent = "Building…";
+  if (status) status.textContent = "starting…";
+  if (prog) { prog.hidden = false; prog.value = 0; }
+  try {
+    // Find the most-recent mission so the PDF picks up a cover page
+    // with the stats diff. Falls back to the generic report endpoint
+    // when there's no mission yet.
+    let missionId = null;
+    try {
+      const r = await api("/api/missions?limit=1");
+      missionId = (r.missions || [])[0]?.id ?? null;
+    } catch {}
+    const startUrl = missionId
+      ? `/api/missions/${missionId}/report/start`
+      : "/api/locations/report/start";
+    await api(startUrl, { method: "POST" });
+    // Poll until ready, mirroring the Locations-tab Generate-report flow.
+    let last = null;
+    while (true) {
+      await new Promise(r => setTimeout(r, 700));
+      const s = await api("/api/locations/report/status");
+      last = s;
+      if (status && s.message) status.textContent = s.message;
+      if (prog && typeof s.progress === "number") prog.value = s.progress;
+      if (s.done || s.error) break;
+    }
+    if (last && last.error) throw new Error(last.error);
+    if (status) status.textContent = "ready — downloading…";
+    window.location.href = "/api/locations/report/result.pdf";
+  } catch (e) {
+    if (status) status.textContent = "error: " + (e.message || String(e));
+  } finally {
+    btn.disabled = false; btn.textContent = origText;
+    if (prog) prog.hidden = true;
+  }
+});
+
+// Quick toggles — all client-side, persisted in localStorage. Mute and
+// stealth are passive (just inhibit UI behaviour). Skip-recording calls
+// the server flag so the orchestrator stops writing rows but keeps
+// alerting on what it sees.
+(function setupMissionToggles() {
+  const mute = document.getElementById("mission-mute-alarms");
+  const stealth = document.getElementById("mission-stealth");
+  const skipRec = document.getElementById("mission-skip-recording");
+  const read = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+  const write = (k, v) => { try { localStorage.setItem(k, v ? "1" : "0"); } catch {} };
+
+  if (mute) {
+    mute.checked = read("muteAudibleAlarms") === "1";
+    window._missionMuteAlarms = mute.checked;
+    mute.addEventListener("change", () => {
+      window._missionMuteAlarms = mute.checked;
+      write("muteAudibleAlarms", mute.checked);
+    });
+  }
+  if (stealth) {
+    stealth.checked = read("stealthMode") === "1";
+    document.body.classList.toggle("stealth-mode", stealth.checked);
+    stealth.addEventListener("change", () => {
+      document.body.classList.toggle("stealth-mode", stealth.checked);
+      write("stealthMode", stealth.checked);
+    });
+  }
+  if (skipRec) {
+    // Initial value pulled from the server; falls back to off when the
+    // endpoint isn't implemented yet.
+    api("/api/system/recording").then(r => {
+      skipRec.checked = !r.recording;
+    }).catch(() => {});
+    skipRec.addEventListener("change", async () => {
+      try {
+        await api("/api/system/recording", {
+          method: "POST",
+          body: JSON.stringify({ recording: !skipRec.checked }),
+        });
+      } catch (e) {
+        alert("Could not toggle recording: " + (e.message || e));
+        skipRec.checked = !skipRec.checked; // revert
+      }
+    });
+  }
+})();
+
+// Mission journal — pure localStorage, per browser. Auto-saves on
+// input with a short debounce, and shows the saved timestamp so the
+// operator can tell when their last edit landed.
+(function setupMissionJournal() {
+  const ta = document.getElementById("mission-journal");
+  const status = document.getElementById("mission-journal-status");
+  const clearBtn = document.getElementById("mission-journal-clear");
+  if (!ta) return;
+  const KEY = "missionJournal";
+  try { ta.value = localStorage.getItem(KEY) || ""; } catch {}
+  let saveTimer = null;
+  const flushSave = () => {
+    try { localStorage.setItem(KEY, ta.value); } catch {}
+    if (status) status.textContent = `saved ${new Date().toLocaleTimeString()}`;
+  };
+  ta.addEventListener("input", () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flushSave, 400);
+  });
+  clearBtn?.addEventListener("click", () => {
+    if (!confirm("Clear all mission journal notes?")) return;
+    ta.value = "";
+    flushSave();
+  });
+})();
 
 // ---------- about tab ----------
 async function refreshAbout() {

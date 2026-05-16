@@ -80,6 +80,11 @@ class ScanOrchestrator:
         # clustering doesn't open new locations. Not persisted: a fresh
         # process always starts unpaused.
         self._paused: bool = False
+        # When False, scanners still run + alerts still evaluate, but
+        # device upserts and observation rows are suppressed. Used by
+        # the Mission tab's "Skip recording" toggle for situations
+        # where the operator wants alerting but no DB churn.
+        self._recording: bool = True
         self.wifi_stats = ScannerStats()
         self.bt_stats = ScannerStats()
         # Bluetooth Classic stats live alongside BLE so the map sidebar
@@ -103,6 +108,19 @@ class ScanOrchestrator:
             return
         self._paused = paused
         log.info("orchestrator %s", "PAUSED" if paused else "resumed")
+
+    @property
+    def recording(self) -> bool:
+        return self._recording
+
+    def set_recording(self, recording: bool) -> None:
+        if self._recording == recording:
+            return
+        self._recording = recording
+        log.info(
+            "orchestrator recording %s",
+            "ON (writing rows)" if recording else "OFF (alerts only, no row writes)",
+        )
 
     async def start(self) -> None:
         self._stop.clear()
@@ -175,15 +193,23 @@ class ScanOrchestrator:
                         if d.rssi < s.min_rssi:
                             continue
                         details = d.model_dump(mode="json")
-                        is_new = await db.upsert_device(
-                            location_id=loc_id, kind="wifi", device_id=d.bssid,
-                            rssi=d.rssi, details=details,
-                        )
-                        await db.insert_observation(
-                            location_id=loc_id, kind="wifi", device_id=d.bssid,
-                            rssi=d.rssi, lat=fix.lat, lon=fix.lon,
-                            raw=details,
-                        )
+                        # Recording=off: skip the row writes but still
+                        # evaluate alerts so the operator hears about
+                        # matches without growing the DB. is_new is
+                        # False in this path since we don't write the
+                        # device row that would otherwise mark it new.
+                        if self._recording:
+                            is_new = await db.upsert_device(
+                                location_id=loc_id, kind="wifi", device_id=d.bssid,
+                                rssi=d.rssi, details=details,
+                            )
+                            await db.insert_observation(
+                                location_id=loc_id, kind="wifi", device_id=d.bssid,
+                                rssi=d.rssi, lat=fix.lat, lon=fix.lon,
+                                raw=details,
+                            )
+                        else:
+                            is_new = False
                         await alert_service.evaluate(
                             device_kind="wifi", device_id=d.bssid, rssi=d.rssi,
                             location_id=loc_id, details=details, is_new=is_new,
@@ -219,15 +245,18 @@ class ScanOrchestrator:
                         if s.hide_random_bt_addresses and d.address_type == "random":
                             continue
                         details = d.model_dump(mode="json")
-                        is_new = await db.upsert_device(
-                            location_id=loc_id, kind="bluetooth", device_id=d.address,
-                            rssi=d.rssi, details=details,
-                        )
-                        await db.insert_observation(
-                            location_id=loc_id, kind="bluetooth", device_id=d.address,
-                            rssi=d.rssi, lat=fix.lat, lon=fix.lon,
-                            raw=details,
-                        )
+                        if self._recording:
+                            is_new = await db.upsert_device(
+                                location_id=loc_id, kind="bluetooth", device_id=d.address,
+                                rssi=d.rssi, details=details,
+                            )
+                            await db.insert_observation(
+                                location_id=loc_id, kind="bluetooth", device_id=d.address,
+                                rssi=d.rssi, lat=fix.lat, lon=fix.lon,
+                                raw=details,
+                            )
+                        else:
+                            is_new = False
                         await alert_service.evaluate(
                             device_kind="bluetooth", device_id=d.address, rssi=d.rssi,
                             location_id=loc_id, details=details, is_new=is_new,
@@ -285,15 +314,18 @@ class ScanOrchestrator:
                         if d.rssi < s.min_rssi:
                             continue
                         details = d.model_dump(mode="json")
-                        is_new = await db.upsert_device(
-                            location_id=loc_id, kind="bluetooth_classic",
-                            device_id=d.address, rssi=d.rssi, details=details,
-                        )
-                        await db.insert_observation(
-                            location_id=loc_id, kind="bluetooth_classic",
-                            device_id=d.address, rssi=d.rssi,
-                            lat=fix.lat, lon=fix.lon, raw=details,
-                        )
+                        if self._recording:
+                            is_new = await db.upsert_device(
+                                location_id=loc_id, kind="bluetooth_classic",
+                                device_id=d.address, rssi=d.rssi, details=details,
+                            )
+                            await db.insert_observation(
+                                location_id=loc_id, kind="bluetooth_classic",
+                                device_id=d.address, rssi=d.rssi,
+                                lat=fix.lat, lon=fix.lon, raw=details,
+                            )
+                        else:
+                            is_new = False
                         await alert_service.evaluate(
                             device_kind="bluetooth_classic", device_id=d.address,
                             rssi=d.rssi, location_id=loc_id, details=details,
@@ -458,15 +490,18 @@ class ScanOrchestrator:
         }
 
         fix = self.gps.fix
-        is_new = await db.upsert_device(
-            location_id=loc_id, kind="wifi_client", device_id=mac,
-            rssi=rssi, details=details,
-        )
-        await db.insert_observation(
-            location_id=loc_id, kind="wifi_client", device_id=mac,
-            rssi=rssi, lat=fix.lat, lon=fix.lon,
-            raw={**details, "ssid": new_ssid, "channel": channel},
-        )
+        if self._recording:
+            is_new = await db.upsert_device(
+                location_id=loc_id, kind="wifi_client", device_id=mac,
+                rssi=rssi, details=details,
+            )
+            await db.insert_observation(
+                location_id=loc_id, kind="wifi_client", device_id=mac,
+                rssi=rssi, lat=fix.lat, lon=fix.lon,
+                raw={**details, "ssid": new_ssid, "channel": channel},
+            )
+        else:
+            is_new = False
         await alert_service.evaluate(
             device_kind="wifi_client", device_id=mac, rssi=rssi,
             location_id=loc_id, details=details, is_new=is_new,

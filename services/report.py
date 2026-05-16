@@ -493,7 +493,8 @@ def _h(s_in) -> str:
 
 
 async def build_report_pdf(*, group_bssids: bool = True,
-                           progress=None) -> bytes:
+                           progress=None,
+                           mission: dict | None = None) -> bytes:
     # Stage tracker — each `_step()` updates the caller's progress hook
     # AND emits an info log so the same trace lands in the Logs tab.
     # _STAGE_TOTAL is a moving target (we know roughly how many milestones
@@ -560,6 +561,52 @@ async def build_report_pdf(*, group_bssids: bool = True,
     flow.append(Paragraph(
         f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", s["subtitle"],
     ))
+    # ── Optional mission cover block ──
+    # Threaded in from /api/missions/{id}/report/start. Renders the
+    # mission name + window + per-kind / observation / alert deltas
+    # right under the title so the report doubles as a mission summary.
+    if mission:
+        name = mission.get("name") or f"Mission #{mission.get('id', '?')}"
+        flow.append(Paragraph(f"<b>Mission:</b> {name}", s["body"]))
+        started = mission.get("started_at") or ""
+        ended = mission.get("ended_at") or "(active)"
+        flow.append(Paragraph(
+            f"<i>Window:</i> {started} → {ended}", s["caption"],
+        ))
+        if mission.get("description"):
+            flow.append(Paragraph(
+                f"<i>{mission['description']}</i>", s["caption"],
+            ))
+        stats0 = mission.get("stats_start") or {}
+        stats1 = mission.get("stats_end") or {}
+        def _delta(key, sub=None):
+            a = (stats0.get("devices", {}) if sub else stats0).get(sub or key)
+            b = (stats1.get("devices", {}) if sub else stats1).get(sub or key)
+            if a is None or b is None:
+                return None
+            return (b or 0) - (a or 0)
+        diff_lines = []
+        for label, key, sub in [
+            ("Locations",        "locations", None),
+            ("Devices total",    None,        "total"),
+            ("Wi-Fi APs",        None,        "wifi"),
+            ("BLE",              None,        "bluetooth"),
+            ("Bluetooth Classic", None,       "bluetooth_classic"),
+            ("Wi-Fi clients",    None,        "wifi_client"),
+            ("Observations",     "observations", None),
+            ("Alert events",     "alert_events", None),
+        ]:
+            v = _delta(key, sub)
+            if v is None:
+                continue
+            sign = "+" if v >= 0 else ""
+            diff_lines.append(f"{label}: {sign}{v}")
+        if diff_lines:
+            flow.append(Paragraph(
+                "<b>Captured during this mission:</b> " + " · ".join(diff_lines),
+                s["body"],
+            ))
+        flow.append(Spacer(1, 12))
     if whitelist:
         flow.append(Paragraph(
             f"<i>{len(whitelist)} whitelisted "

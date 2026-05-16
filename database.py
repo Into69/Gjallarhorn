@@ -126,6 +126,20 @@ CREATE TABLE IF NOT EXISTS device_temp_whitelist (
     UNIQUE(kind, device_id)
 );
 
+CREATE TABLE IF NOT EXISTS missions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,                          -- NULL while active
+    stats_start_json TEXT NOT NULL,         -- snapshot of about_stats() at start
+    stats_end_json TEXT,                    -- snapshot at end (filled by /end)
+    notes TEXT                              -- operator-supplied free-text
+);
+
+CREATE INDEX IF NOT EXISTS idx_missions_active
+    ON missions(ended_at) WHERE ended_at IS NULL;
+
 -- Whitelisted devices' sightings get copied here before the parent
 -- sensor_location is deleted, so the historic record survives. Same
 -- shape as `devices` minus the location FK; combined on collisions
@@ -1803,6 +1817,229 @@ async def oui_counts_by_registry() -> dict[str, int]:
             "SELECT registry, COUNT(*) FROM oui_entries GROUP BY registry"
         ) as cur:
             return {row[0]: row[1] for row in await cur.fetchall()}
+
+
+async def create_mission(name: str, description: str | None = None) -> dict:
+    """Open a new mission. Rejects (returns dict with error) if there's
+    already an active mission — the active state is the row whose
+    ended_at is NULL. Snapshots about_stats() at start so the End call
+    can render a meaningful diff."""
+    active = await active_mission()
+    if active is not None:
+        return {"error": "Another mission is already active", "active": active}
+    stats = await about_stats()
+    now = datetime.now().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO missions(name, description, started_at, "
+            "stats_start_json) VALUES(?,?,?,?)",
+            (name.strip() or "Mission", (description or "").strip() or None,
+             now, json.dumps(stats)),
+        )
+        await db.commit()
+        mission_id = cur.lastrowid
+    return await get_mission(mission_id)
+
+
+async def end_mission(mission_id: int) -> dict | None:
+    """Close out the active mission — snapshots about_stats() into
+    stats_end_json and stamps ended_at. Returns the full mission row
+    (with diff already inflated). Returns None if the mission doesn't
+    exist or has already ended."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT ended_at FROM missions WHERE id=?", (mission_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row is None or row[0] is not None:
+            return None
+    stats = await about_stats()
+    now = datetime.now().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE missions SET ended_at=?, stats_end_json=? WHERE id=?",
+            (now, json.dumps(stats), mission_id),
+        )
+        await db.commit()
+    return await get_mission(mission_id)
+
+
+async def active_mission() -> dict | None:
+    """Return the active mission (ended_at IS NULL) or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM missions WHERE ended_at IS NULL "
+            "ORDER BY id DESC LIMIT 1"
+        ) as cur:
+            row = await cur.fetchone()
+    return _inflate_mission(dict(row)) if row else None
+
+
+async def get_mission(mission_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM missions WHERE id=?", (mission_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    return _inflate_mission(dict(row)) if row else None
+
+
+async def list_missions(limit: int = 50) -> list[dict]:
+    """Most recent missions first. Active mission (if any) appears at
+    the top because its id is the latest."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM missions ORDER BY id DESC LIMIT ?", (limit,),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+    return [_inflate_mission(r) for r in rows]
+
+
+async def delete_mission(mission_id: int) -> bool:
+    """Remove a mission audit row. Does NOT delete the underlying
+    data (locations, devices, observations) — the mission table is
+    just bookkeeping over the existing data."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM missions WHERE id=?", (mission_id,),
+        )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+
+
+def _inflate_mission(row: dict) -> dict:
+    """Parse the JSON columns + compute a stats diff when both ends
+    are populated. Keeps the API surface tidy so the UI doesn't
+    re-parse the same blobs."""
+    out = dict(row)
+    for k in ("stats_start_json", "stats_end_json"):
+        raw = out.pop(k, None)
+        out[k.replace("_json", "")] = (
+            json.loads(raw) if raw else None
+        )
+    start = out.get("stats_start") or {}
+    end = out.get("stats_end") or {}
+    if start and end:
+        out["diff"] = _diff_stats(start, end)
+    else:
+        out["diff"] = None
+    return out
+
+
+def _diff_stats(start: dict, end: dict) -> dict:
+    """Compute end - start across the about_stats() shape."""
+    def _delta(a, b):
+        try:
+            return int((b or 0)) - int((a or 0))
+        except (TypeError, ValueError):
+            return None
+    return {
+        "locations":   _delta(start.get("locations"),   end.get("locations")),
+        "observations": _delta(start.get("observations"), end.get("observations")),
+        "alert_events": _delta(start.get("alert_events"), end.get("alert_events")),
+        "devices": {
+            "total": _delta(
+                (start.get("devices") or {}).get("total"),
+                (end.get("devices") or {}).get("total"),
+            ),
+            "wifi": _delta(
+                (start.get("devices") or {}).get("wifi"),
+                (end.get("devices") or {}).get("wifi"),
+            ),
+            "bluetooth": _delta(
+                (start.get("devices") or {}).get("bluetooth"),
+                (end.get("devices") or {}).get("bluetooth"),
+            ),
+            "bluetooth_classic": _delta(
+                (start.get("devices") or {}).get("bluetooth_classic"),
+                (end.get("devices") or {}).get("bluetooth_classic"),
+            ),
+            "wifi_client": _delta(
+                (start.get("devices") or {}).get("wifi_client"),
+                (end.get("devices") or {}).get("wifi_client"),
+            ),
+        },
+    }
+
+
+async def delete_devices_by_kind(kind: str) -> dict:
+    """Wipe every device + observation of the given kind across all
+    locations. Whitelisted devices follow the same preservation flow as
+    location deletion — they're archived to preserved_devices first."""
+    if kind not in ("wifi", "bluetooth", "bluetooth_classic", "wifi_client"):
+        return {"error": "invalid kind", "devices": 0, "observations": 0}
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Pull the whitelist once for preservation matching.
+        async with db.execute(
+            "SELECT kind, device_id FROM device_whitelist "
+            "UNION SELECT kind, device_id FROM device_temp_whitelist"
+        ) as cur:
+            wl = [(r[0], (r[1] or "").lower()) for r in await cur.fetchall()]
+        async with db.execute(
+            "SELECT location_id, kind, device_id, first_seen, last_seen, "
+            "best_rssi, last_rssi, seen_count, details_json "
+            "FROM devices WHERE kind=?", (kind,),
+        ) as cur:
+            dev_rows = await cur.fetchall()
+        now = datetime.now().isoformat()
+        preserved = 0
+        for loc_id, k, did, first_seen, last_seen, best_rssi, last_rssi, seen, details in dev_rows:
+            if not _match_whitelist(wl, k, did):
+                continue
+            async with db.execute(
+                "SELECT first_seen, last_seen, best_rssi, last_rssi, seen_count, details_json "
+                "FROM preserved_devices WHERE kind=? AND device_id=?",
+                (k, did),
+            ) as c:
+                existing = await c.fetchone()
+            if existing is None:
+                await db.execute(
+                    "INSERT INTO preserved_devices(kind, device_id, first_seen, last_seen, "
+                    "best_rssi, last_rssi, seen_count, details_json, "
+                    "archived_from_location_id, archived_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (k, did, first_seen, last_seen, best_rssi, last_rssi,
+                     seen, details, loc_id, now),
+                )
+            else:
+                e_first, e_last, e_best, e_last_rssi, e_seen, e_details = existing
+                await db.execute(
+                    "UPDATE preserved_devices SET first_seen=?, last_seen=?, "
+                    "best_rssi=?, last_rssi=?, seen_count=?, details_json=?, "
+                    "archived_from_location_id=?, archived_at=? "
+                    "WHERE kind=? AND device_id=?",
+                    (min(first_seen, e_first), max(last_seen, e_last),
+                     max(best_rssi, e_best),
+                     last_rssi if last_seen >= e_last else e_last_rssi,
+                     (seen or 0) + (e_seen or 0),
+                     details if last_seen >= e_last else e_details,
+                     loc_id, now, k, did),
+                )
+            preserved += 1
+        # Wipe observations + devices for the kind.
+        cur = await db.execute("DELETE FROM observations WHERE kind=?", (kind,))
+        obs_count = cur.rowcount or 0
+        cur = await db.execute("DELETE FROM devices WHERE kind=?", (kind,))
+        dev_count = cur.rowcount or 0
+        await db.commit()
+    return {
+        "kind": kind, "devices": dev_count, "observations": obs_count,
+        "preserved": preserved,
+    }
+
+
+async def integrity_check() -> dict:
+    """Run SQLite's PRAGMA integrity_check. Returns 'ok' on a clean DB
+    or a list of error strings otherwise. Cheap on a small DB; can take
+    a moment on a large one."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("PRAGMA integrity_check") as cur:
+            rows = [r[0] for r in await cur.fetchall()]
+    ok = len(rows) == 1 and rows[0].lower() == "ok"
+    return {"ok": ok, "messages": rows}
 
 
 def _classify_wifi_topology(bssids: list[dict]) -> dict:
