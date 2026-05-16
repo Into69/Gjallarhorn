@@ -129,7 +129,7 @@ async def scan_bluetooth_classic(
         except Exception as e:
             log.debug("classic scan: StopDiscovery failed: %s", e)
 
-    devices = _harvest_devices(mgr, adapter_path)
+    devices = await _harvest_devices(bus, mgr, adapter_path)
 
     now = datetime.now()
     out: list[BluetoothClassicDevice] = []
@@ -158,43 +158,110 @@ async def scan_bluetooth_classic(
 
 def _resolve_adapter_path(mgr, want: Optional[str]) -> Optional[str]:
     """Pick the BlueZ adapter object path matching `want` (e.g. 'hci0').
-    Falls back to the first adapter if `want` is None / 'default'."""
-    adapters = getattr(mgr, "_adapters", {}) or {}
+    Falls back to the first adapter if `want` is None / 'default'.
+
+    bleak's `_adapters` cache shape varies by version — older builds
+    use a `dict[path, props]`, newer ones a `set[path]`, and some
+    intermediates a `list[path]`. Treat any iterable of path strings
+    as the source of truth, with .keys() only when present."""
+    adapters = getattr(mgr, "_adapters", None)
     if not adapters:
         return None
+    if hasattr(adapters, "keys"):
+        paths = list(adapters.keys())
+    else:
+        paths = list(adapters)
+    if not paths:
+        return None
     if not want or want == "default":
-        return next(iter(adapters.keys()))
-    for path in adapters.keys():
+        return paths[0]
+    for path in paths:
+        if not isinstance(path, str):
+            continue
         name = path.rstrip("/").split("/")[-1]
         if name == want:
             return path
     return None
 
 
-def _harvest_devices(mgr, adapter_path: str) -> dict[str, dict]:
-    """Pull every BR/EDR-flagged device the BlueZ manager currently knows
-    about under this adapter. The manager keeps a cache keyed by object
-    path; we filter by adapter prefix and AddressType ≠ 'random' to drop
-    BLE rows that may have leaked in if the discovery filter was rejected.
-    """
-    devices_attr = getattr(mgr, "_devices", None) or getattr(mgr, "devices", None) or {}
+def _unwrap_variant(v):
+    """Unbox a dbus_fast / dbus_next Variant into its native Python
+    value. Pass-through for anything that's already a primitive (some
+    bleak versions hand back unwrapped values)."""
+    return getattr(v, "value", v)
+
+
+async def _harvest_devices(bus, mgr, adapter_path: str) -> dict[str, dict]:
+    """Pull every BR/EDR-flagged device under this adapter via BlueZ's
+    ObjectManager. Doing one GetManagedObjects round-trip is cheaper
+    than poking around bleak's internal caches and immune to the
+    dict/set/list shape variance across bleak versions. Filters by
+    adapter prefix and drops AddressType='random' rows that leaked in
+    if the SetDiscoveryFilter call was rejected by an older BlueZ."""
+    try:
+        intro = await bus.introspect("org.bluez", "/")
+        proxy = bus.get_proxy_object("org.bluez", "/", intro)
+        om = proxy.get_interface("org.freedesktop.DBus.ObjectManager")
+        managed = await om.call_get_managed_objects()
+    except Exception as e:
+        log.debug("classic scan: GetManagedObjects failed (%s)", e)
+        # Fall back to whatever bleak has cached locally — better than
+        # nothing on systems where the ObjectManager call breaks.
+        return _harvest_devices_from_mgr(mgr, adapter_path)
+
     out: dict[str, dict] = {}
-    for path, props in devices_attr.items():
-        if not path.startswith(adapter_path + "/"):
+    for path, ifaces in managed.items():
+        if not isinstance(path, str) or not path.startswith(adapter_path + "/"):
             continue
-        # `props` may be a dict-of-properties (typical) or a proxy. Read
-        # both shapes defensively, same pattern as the BLE adapter info path.
-        def _get(key: str, attr: Optional[str] = None):
-            if isinstance(props, dict):
-                return props.get(key)
-            return getattr(props, attr or key.lower(), None)
+        dev = ifaces.get("org.bluez.Device1") if isinstance(ifaces, dict) else None
+        if not dev:
+            continue
+        get = lambda k: _unwrap_variant(dev.get(k))  # noqa: E731
+        addr = get("Address")
+        if not addr:
+            continue
+        addr_type = (get("AddressType") or "").lower()
+        if addr_type and addr_type != "public":
+            continue
+        out[addr.lower()] = {
+            "Address": addr,
+            "Name": get("Name"),
+            "Alias": get("Alias"),
+            "RSSI": get("RSSI"),
+            "Class": get("Class"),
+            "Paired": get("Paired"),
+            "Connected": get("Connected"),
+        }
+    return out
+
+
+def _harvest_devices_from_mgr(mgr, adapter_path: str) -> dict[str, dict]:
+    """Legacy harvest path. Reads bleak's internal device cache when the
+    ObjectManager call isn't available. Tolerates dict/set/list shapes
+    for the cache; sets/lists yield path strings only (no properties)
+    so the resulting rows are mostly empty — better than crashing."""
+    devices_attr = (
+        getattr(mgr, "_devices", None) or getattr(mgr, "devices", None) or {}
+    )
+    out: dict[str, dict] = {}
+    if hasattr(devices_attr, "items"):
+        iterator = devices_attr.items()
+    else:
+        iterator = ((p, None) for p in devices_attr)
+    for path, props in iterator:
+        if not isinstance(path, str) or not path.startswith(adapter_path + "/"):
+            continue
+        def _get(key: str, attr: Optional[str] = None, _p=props):
+            if isinstance(_p, dict):
+                return _p.get(key)
+            if _p is None:
+                return None
+            return getattr(_p, attr or key.lower(), None)
 
         addr = _get("Address", "address")
         if not addr:
             continue
         addr_type = (_get("AddressType", "address_type") or "").lower()
-        # Public is the only valid AddressType for Classic; "random" means
-        # the discovery filter didn't stick and this is a BLE row.
         if addr_type and addr_type != "public":
             continue
         out[addr.lower()] = {
