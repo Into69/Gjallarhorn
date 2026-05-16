@@ -617,12 +617,16 @@ class AlertService:
                     _matches(x, device_id_l, cname, cvendor, crssi) for x in extras
                 ):
                     continue
+                # absence_gap inherently has "fire once per absence period"
+                # semantics — the device staying gone shouldn't re-fire on
+                # every 30s sweep, and the rule's `latch` setting can't
+                # opt out of that without spamming. Always treat as
+                # latched; evaluate() clears the latch when the device
+                # is seen again, which is the only way to re-arm.
                 key = (rule["id"], device_id_l)
-                latch_enabled = int(rule.get("latch", 1) or 0) == 1
-                if latch_enabled:
-                    if key in self._latched:
-                        continue
-                    self._latched.add(key)
+                if key in self._latched:
+                    continue
+                self._latched.add(key)
                 last_seen = c.get("last_seen")
                 try:
                     gap_actual = max(
