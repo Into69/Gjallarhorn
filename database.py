@@ -1211,7 +1211,7 @@ async def insert_alert_event(
 async def list_alert_events(limit: int = 100, since_id: int | None = None) -> list[dict]:
     sql = (
         "SELECT e.*, r.name AS rule_name, r.match_type AS rule_match_type, "
-        "       r.audible AS rule_audible "
+        "       r.audible AS rule_audible, r.latch AS rule_latch "
         "FROM alert_events e LEFT JOIN alert_rules r ON r.id = e.rule_id "
     )
     args: list = []

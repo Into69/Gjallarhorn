@@ -2267,17 +2267,26 @@ function renderAlertEvent(e) {
   const wlBtn = wl
     ? `<button type="button" class="icon-btn alert-wl active" disabled title="Whitelisted — future alerts on this device are suppressed" aria-label="Already whitelisted">★</button>`
     : `<button type="button" class="icon-btn alert-wl" data-kind="${escapeAttr(e.device_kind)}" data-id="${escapeAttr(e.device_id)}" title="Whitelist this device — silences future alerts and excludes it from PDF reports" aria-label="Whitelist device">☆</button>`;
-  // Latch state: cleared=0 means the (rule, device) pair is still latched
-  // and won't re-fire. Clicking the open-lock unlatches it.
-  const latched = e.cleared === 0 || e.cleared === false || e.cleared == null;
-  const latchBadge = latched
-    ? `<span class="latch-tag" title="Latched — this rule won't fire again on this device until cleared">🔒 latched</span>`
-    : `<span class="latch-tag cleared" title="Acknowledged">cleared</span>`;
-  const latchBtn = latched
-    ? `<button type="button" class="icon-btn alert-clear" data-rule="${escapeAttr(e.rule_id)}" data-id="${escapeAttr(e.device_id)}" title="Clear the latch so future matches fire again" aria-label="Clear latch">🔓</button>`
-    : "";
+  // Latch state only applies when the rule itself latches. Rules with
+  // latch=0 fire on every match — the alert_events row gets cleared=0
+  // because nothing flipped it, but there's no actual latch to hold or
+  // release. Hide the badge and unlatch button entirely for those.
+  // rule_latch defaults to 1 for legacy events that pre-date the column.
+  const ruleLatches = (e.rule_latch ?? 1) !== 0;
+  const latched = ruleLatches
+    && (e.cleared === 0 || e.cleared === false || e.cleared == null);
+  let latchBadge = "";
+  let latchBtn = "";
+  if (ruleLatches) {
+    latchBadge = latched
+      ? `<span class="latch-tag" title="Latched — this rule won't fire again on this device until cleared">🔒 latched</span>`
+      : `<span class="latch-tag cleared" title="Acknowledged">cleared</span>`;
+    if (latched) {
+      latchBtn = `<button type="button" class="icon-btn alert-clear" data-rule="${escapeAttr(e.rule_id)}" data-id="${escapeAttr(e.device_id)}" title="Clear the latch so future matches fire again" aria-label="Clear latch">🔓</button>`;
+    }
+  }
   return `
-    <div class="alert-item kind-${escapeHtml(e.device_kind)} ${latched ? "" : "alert-cleared"}">
+    <div class="alert-item kind-${escapeHtml(e.device_kind)} ${ruleLatches && !latched ? "alert-cleared" : ""}">
       <div>
         <span class="alert-rule">${escapeHtml(e.rule_name || "rule " + e.rule_id)}</span>
         <span class="muted"> matched </span>
