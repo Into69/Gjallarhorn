@@ -1149,6 +1149,33 @@ COMPOUND_MATCH_TYPES = {
 ALLOWED_KINDS = {None, "wifi", "bluetooth", "wifi_client", "bluetooth_classic"}
 
 
+def _validate_presence_value(value: str) -> None:
+    """Reject sustained_presence match_values that the rule evaluator
+    would silently skip. Format is 'N' or 'N/G' with an optional
+    '@id1,id2,...' suffix; both N and G must parse as integers >= 1.
+    A typo like '10m' or '10 min' would otherwise return None from
+    _parse_presence_value and the rule would sit inert."""
+    s = (value or "").strip()
+    # Strip alias suffix before parsing the duration spec.
+    if "@" in s:
+        s = s.split("@", 1)[0]
+    parts = [p.strip() for p in s.split("/")]
+    try:
+        n = int(parts[0]) if parts and parts[0] else 0
+        g = int(parts[1]) if len(parts) > 1 and parts[1] else 5
+    except (ValueError, IndexError):
+        raise HTTPException(
+            400,
+            "sustained_presence match_value must be 'N' or 'N/G' "
+            "(integers, minutes), optionally followed by "
+            "'@id1,id2,...' aliases — got: " + (value or "")
+        )
+    if n < 1 or g < 1:
+        raise HTTPException(
+            400, "sustained_presence requires N >= 1 and G >= 1 minute"
+        )
+
+
 def _validate_extra_conditions(raw) -> list[dict]:
     """Normalise + validate the extra_conditions list for create/update.
     Raises HTTPException on bad input."""
@@ -1199,6 +1226,12 @@ async def api_create_rule(payload: dict):
         c, s = match_value.split("@", 1)
         if not c.strip() and not s.strip():
             raise HTTPException(400, "wifi_association requires a client and/or SSID — both can't be blank")
+    if match_type == "sustained_presence":
+        # 'N' or 'N/G' with an optional '@id1,id2,...' alias suffix.
+        # Reject typo'd forms like '10 min' here rather than letting the
+        # parser silently return None at evaluation time (which makes the
+        # rule appear created-but-inert).
+        _validate_presence_value(match_value)
     kind = payload.get("kind") or None
     if kind not in ALLOWED_KINDS:
         raise HTTPException(400, "kind must be wifi, bluetooth, or null")
@@ -1257,6 +1290,8 @@ async def api_update_rule(rule_id: int, payload: dict):
             c, s = v.split("@", 1)
             if not c.strip() and not s.strip():
                 raise HTTPException(400, "wifi_association requires a client and/or SSID")
+        if mt == "sustained_presence":
+            _validate_presence_value(v)
         fields["match_value"] = v
     if "kind" in payload:
         k = payload["kind"] or None
