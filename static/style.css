@@ -726,6 +726,22 @@ details.wap-group[open] > summary { border-bottom: 1px solid var(--border); }
   margin-top: 8px;
 }
 
+/* Per-scanner state tiles in the Mission Status card. Color coded so a
+   single glance tells the operator which scanners are mid-flight,
+   idle, paused, errored, or disabled. The state name itself is the
+   tile content for the no-icon variant; CSS swaps the colour. */
+.mission-scanner-state {
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-size: 14px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.mission-scanner-state.state-scanning { color: var(--ok); }
+.mission-scanner-state.state-idle     { color: var(--muted); }
+.mission-scanner-state.state-paused   { color: var(--warn); }
+.mission-scanner-state.state-error    { color: var(--err); }
+.mission-scanner-state.state-disabled { color: var(--muted); opacity: 0.6; }
+
 /* Live activity ticker — three side-by-side tiles on the Mission tab
    header showing the most-recent alert / device / location. Matches
    the .mission-stats grid so visual rhythm stays consistent. */

@@ -4191,7 +4191,6 @@ async function refreshMission() {
     const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v ?? "—"; };
     const s = a.stats || {};
     const d = s.devices || {};
-    setText("mission-stat-state", "running");
     setText("mission-stat-uptime", formatUptime(a.runtime?.uptime_seconds));
     setText("mission-stat-active-loc", "—");
     setText("mission-stat-time", a.runtime?.server_time || "—");
@@ -4211,24 +4210,85 @@ async function refreshMission() {
     const el = document.getElementById("mission-stat-state");
     if (el) el.textContent = "error";
   }
-  // Pause state — read from /api/system/pause + active location.
+  // Pause state + per-scanner state tiles. The single "Scanning" tile
+  // got split into four — Wi-Fi / BLE / Bluetooth Classic / Probe — so
+  // the operator can see at a glance which scanners are mid-flight,
+  // idle, paused, or disabled. Each tile takes one of:
+  //   "scanning" — running this tick
+  //   "idle"     — enabled but between scans
+  //   "paused"   — orchestrator-wide pause
+  //   "error"    — last attempt raised
+  //   "disabled" — not configured / not enabled
   try {
-    const [paused, gps] = await Promise.all([
+    const [paused, gps, scanners, probe] = await Promise.all([
       api("/api/system/pause").catch(() => ({})),
       api("/api/gps").catch(() => ({})),
+      api("/api/scanners/status").catch(() => ({})),
+      api("/api/probe/status").catch(() => ({})),
     ]);
-    const stateEl = document.getElementById("mission-stat-state");
-    if (stateEl) stateEl.textContent = paused.paused ? "paused" : "running";
+    const isPaused = !!paused.paused;
     const btn = document.getElementById("mission-pause");
-    if (btn) btn.textContent = paused.paused ? "Resume scanning" : "Pause scanning";
+    if (btn) btn.textContent = isPaused ? "Resume scanning" : "Pause scanning";
     const loc = document.getElementById("mission-stat-active-loc");
     if (loc) loc.textContent = gps.active_location_id != null
       ? `#${gps.active_location_id}` : "—";
+    _renderScannerStateTile(
+      "mission-stat-wifi-state", _classifyScannerState({
+        paused: isPaused,
+        running: scanners?.wifi?.running,
+        last_error: scanners?.wifi?.last_error,
+        enabled: !!scanners?.wifi?.configured_iface,
+      }),
+    );
+    _renderScannerStateTile(
+      "mission-stat-ble-state", _classifyScannerState({
+        paused: isPaused,
+        running: scanners?.bluetooth?.running,
+        last_error: scanners?.bluetooth?.last_error,
+        // BLE has no off switch — it tries whatever adapter is configured.
+        enabled: true,
+      }),
+    );
+    _renderScannerStateTile(
+      "mission-stat-btc-state", _classifyScannerState({
+        paused: isPaused,
+        running: scanners?.bluetooth?.classic_running,
+        last_error: null,
+        enabled: !!scanners?.bluetooth?.classic_enabled,
+      }),
+    );
+    // Probe scanner has different state semantics: it's a long-running
+    // capture that either runs continuously or doesn't. "running" maps
+    // to scanning; absence of an interface = disabled.
+    _renderScannerStateTile(
+      "mission-stat-probe-state", _classifyScannerState({
+        paused: isPaused,
+        running: probe?.running,
+        last_error: probe?.last_error,
+        enabled: !!probe?.interface,
+      }),
+    );
   } catch {}
   // Active + historical mission + live ticker — best-effort, each
   // independently caught so a failed call doesn't break the others.
   try { await _refreshMissionLifecycle(); } catch {}
   try { await _refreshMissionTicker(); } catch {}
+}
+
+function _classifyScannerState({ paused, running, last_error, enabled }) {
+  if (!enabled) return "disabled";
+  if (paused) return "paused";
+  if (last_error) return "error";
+  if (running) return "scanning";
+  return "idle";
+}
+
+function _renderScannerStateTile(id, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = state;
+  // Drop any prior state-* class so the next tick repaints cleanly.
+  el.className = "mission-scanner-state state-" + state;
 }
 
 async function _refreshMissionLifecycle() {
