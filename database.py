@@ -11,6 +11,24 @@ import aiosqlite
 
 DB_PATH = Path(__file__).parent / "gjallarhorn.db"
 
+# Default busy timeout for every aiosqlite connection. aiosqlite passes
+# this to the underlying sqlite3 connection's `timeout=` kwarg, which
+# governs how long a write blocks waiting for an exclusive lock before
+# raising OperationalError("database is locked"). 10 s is plenty for the
+# parallel scan loops + absence sweep + mission polling now running
+# against the same file, even on Pi-class SD storage. Pair with the
+# journal_mode=WAL pragma flipped in init_db() so readers don't have
+# to fight writers in the first place.
+_BUSY_TIMEOUT_S = 10.0
+
+
+def _connect():
+    """All aiosqlite connections route through here so the busy timeout
+    is set consistently across every helper. Use exactly like
+    `_connect()` was used before — the call site stays
+    `async with _connect() as db: …`."""
+    return aiosqlite.connect(DB_PATH, timeout=_BUSY_TIMEOUT_S)
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sensor_locations (
@@ -161,7 +179,17 @@ CREATE TABLE IF NOT EXISTS preserved_devices (
 
 
 async def init_db() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
+        # Switch to WAL once at boot so subsequent connections inherit it.
+        # WAL is per-database-file, not per-connection — flipping it on
+        # here persists for the lifetime of the file.
+        #   journal_mode=WAL  — readers don't block writers, contention
+        #                       between the scan loops + absence sweep +
+        #                       mission polling drops dramatically.
+        #   synchronous=NORMAL — safe with WAL, much faster than FULL on
+        #                        Raspberry-Pi-class SD storage.
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
         await db.executescript(SCHEMA)
         await _migrate(db)
         await db.commit()
@@ -384,14 +412,14 @@ def compute_ble_signature(kind: str, details: dict) -> Optional[str]:
 
 
 async def get_setting(key: str) -> Optional[str]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute("SELECT value FROM settings_kv WHERE key=?", (key,)) as cur:
             row = await cur.fetchone()
             return row[0] if row else None
 
 
 async def set_setting(key: str, value: str) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO settings_kv(key,value) VALUES(?,?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -411,7 +439,7 @@ async def create_location(lat: float, lon: float, radius_m: float, label: str | 
     # any future caller bypassing the location manager also lands at
     # consistent precision.
     radius_m = round(float(radius_m), 2)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "INSERT INTO sensor_locations(lat,lon,radius_m,created_at,last_seen_at,"
             "label,fix_count,source) VALUES(?,?,?,?,?,?,?,?)",
@@ -423,7 +451,7 @@ async def create_location(lat: float, lon: float, radius_m: float, label: str | 
 
 async def touch_location(location_id: int) -> None:
     now = datetime.now().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "UPDATE sensor_locations SET last_seen_at=?, fix_count=fix_count+1 WHERE id=?",
             (now, location_id),
@@ -434,7 +462,7 @@ async def touch_location(location_id: int) -> None:
 async def list_location_centroids() -> list[dict]:
     """Lightweight: id/lat/lon/radius for every location. Used by the
     location manager to test 'am I inside an existing radius'."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, lat, lon, radius_m, source FROM sensor_locations"
@@ -454,7 +482,7 @@ async def list_locations() -> list[dict]:
         GROUP BY l.id
         ORDER BY l.id DESC
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql) as cur:
             return [dict(r) for r in await cur.fetchall()]
@@ -537,7 +565,7 @@ async def delete_devices_at_location(location_id: int) -> dict:
     keeping the sensor_location itself. Whitelisted devices get archived
     into preserved_devices first, same as delete_location, so their
     historical data survives the cleanup."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT 1 FROM sensor_locations WHERE id=?", (location_id,)
         ) as cur:
@@ -565,7 +593,7 @@ async def delete_location(location_id: int) -> dict:
     devices' sightings get copied to preserved_devices first so they survive
     the cascade. Returns the row counts removed (0 across the board if the
     location didn't exist)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT 1 FROM sensor_locations WHERE id=?", (location_id,)
         ) as cur:
@@ -705,7 +733,7 @@ async def merge_locations(loser_id: int, winner_id: int) -> dict:
         "winner_radius_after": None,
     }
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         # Sanity: both rows must exist, otherwise return a no-op shape.
         async with db.execute(
             "SELECT id, lat, lon, radius_m, fix_count, last_seen_at, source "
@@ -849,7 +877,7 @@ async def delete_auto_locations() -> dict:
     in place. Whitelisted devices get archived into preserved_devices
     first, same as delete_all_locations does. Temp whitelist is left
     intact — Reset is a softer action than Delete all."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT id FROM sensor_locations WHERE source='auto'"
         ) as cur:
@@ -891,7 +919,7 @@ async def delete_all_locations() -> dict:
     session-scoped to the current location set, so a full reset clears
     them too.
     Returns the row counts that were removed."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute("SELECT COUNT(*) FROM sensor_locations") as cur:
             n_loc = (await cur.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM devices") as cur:
@@ -919,7 +947,7 @@ async def delete_all_locations() -> dict:
 
 
 async def update_location_label(location_id: int, label: str) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "UPDATE sensor_locations SET label=? WHERE id=?", (label, location_id)
         )
@@ -933,7 +961,7 @@ async def update_location_radius(location_id: int, radius_m: float) -> bool:
     Returns True if a row was updated, False if the id was missing OR the
     row was auto-sourced."""
     radius_m = round(float(radius_m), 2)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "UPDATE sensor_locations SET radius_m=? "
             "WHERE id=? AND source='manual'",
@@ -954,7 +982,7 @@ async def upsert_device(
     now = datetime.now().isoformat()
     payload = json.dumps(details, default=str)
     signature = compute_ble_signature(kind, details)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT best_rssi, seen_count FROM devices WHERE location_id=? AND kind=? AND device_id=?",
             (location_id, kind, device_id),
@@ -983,7 +1011,7 @@ async def upsert_device(
 async def get_device_details(location_id: int, kind: str, device_id: str) -> dict | None:
     """Return just the details_json (parsed) for one device, or None if absent.
     Cheaper than devices_at_location when you only need to merge with prior."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT details_json FROM devices WHERE location_id=? AND kind=? AND device_id=?",
             (location_id, kind, device_id),
@@ -1000,7 +1028,7 @@ async def get_device_details(location_id: int, kind: str, device_id: str) -> dic
 async def get_location_summary(location_id: int) -> dict | None:
     """Compact location info for the Discord enrichment. Returns label,
     lat, lon, radius_m, source — or None if the id is gone."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, label, lat, lon, radius_m, source "
@@ -1014,7 +1042,7 @@ async def get_device_summary(kind: str, device_id: str) -> dict | None:
     """Cross-location aggregate for one device. Used by alert dispatch
     to add temporal/lifetime context to Discord embeds."""
     device_id_l = (device_id or "").lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT MIN(first_seen), MAX(last_seen), SUM(seen_count), "
             "MAX(signature), COUNT(DISTINCT location_id) "
@@ -1040,7 +1068,7 @@ async def get_signature_siblings(signature: str,
     if not signature:
         return []
     excl = (exclude_device_id or "").lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT DISTINCT device_id FROM devices "
             "WHERE signature=? AND device_id <> ? ORDER BY device_id",
@@ -1050,7 +1078,7 @@ async def get_signature_siblings(signature: str,
 
 
 async def get_location_created_at(location_id: int) -> str | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT created_at FROM sensor_locations WHERE id=?", (location_id,)
         ) as cur:
@@ -1070,7 +1098,7 @@ async def device_timeline(kind: str, device_id: str, *, max_points: int = 500) -
         "total_observations": 0, "first_seen": None, "last_seen": None,
         "details": {},
     }
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         # Per-location aggregates from the devices table (one row per loc).
         async with db.execute(
@@ -1139,7 +1167,7 @@ async def insert_observation(
     raw: dict,
 ) -> None:
     now = datetime.now().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO observations(location_id,kind,device_id,rssi,lat,lon,seen_at,raw_json) "
             "VALUES(?,?,?,?,?,?,?,?)",
@@ -1150,7 +1178,7 @@ async def insert_observation(
 
 # ---------- alerts ----------
 async def list_alert_rules() -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM alert_rules ORDER BY id DESC"
@@ -1175,7 +1203,7 @@ async def create_alert_rule(
 ) -> int:
     now = datetime.now().isoformat()
     extra_json = json.dumps(extra_conditions or [])
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "INSERT INTO alert_rules(name,enabled,kind,match_type,match_value,"
             "location_id,notify_discord,audible,extra_conditions,latch,"
@@ -1195,13 +1223,13 @@ async def update_alert_rule(rule_id: int, fields: dict) -> None:
         return
     cols = ", ".join(f"{k}=?" for k in fields.keys())
     args = list(fields.values()) + [rule_id]
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(f"UPDATE alert_rules SET {cols} WHERE id=?", args)
         await db.commit()
 
 
 async def delete_alert_rule(rule_id: int) -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute("DELETE FROM alert_events WHERE rule_id=?", (rule_id,))
         await db.execute("DELETE FROM alert_rules WHERE id=?", (rule_id,))
         await db.commit()
@@ -1212,7 +1240,7 @@ async def insert_alert_event(
     rssi: int | None, details: dict,
 ) -> int:
     now = datetime.now().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "INSERT INTO alert_events(rule_id,triggered_at,location_id,device_kind,"
             "device_id,rssi,details_json) VALUES(?,?,?,?,?,?,?)",
@@ -1234,7 +1262,7 @@ async def list_alert_events(limit: int = 100, since_id: int | None = None) -> li
         args.append(since_id)
     sql += "ORDER BY e.id DESC LIMIT ?"
     args.append(limit)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, tuple(args)) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
@@ -1258,7 +1286,7 @@ async def count_device_in_recent_locations(kind: str, device_id: str, n_location
         WHERE kind=? AND device_id=?
           AND location_id IN (SELECT id FROM sensor_locations ORDER BY id DESC LIMIT ?)
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(sql, (kind, device_id, n_locations)) as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
@@ -1277,7 +1305,7 @@ async def count_companion_locations(kind: str, device_id: str,
         return 0
     cutoff = (datetime.now() - timedelta(hours=window_hours)).isoformat()
     device_id = (device_id or "").lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         # Look up the device's signature (BLE only — wifi rows have NULL).
         # If present, expand to every sibling MAC sharing that signature so
         # the count is across the physical device, not just one MAC.
@@ -1342,7 +1370,7 @@ async def first_sightings_at_locations(
     if not location_ids:
         return {}
     device_id_l = (device_id or "").lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         siblings = await _ble_signature_siblings(db, kind, device_id_l)
         sib_placeholders = ",".join("?" * len(siblings))
         loc_placeholders = ",".join("?" * len(location_ids))
@@ -1375,7 +1403,7 @@ async def count_novel_locations(
     obs_cutoff = (datetime.now() - timedelta(hours=window_hours)).isoformat()
     loc_cutoff = (datetime.now() - timedelta(hours=location_max_age_hours)).isoformat()
     device_id_l = (device_id or "").lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         siblings = await _ble_signature_siblings(db, kind, device_id_l)
         sib_placeholders = ",".join("?" * len(siblings))
         sql = (
@@ -1406,7 +1434,7 @@ async def count_signature_macs(
     device_id_l = (device_id or "").lower()
     if kind != "bluetooth":
         return 1
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT signature FROM devices WHERE kind=? AND device_id=? "
             "AND signature IS NOT NULL LIMIT 1",
@@ -1443,7 +1471,7 @@ async def find_cross_kind_partner(
         return None
     cutoff = (datetime.now() - timedelta(hours=window_hours)).isoformat()
     device_id_l = (device_id or "").lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         siblings = await _ble_signature_siblings(db, kind, device_id_l)
         sib_placeholders = ",".join("?" * len(siblings))
         # Step 1: locations where THIS device (or BLE siblings) appeared
@@ -1490,7 +1518,7 @@ async def purge_old_data(
     counts = {"observations": 0, "devices": 0}
     if observation_days <= 0 and device_days <= 0:
         return counts
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         if observation_days > 0:
             cutoff = (datetime.now() - timedelta(days=observation_days)).isoformat()
             cur = await db.execute(
@@ -1526,7 +1554,7 @@ async def list_latched_pairs() -> list[tuple[int, str]]:
     """Every (rule_id, device_id_lower) pair with at least one alert_event
     row that hasn't been cleared. AlertService loads this on startup so
     latches survive a process restart."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT DISTINCT rule_id, lower(device_id) "
             "FROM alert_events WHERE cleared=0"
@@ -1537,7 +1565,7 @@ async def list_latched_pairs() -> list[tuple[int, str]]:
 async def clear_alert_pair(rule_id: int, device_id: str) -> int:
     """Mark every event for (rule_id, device_id_lower) as cleared. Caller
     is responsible for removing the matching latch from AlertService."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "UPDATE alert_events SET cleared=1 "
             "WHERE rule_id=? AND lower(device_id)=? AND cleared=0",
@@ -1550,7 +1578,7 @@ async def clear_alert_pair(rule_id: int, device_id: str) -> int:
 async def clear_all_latches() -> int:
     """Mark every still-latched event as cleared without deleting any
     history. Returns the number of rows updated."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "UPDATE alert_events SET cleared=1 WHERE cleared=0"
         )
@@ -1590,7 +1618,7 @@ async def list_recurring_device_locations(
         ORDER BY t.total DESC, t.device_id, d.seen_count DESC
     """
     by_dev: dict[tuple[str, str], dict] = {}
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, (min_locations, top_n)) as cur:
             for row in await cur.fetchall():
@@ -1630,7 +1658,7 @@ async def count_alert_events_for_rule_device(
     including the row that *just* got inserted. Used by the Discord embed
     to distinguish "first hit" from "this is the 5th time"."""
     device_id_l = (device_id or "").lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT COUNT(*) FROM alert_events "
             "WHERE rule_id=? AND device_kind=? AND lower(device_id)=?",
@@ -1649,7 +1677,7 @@ async def previous_observation_at_location(
     gap since the device's previous visit. Returns None when there's no
     prior observation (the device is brand new at this location)."""
     device_id_l = (device_id or "").lower()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT seen_at FROM observations "
             "WHERE kind=? AND device_id=? AND location_id=? "
@@ -1698,7 +1726,7 @@ async def find_absent_devices_at_location(
         f"WHERE {' AND '.join(conds)} "
         "ORDER BY d.last_seen DESC"
     )
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, tuple(args)) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
@@ -1729,7 +1757,7 @@ async def about_stats() -> dict:
             out["db_size_bytes"] = DB_PATH.stat().st_size
     except OSError:
         pass
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async def _scalar(sql: str, args: tuple = ()) -> int:
             async with db.execute(sql, args) as cur:
                 row = await cur.fetchone()
@@ -1765,14 +1793,14 @@ async def alert_event_counts_per_rule() -> list[dict]:
         ) c ON c.rule_id = r.id
         ORDER BY fires DESC, r.id ASC
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
 
 async def clear_alert_events() -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute("SELECT COUNT(*) FROM alert_events") as cur:
             n = (await cur.fetchone())[0]
         await db.execute("DELETE FROM alert_events")
@@ -1782,7 +1810,7 @@ async def clear_alert_events() -> int:
 
 async def replace_oui_entries(rows: list[tuple[str, str, str, str | None]]) -> int:
     """Replace the OUI table contents in a single transaction. Returns inserted count."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute("DELETE FROM oui_entries")
         await db.executemany(
             "INSERT OR REPLACE INTO oui_entries(prefix,registry,organization,address) VALUES(?,?,?,?)",
@@ -1796,7 +1824,7 @@ async def replace_oui_entries(rows: list[tuple[str, str, str, str | None]]) -> i
 
 async def load_all_oui() -> list[tuple[str, str, str]]:
     """Return (prefix, registry, organization) for every row, ordered longest-prefix-first."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT prefix, registry, organization FROM oui_entries "
             "ORDER BY length(prefix) DESC"
@@ -1805,14 +1833,14 @@ async def load_all_oui() -> list[tuple[str, str, str]]:
 
 
 async def oui_count() -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute("SELECT COUNT(*) FROM oui_entries") as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
 
 
 async def oui_counts_by_registry() -> dict[str, int]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT registry, COUNT(*) FROM oui_entries GROUP BY registry"
         ) as cur:
@@ -1829,7 +1857,7 @@ async def create_mission(name: str, description: str | None = None) -> dict:
         return {"error": "Another mission is already active", "active": active}
     stats = await about_stats()
     now = datetime.now().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "INSERT INTO missions(name, description, started_at, "
             "stats_start_json) VALUES(?,?,?,?)",
@@ -1846,7 +1874,7 @@ async def end_mission(mission_id: int) -> dict | None:
     stats_end_json and stamps ended_at. Returns the full mission row
     (with diff already inflated). Returns None if the mission doesn't
     exist or has already ended."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT ended_at FROM missions WHERE id=?", (mission_id,),
         ) as cur:
@@ -1855,7 +1883,7 @@ async def end_mission(mission_id: int) -> dict | None:
             return None
     stats = await about_stats()
     now = datetime.now().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "UPDATE missions SET ended_at=?, stats_end_json=? WHERE id=?",
             (now, json.dumps(stats), mission_id),
@@ -1866,7 +1894,7 @@ async def end_mission(mission_id: int) -> dict | None:
 
 async def active_mission() -> dict | None:
     """Return the active mission (ended_at IS NULL) or None."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM missions WHERE ended_at IS NULL "
@@ -1877,7 +1905,7 @@ async def active_mission() -> dict | None:
 
 
 async def get_mission(mission_id: int) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM missions WHERE id=?", (mission_id,),
@@ -1889,7 +1917,7 @@ async def get_mission(mission_id: int) -> dict | None:
 async def list_missions(limit: int = 50) -> list[dict]:
     """Most recent missions first. Active mission (if any) appears at
     the top because its id is the latest."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM missions ORDER BY id DESC LIMIT ?", (limit,),
@@ -1902,7 +1930,7 @@ async def delete_mission(mission_id: int) -> bool:
     """Remove a mission audit row. Does NOT delete the underlying
     data (locations, devices, observations) — the mission table is
     just bookkeeping over the existing data."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "DELETE FROM missions WHERE id=?", (mission_id,),
         )
@@ -1971,7 +1999,7 @@ async def delete_devices_by_kind(kind: str) -> dict:
     location deletion — they're archived to preserved_devices first."""
     if kind not in ("wifi", "bluetooth", "bluetooth_classic", "wifi_client"):
         return {"error": "invalid kind", "devices": 0, "observations": 0}
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         # Pull the whitelist once for preservation matching.
         async with db.execute(
             "SELECT kind, device_id FROM device_whitelist "
@@ -2035,7 +2063,7 @@ async def integrity_check() -> dict:
     """Run SQLite's PRAGMA integrity_check. Returns 'ok' on a clean DB
     or a list of error strings otherwise. Cheap on a small DB; can take
     a moment on a large one."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute("PRAGMA integrity_check") as cur:
             rows = [r[0] for r in await cur.fetchall()]
     ok = len(rows) == 1 and rows[0].lower() == "ok"
@@ -2117,7 +2145,7 @@ async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
         sql_clients += " AND location_id=?"
         args = (location_id,)
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql_aps, args) as cur:
             ap_rows = [dict(r) for r in await cur.fetchall()]
@@ -2267,7 +2295,7 @@ async def list_common_devices(min_locations: int = 2, limit: int = 50) -> list[d
         ORDER BY a.n_locations DESC, a.total_seen DESC
         LIMIT ?
     """
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, (min_locations, limit)) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
@@ -2284,7 +2312,7 @@ async def list_common_devices(min_locations: int = 2, limit: int = 50) -> list[d
 
 # ---------- whitelist ----------
 async def list_whitelist() -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM device_whitelist ORDER BY kind, device_id"
@@ -2310,7 +2338,7 @@ async def list_whitelist_with_devices() -> list[dict]:
     entries = await list_whitelist()
     if not entries:
         return entries
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         for e in entries:
             kind = e["kind"]
@@ -2397,7 +2425,7 @@ async def add_whitelist(kind: str, device_id: str, note: str | None = None) -> i
     """Insert a whitelist entry (or update its note if the (kind, device_id)
     pair already exists). Returns the row id."""
     now = datetime.now().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO device_whitelist(kind, device_id, note, created_at) "
             "VALUES(?,?,?,?) "
@@ -2418,7 +2446,7 @@ async def update_whitelist(entry_id: int, kind: str, device_id: str,
     """Update an existing whitelist row by id. Returns False if no row has
     that id; raises ValueError if the new (kind, device_id) collides with
     a different entry's UNIQUE constraint."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         async with db.execute(
             "SELECT 1 FROM device_whitelist WHERE id=?", (entry_id,)
         ) as cur:
@@ -2442,7 +2470,7 @@ async def update_whitelist(entry_id: int, kind: str, device_id: str,
 
 async def list_temp_whitelist() -> list[dict]:
     """Session-scoped whitelist (baseline-scan auto-populated)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM device_temp_whitelist ORDER BY kind, device_id"
@@ -2456,7 +2484,7 @@ async def add_temp_whitelist(kind: str, device_id: str,
     permanent table — repeated calls with the same (kind, device_id)
     update the note instead of duplicating."""
     now = datetime.now().isoformat()
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         await db.execute(
             "INSERT INTO device_temp_whitelist(kind, device_id, note, created_at) "
             "VALUES(?,?,?,?) "
@@ -2473,7 +2501,7 @@ async def add_temp_whitelist(kind: str, device_id: str,
 
 
 async def delete_temp_whitelist_pair(kind: str, device_id: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute(
             "DELETE FROM device_temp_whitelist WHERE kind=? AND device_id=?",
             (kind, (device_id or "").lower()),
@@ -2484,7 +2512,7 @@ async def delete_temp_whitelist_pair(kind: str, device_id: str) -> bool:
 
 async def clear_temp_whitelist() -> int:
     """Wipe the temporary whitelist. Called from delete_all_locations."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute("DELETE FROM device_temp_whitelist")
         await db.commit()
         return cur.rowcount or 0
@@ -2505,7 +2533,7 @@ async def list_whitelist_combined() -> list[dict]:
 
 
 async def delete_whitelist(entry_id: int) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute("DELETE FROM device_whitelist WHERE id=?", (entry_id,))
         await db.commit()
         return cur.rowcount > 0
@@ -2520,7 +2548,7 @@ async def list_preserved_devices(kind: str | None = None) -> list[dict]:
         sql += " WHERE kind=?"
         args = (kind,)
     sql += " ORDER BY last_seen DESC"
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, args) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
@@ -2534,7 +2562,7 @@ async def list_preserved_devices(kind: str | None = None) -> list[dict]:
 
 
 async def clear_preserved_devices() -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         cur = await db.execute("DELETE FROM preserved_devices")
         await db.commit()
         return cur.rowcount or 0
@@ -2585,7 +2613,7 @@ async def devices_at_location(location_id: int, kind: str | None = None) -> list
         sql += " AND kind=?"
         args = (location_id, kind)
     sql += " ORDER BY best_rssi DESC"
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, args) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
