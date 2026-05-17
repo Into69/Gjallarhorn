@@ -2678,11 +2678,15 @@ function setBadge(n) {
 // Distinct from alertsLastSeenId (which represents "last viewed in feed")
 // so popups fire even when the user isn't on the alerts tab.
 let alertsLastPoppedId = 0;
-// `${rule_id}|${device_id}` pairs we've already shown on the map this session.
-// A "repeat" of an existing pair (same rule firing again on the same device
-// after the cooldown) is suppressed so the operator only sees genuinely new
-// matches, not the same ping recurring every minute.
-const _alertPoppedPairs = new Set();
+// `${rule_id}|${device_id}` pairs we recently popped, with the timestamp
+// they were popped. Used to swallow bursts where the same alert fires
+// every poll for a non-latching rule — without this an aggressive
+// "fire on every match" rule would flood the screen. Latching rules
+// can't re-fire server-side anyway, so this only matters for
+// non-latching ones. 5-minute window keeps genuine re-arrivals
+// visible while still cutting per-tick spam.
+const _alertPoppedPairs = new Map();
+const _ALERT_POP_REPEAT_MS = 5 * 60 * 1000;
 function _alertPairKey(e) { return `${e.rule_id}|${e.device_id}`; }
 
 const ALERT_TOAST_TTL_MS = 8000;
@@ -2805,15 +2809,19 @@ async function pollAlertsBadge() {
     // anything — and we also seed `_alertPoppedPairs` with the recent
     // events' pairs so subsequent firings of those same pairs are
     // treated as repeats too, not "new since I opened the page".
+    const now = Date.now();
     if (alertsLastPoppedId === 0) {
-      for (const e of events) _alertPoppedPairs.add(_alertPairKey(e));
+      // First poll — seed dedup with what's already in the feed so we
+      // don't burst-pop the entire alert history on page load.
+      for (const e of events) _alertPoppedPairs.set(_alertPairKey(e), now);
     } else {
       const fresh = events.filter(e => e.id > alertsLastPoppedId);
-      // Show oldest-first so the newest is the one left visible.
+      // Show oldest-first so the newest ends up on top of the stack.
       for (const e of fresh.slice().reverse()) {
         const key = _alertPairKey(e);
-        if (_alertPoppedPairs.has(key)) continue;
-        _alertPoppedPairs.add(key);
+        const lastPopped = _alertPoppedPairs.get(key);
+        if (lastPopped && (now - lastPopped) < _ALERT_POP_REPEAT_MS) continue;
+        _alertPoppedPairs.set(key, now);
         showAlertOnMap(e);
       }
     }
