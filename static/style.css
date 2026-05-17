@@ -809,6 +809,12 @@ details.wap-group[open] > summary { border-bottom: 1px solid var(--border); }
 }
 .mission-ticker dd {
   margin: 2px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.mission-ticker-main {
   font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
   font-size: 12.5px;
   color: var(--fg);
@@ -816,6 +822,15 @@ details.wap-group[open] > summary { border-bottom: 1px solid var(--border); }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.mission-ticker-ago {
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mission-ticker-ago:empty { display: none; }
 
 /* Mission lifecycle card — active mission banner + start form. */
 .mission-active-row {

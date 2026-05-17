@@ -42,21 +42,26 @@ document.addEventListener("visibilitychange", () => {
   else { refreshMission().catch(() => {}); startMissionPoll(); }
 });
 
+function activateTab(id) {
+  const btn = document.querySelector(`.tab-btn[data-tab="${id}"]`);
+  if (!btn) return false;
+  $$(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+  $$(".tab").forEach((t) => t.classList.toggle("active", t.id === `tab-${id}`));
+  if (id === "map" && map) setTimeout(() => map.invalidateSize(), 50);
+  if (id === "mission") { refreshMission(); startMissionPoll(); }
+  else { stopMissionPoll(); }
+  if (id === "devices") refreshDevices();
+  if (id === "wifi-aps") refreshWifiAps();
+  if (id === "locations") refreshLocations();
+  if (id === "alerts") refreshAlerts();
+  if (id === "logs") refreshLogs();
+  if (id === "about") refreshAbout();
+  try { localStorage.setItem("activeTab", id); } catch {}
+  return true;
+}
+
 $$(".tab-btn").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    $$(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
-    const id = btn.dataset.tab;
-    $$(".tab").forEach((t) => t.classList.toggle("active", t.id === `tab-${id}`));
-    if (id === "map" && map) setTimeout(() => map.invalidateSize(), 50);
-    if (id === "mission") { refreshMission(); startMissionPoll(); }
-    else { stopMissionPoll(); }
-    if (id === "devices") refreshDevices();
-    if (id === "wifi-aps") refreshWifiAps();
-    if (id === "locations") refreshLocations();
-    if (id === "alerts") refreshAlerts();
-    if (id === "logs") refreshLogs();
-    if (id === "about") refreshAbout();
-  });
+  btn.addEventListener("click", () => activateTab(btn.dataset.tab));
 });
 
 // ---------- settings tab — sidebar nav ----------
@@ -4429,11 +4434,21 @@ async function _refreshMissionLifecycle() {
 }
 
 async function _refreshMissionTicker() {
-  const setTicker = (id, text, title) => {
+  // Each tile has two stacked lines: a main descriptor (rule/device/label)
+  // and an "X ago" line driven by an ISO timestamp stashed on the ago
+  // element's dataset. _tickMissionTickerAgo() re-renders the ago line
+  // every second so it stays live between 5s polls.
+  const setTicker = (id, text, ago, title) => {
     const el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = text;
-    if (title) el.title = title;
+    if (el) {
+      el.textContent = text;
+      if (title) el.title = title;
+    }
+    const agoEl = document.getElementById(id + "-ago");
+    if (agoEl) {
+      agoEl.dataset.iso = ago || "";
+      agoEl.textContent = _renderTickerAgo(ago);
+    }
   };
   // Latest alert
   try {
@@ -4442,9 +4457,10 @@ async function _refreshMissionTicker() {
     if (e) {
       setTicker("mission-ticker-alert",
         `${e.rule_name || "rule " + e.rule_id} · ${e.device_id}`,
+        e.triggered_at,
         `${formatTime(e.triggered_at)} · ${e.device_kind}`);
     } else {
-      setTicker("mission-ticker-alert", "no alerts yet", "");
+      setTicker("mission-ticker-alert", "no alerts yet", null, "");
     }
   } catch {}
   // Latest device (across kinds) — pulled from the common-devices endpoint
@@ -4461,12 +4477,13 @@ async function _refreshMissionTicker() {
       if (d) {
         setTicker("mission-ticker-device",
           `${formatKindLabel(d.kind, d.details)} · ${d.device_id}`,
+          d.last_seen,
           `${formatTime(d.last_seen)} · loc #${lid}`);
       } else {
-        setTicker("mission-ticker-device", "no devices at active loc", "");
+        setTicker("mission-ticker-device", "no devices at active loc", null, "");
       }
     } else {
-      setTicker("mission-ticker-device", "no active location", "");
+      setTicker("mission-ticker-device", "no active location", null, "");
     }
   } catch {}
   // Latest location (most recently created/seen)
@@ -4478,11 +4495,33 @@ async function _refreshMissionTicker() {
       const l = locs[0];
       setTicker("mission-ticker-location",
         `${l.label || ("Loc " + l.id)}`,
+        l.last_seen_at,
         `seen ${formatTime(l.last_seen_at)} · #${l.id}`);
     } else {
-      setTicker("mission-ticker-location", "no locations yet", "");
+      setTicker("mission-ticker-location", "no locations yet", null, "");
     }
   } catch {}
+}
+
+function _renderTickerAgo(iso) {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (!isFinite(t)) return "";
+  return formatProbeAgo((Date.now() - t) / 1000);
+}
+
+function _tickMissionTickerAgo() {
+  for (const id of [
+    "mission-ticker-alert-ago",
+    "mission-ticker-device-ago",
+    "mission-ticker-location-ago",
+  ]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const iso = el.dataset.iso;
+    if (!iso) continue;
+    el.textContent = _renderTickerAgo(iso);
+  }
 }
 
 async function _endActiveMission() {
@@ -4569,7 +4608,7 @@ document.getElementById("mission-reset")?.addEventListener("click", (e) => {
     "The temporary whitelist is left intact.\n\nThis cannot be undone."
   );
   if (!ok) return;
-  _missionAction(e.target, "Resetting…", async () => {
+  _missionAction(e.currentTarget, "Resetting…", async () => {
     const res = await api("/api/locations/reset", { method: "POST" });
     const d = res.deleted || {};
     return `Removed ${d.locations || 0} location(s), `
@@ -4587,7 +4626,7 @@ document.getElementById("mission-delete-all")?.addEventListener("click", (e) => 
     "from the next GPS fix.\n\nThis cannot be undone."
   );
   if (!ok) return;
-  _missionAction(e.target, "Deleting…", async () => {
+  _missionAction(e.currentTarget, "Deleting…", async () => {
     const res = await api("/api/locations", { method: "DELETE" });
     const d = res.deleted || {};
     return `Deleted ${d.locations || 0} location(s), `
@@ -4603,7 +4642,7 @@ document.getElementById("mission-purge")?.addEventListener("click", (e) => {
     "Whitelisted devices are exempt from the device sweep."
   );
   if (!ok) return;
-  _missionAction(e.target, "Purging…", async () => {
+  _missionAction(e.currentTarget, "Purging…", async () => {
     const r = await api("/api/maintenance/purge", { method: "POST", body: "{}" });
     const rm = r.removed || {};
     return `Removed ${rm.observations || 0} observation(s) and ${rm.devices || 0} device row(s)`;
@@ -4688,8 +4727,12 @@ document.querySelectorAll(".mission-kind-delete").forEach((btn) => {
     const label = btn.firstChild ? btn.firstChild.textContent.trim() : `kind=${kind}`;
     if (!confirm(`${label}?\n\nThis removes every kind="${kind}" device row plus their observations. Whitelisted devices are archived to the preserved list. Cannot be undone.`)) return;
     _missionAction(btn, "Deleting…", async () => {
+      // Endpoint reads kind from the JSON body (payload.get("kind")),
+      // not the query string — send it both ways for safety in case
+      // the backend signature ever swings the other way.
       const r = await api(`/api/maintenance/delete-kind?kind=${encodeURIComponent(kind)}`, {
         method: "POST",
+        body: JSON.stringify({ kind }),
       });
       return `Removed ${r.devices || 0} device row(s) and ${r.observations || 0} observation(s)`;
     }, _LOCDEV_ACTION_OPTS());
@@ -4943,7 +4986,18 @@ function formatTime(iso) {
   refreshMissionIndicator();
   setInterval(refreshMissionIndicator, 10000);
   setInterval(_tickMissionIndicatorElapsed, 1000);
+  // Mission tab live activity tiles: re-render the "X ago" line each second
+  // so the elapsed time stays current between 5s mission polls.
+  setInterval(_tickMissionTickerAgo, 1000);
   setInterval(refreshLocationMarkers, 5000);
   setInterval(refreshOuiStatus, 10000);
   setInterval(pollAlertsBadge, 4000);
+  // Restore the last-active tab so a reload (e.g. from a Mission > Locations
+  // & devices bulk action) lands the operator back where they were rather
+  // than reverting to the Map default. Falls through silently if the saved
+  // id doesn't match an existing tab.
+  try {
+    const saved = localStorage.getItem("activeTab");
+    if (saved && saved !== "map") activateTab(saved);
+  } catch {}
 })();
