@@ -968,11 +968,15 @@ $("#dev-trackers-only")?.addEventListener("change", refreshDevices);
 $("#dev-linked-only")?.addEventListener("change", refreshDevices);
 
 // Quick jump from the Devices tab to the whitelist editor in Settings.
+// The Settings tab has a sidebar nav with only one section visible at a
+// time, so simply switching tabs would leave the operator on whatever
+// section they last viewed (often "Map"). Explicitly activate the
+// "whitelist" section so the panel is actually shown, then scroll +
+// focus for an immediate-action feel.
 $("#dev-manage-whitelist")?.addEventListener("click", () => {
   const settingsBtn = $$(".tab-btn").find(b => b.dataset.tab === "settings");
   if (settingsBtn) settingsBtn.click();
-  // The Settings tab needs a tick to become display:block before scrollIntoView
-  // can compute a real offset.
+  activateSettingsSection("whitelist");
   setTimeout(() => {
     const panel = $("#whitelist-panel");
     if (panel) {
@@ -2351,23 +2355,33 @@ async function refreshAlertRules() {
     const extraBadge = extras.length
       ? ` <span class="rule-extra-badge" title="${escapeAttr("AND " + extraTip)}">+${extras.length} AND</span>`
       : "";
+    const sw = (cls, on) => `
+      <label class="mission-switch small">
+        <input type="checkbox" class="${cls}" data-id="${r.id}" role="switch" ${on ? "checked" : ""}>
+        <span class="mission-switch-track" aria-hidden="true">
+          <span class="mission-switch-thumb"></span>
+        </span>
+      </label>`;
     tr.innerHTML = `
-      <td><input type="checkbox" class="rule-toggle" data-id="${r.id}" ${r.enabled ? "checked" : ""}></td>
+      <td>${sw("rule-toggle", r.enabled)}</td>
       <td>${escapeHtml(r.name)}</td>
       <td>${escapeHtml(r.kind || "any")}</td>
       <td>${escapeHtml(MATCH_TYPE_LABEL[r.match_type] || r.match_type)}${extraBadge}</td>
       <td class="mono">${escapeHtml(r.match_value)}</td>
       <td>${r.location_id == null ? "any" : r.location_id === -1 ? "active" : r.location_id}</td>
-      <td><input type="checkbox" class="rule-discord" data-id="${r.id}" ${r.notify_discord ? "checked" : ""}></td>
-      <td><input type="checkbox" class="rule-audible" data-id="${r.id}" ${r.audible ? "checked" : ""}></td>
-      <td><input type="checkbox" class="rule-latch" data-id="${r.id}" ${(r.latch ?? 1) ? "checked" : ""}></td>
-      <td><input type="checkbox" class="rule-include-wl" data-id="${r.id}" ${r.include_whitelist ? "checked" : ""}></td>
+      <td>${sw("rule-discord", r.notify_discord)}</td>
+      <td>${sw("rule-audible", r.audible)}</td>
+      <td>${sw("rule-latch", r.latch ?? 1)}</td>
+      <td>${sw("rule-include-wl", r.include_whitelist)}</td>
       <td class="mono">${formatTime(r.created_at)}</td>
       <td><button class="danger rule-delete" data-id="${r.id}">Delete</button></td>
     `;
     tr.addEventListener("dblclick", (ev) => {
-      // Don't hijack double-clicks on inline controls
-      if (ev.target.closest("input, button")) return;
+      // Don't hijack double-clicks on inline controls (switches included —
+      // the visible track is a span, not an input, so a plain
+      // closest("input,button") check would let a stray dbl-click on the
+      // track open edit mode).
+      if (ev.target.closest("input, button, .mission-switch")) return;
       enterEditRuleMode(rulesById[r.id]);
     });
     tbody.appendChild(tr);

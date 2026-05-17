@@ -752,6 +752,57 @@ details.wap-group[open] > summary { border-bottom: 1px solid var(--border); }
   outline-offset: 2px;
 }
 .mission-switch:hover .mission-switch-label { color: var(--fg); }
+
+/* Inside the Quick toggles card the switches stack vertically with the
+   description pushed left and the track pinned right, so a column of
+   four reads cleanly. The hero variant stays inline (label-then-track,
+   gap 8px) because it sits next to buttons. */
+.mission-toggle-grid .mission-switch {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0;
+}
+.mission-toggle-grid .mission-switch-label {
+  color: var(--fg);
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+}
+
+/* Rule-form switches: the parent .rule-form sets `display: grid` on every
+   label, so we need to opt this one out and lay it as a flex row with the
+   label on the left and the track pinned right — matches Quick toggles. */
+.rule-form label.mission-switch {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.rule-form label.mission-switch .mission-switch-label {
+  color: var(--fg);
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+}
+
+/* Compact switch for tight cells (rules-table per-row toggles). Track
+   shrinks to 28x16 with a 12x12 thumb that slides 10px on :checked. */
+.mission-switch.small .mission-switch-track {
+  width: 28px;
+  height: 16px;
+}
+.mission-switch.small .mission-switch-thumb {
+  width: 12px;
+  height: 12px;
+}
+.mission-switch.small input:checked ~ .mission-switch-track .mission-switch-thumb {
+  transform: translateX(12px);
+}
 .mission-card {
   background: var(--panel);
   border: 1px solid var(--border);

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260517a" />
+  <link rel="stylesheet" href="/static/style.css?v=20260517f" />
 </head>
 <body>
   <header>
@@ -296,17 +296,26 @@
           <h3 class="section-h">Quick toggles</h3>
           <p class="muted small">Browser-local switches — they only affect this view; the orchestrator keeps doing its thing unless you flip Recording off too.</p>
           <div class="mission-toggle-grid">
-            <label class="check">
-              <input type="checkbox" id="mission-mute-alarms" />
-              Mute audible alarms (this browser only)
+            <label class="mission-switch">
+              <span class="mission-switch-label">Mute audible alarms (this browser only)</span>
+              <input type="checkbox" id="mission-mute-alarms" role="switch" />
+              <span class="mission-switch-track" aria-hidden="true">
+                <span class="mission-switch-thumb"></span>
+              </span>
             </label>
-            <label class="check">
-              <input type="checkbox" id="mission-stealth" />
-              Stealth mode — hide alert badges + device counts in headers
+            <label class="mission-switch">
+              <span class="mission-switch-label">Stealth mode — hide alert badges + device counts in headers</span>
+              <input type="checkbox" id="mission-stealth" role="switch" />
+              <span class="mission-switch-track" aria-hidden="true">
+                <span class="mission-switch-thumb"></span>
+              </span>
             </label>
-            <label class="check">
-              <input type="checkbox" id="mission-skip-recording" title="Skips device upserts and observation rows on the server while leaving alert evaluation intact. New devices won't be stored until you turn this off." />
-              Skip recording — evaluate alerts but don't write new rows
+            <label class="mission-switch" title="Skips device upserts and observation rows on the server while leaving alert evaluation intact. New devices won't be stored until you turn this off.">
+              <span class="mission-switch-label">Skip recording — evaluate alerts but don't write new rows</span>
+              <input type="checkbox" id="mission-skip-recording" role="switch" />
+              <span class="mission-switch-track" aria-hidden="true">
+                <span class="mission-switch-thumb"></span>
+              </span>
             </label>
           </div>
         </section>
@@ -495,17 +504,33 @@
           <input type="number" id="dev-min-rssi" placeholder="any" min="-110" max="-20" />
         </label>
         <input type="search" id="dev-search" placeholder="search MAC / SSID / name / vendor…" autocomplete="off" />
-        <label class="check" title="Merge wifi BSSIDs that share the same first 5 octets — these are typically the same physical AP advertising on multiple bands or SSIDs.">
-          <input type="checkbox" id="dev-group-bssid" checked /> Group multi-BSSID APs
+        <label class="mission-switch" title="Merge wifi BSSIDs that share the same first 5 octets — these are typically the same physical AP advertising on multiple bands or SSIDs.">
+          <span class="mission-switch-label">Group multi-BSSID APs</span>
+          <input type="checkbox" id="dev-group-bssid" checked role="switch" />
+          <span class="mission-switch-track" aria-hidden="true">
+            <span class="mission-switch-thumb"></span>
+          </span>
         </label>
-        <label class="check" title="Hide devices already in the whitelist — useful for focusing on unknowns.">
-          <input type="checkbox" id="dev-hide-wl" /> Hide whitelisted
+        <label class="mission-switch" title="Hide devices already in the whitelist — useful for focusing on unknowns.">
+          <span class="mission-switch-label">Hide whitelisted</span>
+          <input type="checkbox" id="dev-hide-wl" role="switch" />
+          <span class="mission-switch-track" aria-hidden="true">
+            <span class="mission-switch-thumb"></span>
+          </span>
         </label>
-        <label class="check" title="Show only devices identified as commercial trackers (AirTag, Tile, Samsung SmartTag).">
-          <input type="checkbox" id="dev-trackers-only" /> Trackers only
+        <label class="mission-switch" title="Show only devices identified as commercial trackers (AirTag, Tile, Samsung SmartTag).">
+          <span class="mission-switch-label">Trackers only</span>
+          <input type="checkbox" id="dev-trackers-only" role="switch" />
+          <span class="mission-switch-track" aria-hidden="true">
+            <span class="mission-switch-thumb"></span>
+          </span>
         </label>
-        <label class="check" title="Show only BLE devices with rotating-MAC siblings linked by adv-data fingerprint.">
-          <input type="checkbox" id="dev-linked-only" /> Linked only
+        <label class="mission-switch" title="Show only BLE devices with rotating-MAC siblings linked by adv-data fingerprint.">
+          <span class="mission-switch-label">Linked only</span>
+          <input type="checkbox" id="dev-linked-only" role="switch" />
+          <span class="mission-switch-track" aria-hidden="true">
+            <span class="mission-switch-thumb"></span>
+          </span>
         </label>
         <button id="dev-refresh">Refresh</button>
         <span id="dev-count" class="muted"></span>
@@ -535,8 +560,12 @@
           <select id="wap-location"></select>
         </label>
         <input type="search" id="wap-search" placeholder="search SSID / BSSID / vendor / client MAC…" autocomplete="off" />
-        <label class="check" title="Hide groups where no AP was captured (clients probing for networks we never saw).">
-          <input type="checkbox" id="wap-hide-orphans" /> Hide probe-only SSIDs
+        <label class="mission-switch" title="Hide groups where no AP was captured (clients probing for networks we never saw).">
+          <span class="mission-switch-label">Hide probe-only SSIDs</span>
+          <input type="checkbox" id="wap-hide-orphans" role="switch" />
+          <span class="mission-switch-track" aria-hidden="true">
+            <span class="mission-switch-thumb"></span>
+          </span>
         </label>
         <button id="wap-refresh">Refresh</button>
         <button id="wap-expand-all" class="secondary" title="Expand every SSID group">Expand all</button>
@@ -652,17 +681,33 @@
               </div>
               <div id="rule-extra-list"></div>
             </div>
-            <label class="check">
-              <input type="checkbox" name="notify_discord" /> Send to Discord on match
+            <label class="mission-switch">
+              <span class="mission-switch-label">Send to Discord on match</span>
+              <input type="checkbox" name="notify_discord" role="switch" />
+              <span class="mission-switch-track" aria-hidden="true">
+                <span class="mission-switch-thumb"></span>
+              </span>
             </label>
-            <label class="check">
-              <input type="checkbox" name="audible" /> Play audible alarm on match
+            <label class="mission-switch">
+              <span class="mission-switch-label">Play audible alarm on match</span>
+              <input type="checkbox" name="audible" role="switch" />
+              <span class="mission-switch-track" aria-hidden="true">
+                <span class="mission-switch-thumb"></span>
+              </span>
             </label>
-            <label class="check" title="When on (default), each (rule, device) pair only fires once until you clear it from the live feed. When off, the rule fires on every match — useful for ‘ping me every time’ rules but can be noisy.">
-              <input type="checkbox" name="latch" checked /> Latch — fire once per device until cleared
+            <label class="mission-switch" title="When on (default), each (rule, device) pair only fires once until you clear it from the live feed. When off, the rule fires on every match — useful for ‘ping me every time’ rules but can be noisy.">
+              <span class="mission-switch-label">Latch — fire once per device until cleared</span>
+              <input type="checkbox" name="latch" checked role="switch" />
+              <span class="mission-switch-track" aria-hidden="true">
+                <span class="mission-switch-thumb"></span>
+              </span>
             </label>
-            <label class="check" title="When on, this rule fires even on whitelisted devices. Useful for rules that track a known device (e.g. ‘alert when my own phone leaves home’) without un-whitelisting it.">
-              <input type="checkbox" name="include_whitelist" /> Include whitelisted devices
+            <label class="mission-switch" title="When on, this rule fires even on whitelisted devices. Useful for rules that track a known device (e.g. ‘alert when my own phone leaves home’) without un-whitelisting it.">
+              <span class="mission-switch-label">Include whitelisted devices</span>
+              <input type="checkbox" name="include_whitelist" role="switch" />
+              <span class="mission-switch-track" aria-hidden="true">
+                <span class="mission-switch-thumb"></span>
+              </span>
             </label>
             <button type="submit" id="rule-form-submit">Add rule</button>
             <button type="button" id="rule-form-cancel" class="secondary" hidden>Cancel</button>
@@ -1234,6 +1279,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260517a"></script>
+  <script src="/static/app.js?v=20260517f"></script>
 </body>
 </html>
