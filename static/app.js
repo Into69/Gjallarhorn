@@ -2333,6 +2333,7 @@ const MATCH_TYPE_LABEL = {
   cross_kind_co_travel: "cross-kind co-travel M/H",
   arrival_after_gap: "arrival after N min gap",
   absence_gap: "absence ≥ N min",
+  sustained_presence: "presence ⇄ absence (N min)",
 };
 let alertsLastSeenId = 0;
 
@@ -3022,6 +3023,7 @@ const MATCH_TYPE_PLACEHOLDERS = {
   cross_kind_co_travel: "2/24 — pairs with a device of the other kind at ≥2 of your last-24h locations",
   arrival_after_gap: "30 — fire when this device shows up after ≥30 min away (0 = every sighting)",
   absence_gap: "30 — fire when this device hasn't been seen at the location for ≥30 min",
+  sustained_presence: "10 (or 10/5) — flip-flop: 'present' after ≥10 min continuous, 'absent' after >5 min silent. Add @aa:bb,cc:dd to bind multiple ids to one conceptual device (e.g. a phone's wifi+ble MACs share one state).",
 };
 const MATCH_TYPE_DEFAULTS = {
   rssi_above: "-60",
@@ -3036,6 +3038,7 @@ const MATCH_TYPE_DEFAULTS = {
   cross_kind_co_travel: "2/24",
   arrival_after_gap: "30",
   absence_gap: "30",
+  sustained_presence: "10",
 };
 
 function applyMatchTypeUI(matchType) {

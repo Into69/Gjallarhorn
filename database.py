@@ -1668,6 +1668,181 @@ async def count_alert_events_for_rule_device(
             return int(row[0]) if row else 0
 
 
+async def stay_start_at_location(
+    kind: str, device_id: str, location_id: int, max_gap_seconds: float,
+) -> str | None:
+    """ISO timestamp of when the device's most-recent 'stay' at this
+    location began. A stay is a contiguous run of observations with no
+    consecutive pair separated by more than ``max_gap_seconds``. Returns
+    None when the device has no observations at this location.
+
+    Used by the sustained_presence rule to ask "has this device been
+    continuously visible here for at least N minutes?" — the rule checks
+    whether (now - stay_start) >= N*60. Walking backward from the most
+    recent sighting lets us short-circuit as soon as we find a gap, so
+    long observation histories don't make the query expensive.
+    """
+    device_id_l = (device_id or "").lower()
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT seen_at FROM observations "
+            "WHERE kind=? AND device_id=? AND location_id=? "
+            "ORDER BY seen_at DESC LIMIT 5000",
+            (kind, device_id_l, location_id),
+        ) as cur:
+            rows = await cur.fetchall()
+    if not rows:
+        return None
+    stay_start = rows[0][0]
+    prev_t: float | None = None
+    for (seen_at,) in rows:
+        try:
+            t = datetime.fromisoformat(seen_at).timestamp()
+        except ValueError:
+            # Skip unparsable timestamps but don't reset the run — gap
+            # detection only works on parseable rows; an unreadable row
+            # in the middle would otherwise mask the gap on either side.
+            continue
+        if prev_t is not None and (prev_t - t) > max_gap_seconds:
+            # Found a gap larger than the threshold — the current stay
+            # starts at the row we processed in the previous iteration
+            # (already captured in stay_start).
+            break
+        stay_start = seen_at
+        prev_t = t
+    return stay_start
+
+
+async def last_observation_at_location(
+    kind: str, device_id: str, location_id: int,
+) -> str | None:
+    """ISO timestamp of the device's most recent sighting at this location,
+    or None if it's never been seen here. Used by sustained_presence to
+    detect the absent transition (no sighting for > gap_minutes)."""
+    device_id_l = (device_id or "").lower()
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT seen_at FROM observations "
+            "WHERE kind=? AND device_id=? AND location_id=? "
+            "ORDER BY seen_at DESC LIMIT 1",
+            (kind, device_id_l, location_id),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+
+def _alias_where(device_ids: list[str], kind: str | None) -> tuple[str, list]:
+    """Build a parameterised WHERE fragment that matches observations
+    whose device_id is exactly or prefix-matches any id in ``device_ids``
+    (LIKE 'id%'). Optionally pinned to a kind. Returns (sql_fragment,
+    params)."""
+    ids = [d.lower() for d in device_ids if d]
+    if not ids:
+        return "0", []
+    like_clauses = " OR ".join(["device_id LIKE ?"] * len(ids))
+    where = f"({like_clauses})"
+    params: list = [d + "%" for d in ids]
+    if kind:
+        where = f"kind=? AND {where}"
+        params.insert(0, kind)
+    return where, params
+
+
+async def stay_start_multi(
+    kind: str | None, device_ids: list[str],
+    location_id: int, max_gap_seconds: float,
+) -> str | None:
+    """Like stay_start_at_location but the 'stay' spans a set of device
+    IDs treated as one conceptual device (e.g. the wifi + bluetooth
+    identities of the same phone). Any sighting from any listed id
+    extends the stay; the stay only resets when every id has been silent
+    for > ``max_gap_seconds``. IDs match exactly or as a prefix. Pass
+    kind=None to span device kinds (the typical use)."""
+    where, params = _alias_where(device_ids, kind)
+    if not params:
+        return None
+    params.append(location_id)
+    async with _connect() as db:
+        async with db.execute(
+            f"SELECT seen_at FROM observations "
+            f"WHERE {where} AND location_id=? "
+            f"ORDER BY seen_at DESC LIMIT 5000",
+            params,
+        ) as cur:
+            rows = await cur.fetchall()
+    if not rows:
+        return None
+    stay_start = rows[0][0]
+    prev_t: float | None = None
+    for (seen_at,) in rows:
+        try:
+            t = datetime.fromisoformat(seen_at).timestamp()
+        except ValueError:
+            continue
+        if prev_t is not None and (prev_t - t) > max_gap_seconds:
+            break
+        stay_start = seen_at
+        prev_t = t
+    return stay_start
+
+
+async def last_observation_multi(
+    kind: str | None, device_ids: list[str], location_id: int,
+) -> str | None:
+    """ISO timestamp of the most-recent observation at this location for
+    any device id in the supplied list (exact or prefix match)."""
+    where, params = _alias_where(device_ids, kind)
+    if not params:
+        return None
+    params.append(location_id)
+    async with _connect() as db:
+        async with db.execute(
+            f"SELECT seen_at FROM observations "
+            f"WHERE {where} AND location_id=? "
+            f"ORDER BY seen_at DESC LIMIT 1",
+            params,
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+
+async def list_presence_events() -> list[dict]:
+    """Every recent sustained_presence transition, newest first, with
+    state parsed out of the event's details_json. The caller (alert
+    service) dedupes by either (rule, kind, device_id, location) for
+    single-device rules or (rule, location) for alias-group rules
+    depending on the rule's current match_value. Capped to 5000 rows so
+    a noisy long-running rule can't bloat startup."""
+    async with _connect() as db:
+        async with db.execute(
+            """
+            SELECT e.rule_id, e.device_kind, lower(e.device_id), e.location_id,
+                   e.details_json
+            FROM alert_events e
+            JOIN alert_rules r ON r.id = e.rule_id
+            WHERE r.match_type = 'sustained_presence'
+              AND e.location_id IS NOT NULL
+            ORDER BY e.triggered_at DESC
+            LIMIT 5000
+            """
+        ) as cur:
+            rows = await cur.fetchall()
+    out: list[dict] = []
+    for r in rows:
+        try:
+            details = json.loads(r[4] or "{}")
+        except (TypeError, ValueError):
+            details = {}
+        state = details.get("_presence_state")
+        if state in ("present", "absent"):
+            out.append({
+                "rule_id": int(r[0]), "kind": r[1], "device_id_l": r[2],
+                "location_id": int(r[3]), "state": state,
+                "is_group": bool(details.get("_presence_group")),
+            })
+    return out
+
+
 async def previous_observation_at_location(
     kind: str, device_id: str, location_id: int,
 ) -> str | None:

@@ -406,6 +406,10 @@ class ScanOrchestrator:
             try:
                 if not self._paused:
                     await alert_service.check_absence_rules()
+                    # sustained_presence flip-flops also need a non-sighting
+                    # tick to fire the 'absent' transition — same cadence,
+                    # same gating (paused = quiet, exception = isolated).
+                    await alert_service.check_presence_transitions()
             except Exception as e:
                 log.exception("absence loop error: %s", e)
             if not await self._sleep(30.0):

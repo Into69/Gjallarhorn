@@ -55,6 +55,14 @@ class AlertService:
         # approach_vector (RSSI improving while stationary). Bounded per
         # device and pruned by age in _record_sample.
         self._obs_buffer: dict[tuple[str, str], deque[tuple[float, int, float]]] = {}
+        # sustained_presence flip-flop state: (rule_id, kind, device_id_l,
+        # location_id) -> "present" | "absent". Fires only on transitions
+        # ("present" while not currently "present", "absent" while not
+        # currently "absent"), so the rule pings once when a device settles
+        # in for >= N minutes and again once when it's been gone for > G
+        # minutes — never repeating in the same state. Restored on startup
+        # by load_presence_state() from the latest event per key.
+        self._presence_state: dict[tuple[int, str, str, int], str] = {}
 
     async def load_rules(self) -> None:
         self._rules = await db.list_alert_rules()
@@ -70,12 +78,44 @@ class AlertService:
     async def load_latches(self) -> None:
         self._latched = set(await db.list_latched_pairs())
 
+    async def load_presence_state(self) -> None:
+        """Rebuild the sustained_presence flip-flop state from the most-
+        recent event per state-machine key. Key shape depends on the
+        rule's current alias-set: multi-alias rules collapse to a single
+        (rule, location) slot; single-device rules key per (rule, kind,
+        device, location). Called on startup and after any rule
+        mutation so transitions stay gated across restarts and config
+        changes."""
+        rows = await db.list_presence_events()
+        rules_by_id = {r["id"]: r for r in self._rules}
+        state: dict[tuple[int, str, str, int], str] = {}
+        for r in rows:
+            rule = rules_by_id.get(r["rule_id"])
+            if rule:
+                _, _, aliases = _parse_presence_value(rule.get("match_value") or "")
+            else:
+                # Rule is gone (likely deleted) — fall back to the event's
+                # own flag so we don't lose state if reload races a delete.
+                aliases = [""] if r["is_group"] else []
+            if aliases:
+                key = (
+                    r["rule_id"], _PRESENCE_GROUP_KIND,
+                    _PRESENCE_GROUP_DEVICE, r["location_id"],
+                )
+            else:
+                key = (r["rule_id"], r["kind"], r["device_id_l"], r["location_id"])
+            # First occurrence (newest, since rows are DESC) wins.
+            if key not in state:
+                state[key] = r["state"]
+        self._presence_state = state
+
     async def reload(self) -> None:
         """Call after any rule or whitelist mutation so the next scan
         uses fresh state."""
         await self.load_rules()
         await self.load_whitelist()
         await self.load_latches()
+        await self.load_presence_state()
 
     async def unlatch(self, rule_id: int, device_id: str) -> int:
         """Clear the latch for one (rule, device) pair so future matches
@@ -114,6 +154,7 @@ class AlertService:
             await self.load_rules()
             await self.load_whitelist()
             await self.load_latches()
+            await self.load_presence_state()
         if not self._rules:
             return []
 
@@ -332,6 +373,70 @@ class AlertService:
                     "_arrival_prior_seen": prior_iso,
                     "_arrival_gap_seconds": gap_seconds,
                 }
+            elif mt == "sustained_presence":
+                # Flip-flop state machine. "Present" transition fires here
+                # (the sighting-driven path) when the conceptual device
+                # has been continuously visible at this location for >= N
+                # minutes AND the state isn't already "present". The
+                # "absent" transition fires from the orchestrator's
+                # absence loop via check_presence_transitions().
+                #
+                # match_value: "N" / "N/G" (any device), or "N@id1,id2"
+                # / "N/G@id1,id2" (the listed ids are treated as one
+                # conceptual device — e.g. a phone's wifi + bluetooth
+                # MACs share a single present/absent state). G defaults
+                # to 5 min and serves as both the stay-reset threshold
+                # and the absence threshold so transitions stay
+                # symmetric.
+                thr_min, gap_min, aliases = _parse_presence_value(
+                    rule.get("match_value") or "",
+                )
+                if thr_min is None or location_id is None:
+                    continue
+                # If the rule lists aliases, only sightings of those ids
+                # contribute to the stay and trigger a fire.
+                if aliases and not _matches_any_alias(device_id_l, aliases):
+                    continue
+                state_key = _presence_state_key(
+                    rule["id"], aliases, device_kind, device_id_l, location_id,
+                )
+                if self._presence_state.get(state_key) == "present":
+                    # Already in 'present' state — don't re-fire until the
+                    # device goes absent (handled by the absence loop).
+                    continue
+                if aliases:
+                    stay_iso = await db.stay_start_multi(
+                        rule.get("kind") or None, aliases, location_id,
+                        max_gap_seconds=gap_min * 60.0,
+                    )
+                else:
+                    stay_iso = await db.stay_start_at_location(
+                        device_kind, device_id_l, location_id,
+                        max_gap_seconds=gap_min * 60.0,
+                    )
+                stay_seconds: float | None = None
+                if stay_iso is not None:
+                    try:
+                        stay_t = datetime.fromisoformat(stay_iso).timestamp()
+                        stay_seconds = max(0.0, time.time() - stay_t)
+                    except ValueError:
+                        stay_seconds = None
+                if stay_seconds is None or stay_seconds < thr_min * 60.0:
+                    continue
+                # Threshold crossed and we weren't already 'present' —
+                # flip the state and fall through to fire the event.
+                self._presence_state[state_key] = "present"
+                details = {
+                    **details,
+                    "_presence_state": "present",
+                    "_presence_threshold_minutes": thr_min,
+                    "_presence_gap_minutes": gap_min,
+                    "_presence_minutes": round(stay_seconds / 60.0, 1),
+                    "_presence_stay_started": stay_iso,
+                }
+                if aliases:
+                    details["_presence_group"] = True
+                    details["_presence_aliases"] = aliases
             elif mt == "absence_gap":
                 # Absence is evaluated by the orchestrator's _absence_loop —
                 # it doesn't trigger from a live sighting. Skip this rule in
@@ -390,12 +495,16 @@ class AlertService:
             # per-row button in the live feed. Rules with latch=0 skip
             # this entirely and fire every time the conditions match —
             # useful for things you want pinged on regardless of state.
+            # sustained_presence runs its own flip-flop state machine
+            # (_presence_state) so the regular latch would just duplicate
+            # — we already only got here on a state transition.
             key = (rule["id"], device_id_l)
-            latch_enabled = int(rule.get("latch", 1) or 0) == 1
-            if latch_enabled:
-                if key in self._latched:
-                    continue
-                self._latched.add(key)
+            if mt != "sustained_presence":
+                latch_enabled = int(rule.get("latch", 1) or 0) == 1
+                if latch_enabled:
+                    if key in self._latched:
+                        continue
+                    self._latched.add(key)
 
             event_id = await db.insert_alert_event(
                 rule_id=rule["id"], location_id=location_id,
@@ -560,6 +669,7 @@ class AlertService:
             await self.load_rules()
             await self.load_whitelist()
             await self.load_latches()
+            await self.load_presence_state()
         if not self._rules:
             return []
         emitted: list[int] = []
@@ -657,6 +767,128 @@ class AlertService:
                         rule=rule, device_kind=device_kind, device_id=device_id,
                         rssi=crssi, location_id=c.get("location_id"), details=details,
                     ))
+        return emitted
+
+    async def check_presence_transitions(self) -> list[int]:
+        """Fire the 'absent' side of sustained_presence flip-flops. Walks
+        every (rule, kind, device, location) currently marked 'present'
+        and emits an absent event for the ones whose last sighting at
+        that location is older than the rule's gap threshold. State is
+        flipped to 'absent' so the next 'present' transition can fire on
+        the device's return. Called on the same cadence as
+        check_absence_rules(), so absent detection lags by at most one
+        absence-loop tick."""
+        if not self._rules_loaded:
+            await self.load_rules()
+            await self.load_whitelist()
+            await self.load_latches()
+            await self.load_presence_state()
+        if not self._presence_state or not self._rules:
+            return []
+        rules_by_id = {r["id"]: r for r in self._rules}
+        emitted: list[int] = []
+        # Snapshot keys so we can mutate _presence_state inside the loop.
+        for key in list(self._presence_state.keys()):
+            if self._presence_state.get(key) != "present":
+                continue
+            rule_id, device_kind, device_id_l, location_id = key
+            rule = rules_by_id.get(rule_id)
+            if not rule or not rule.get("enabled"):
+                continue
+            if rule.get("match_type") != "sustained_presence":
+                continue
+            thr_min, gap_min, aliases = _parse_presence_value(
+                rule.get("match_value") or "",
+            )
+            if thr_min is None:
+                continue
+            is_group = device_kind == _PRESENCE_GROUP_KIND
+            # If the rule's alias-shape changed (group ↔ single) since the
+            # state was set, the key no longer matches the rule's current
+            # configuration — drop the stale state and skip.
+            if bool(aliases) != is_group:
+                self._presence_state.pop(key, None)
+                continue
+            # Respect the rule's current scope: if the operator narrowed
+            # the location filter after this state was set, skip — don't
+            # drop, since the scope might be the 'active location'
+            # sentinel and shift back on its own.
+            loc_filter = rule.get("location_id")
+            if loc_filter == -1:
+                if location_manager.active_id != location_id:
+                    continue
+            elif loc_filter is not None and loc_filter != location_id:
+                continue
+            kind_filter = rule.get("kind")
+            if not is_group and kind_filter and kind_filter != device_kind:
+                continue
+            # Whitelist gate stays consistent with the sighting path. For
+            # alias groups we skip this — group rules are typically used
+            # for "my own phone" and the operator probably whitelisted
+            # the same MACs to silence other rules; if they opt into
+            # include_whitelist on the group rule they explicitly want
+            # the alerts. Single-device entries still get the gate.
+            if not is_group:
+                if (
+                    self.is_whitelisted(device_kind, device_id_l)
+                    and not int(rule.get("include_whitelist", 0) or 0)
+                ):
+                    self._presence_state.pop(key, None)
+                    continue
+            if is_group:
+                last_iso = await db.last_observation_multi(
+                    kind_filter or None, aliases, location_id,
+                )
+            else:
+                last_iso = await db.last_observation_at_location(
+                    device_kind, device_id_l, location_id,
+                )
+            if last_iso is None:
+                # Observation rows are gone (likely purged or location
+                # deleted) — drop the state so it can't fire stale.
+                self._presence_state.pop(key, None)
+                continue
+            try:
+                last_t = datetime.fromisoformat(last_iso).timestamp()
+            except ValueError:
+                continue
+            absence_s = max(0.0, time.time() - last_t)
+            if absence_s <= gap_min * 60.0:
+                continue
+            # Flip to 'absent' and fire. Latch tracking is intentionally
+            # bypassed — _presence_state IS the gate.
+            self._presence_state[key] = "absent"
+            details = {
+                "_presence_state": "absent",
+                "_presence_threshold_minutes": thr_min,
+                "_presence_gap_minutes": gap_min,
+                "_presence_absent_minutes": round(absence_s / 60.0, 1),
+                "_presence_last_seen": last_iso,
+            }
+            if is_group:
+                details["_presence_group"] = True
+                details["_presence_aliases"] = aliases
+                event_kind = kind_filter or "wifi"  # arbitrary placeholder for the row
+                event_device = (aliases[0] if aliases else "_grp")
+            else:
+                event_kind = device_kind
+                event_device = device_id_l
+            event_id = await db.insert_alert_event(
+                rule_id=rule_id, location_id=location_id,
+                device_kind=event_kind, device_id=event_device, rssi=0,
+                details=details,
+            )
+            log.info(
+                "ALERT '%s' (rule %d) presence→absent %s/%s loc=%s gap=%.1fm",
+                rule["name"], rule_id, event_kind, event_device,
+                location_id, absence_s / 60.0,
+            )
+            emitted.append(event_id)
+            if rule.get("notify_discord"):
+                asyncio.create_task(_dispatch_discord(
+                    rule=rule, device_kind=event_kind, device_id=event_device,
+                    rssi=0, location_id=location_id, details=details,
+                ))
         return emitted
 
 
@@ -1073,6 +1305,51 @@ def build_discord_payload(
             fields.append({
                 "name": "Arrival", "value": value, "inline": True,
             })
+    if match_type == "sustained_presence":
+        side = details.get("_presence_state")
+        thr = details.get("_presence_threshold_minutes")
+        gap = details.get("_presence_gap_minutes")
+        if details.get("_presence_group") and details.get("_presence_aliases"):
+            aliases = details["_presence_aliases"]
+            fields.append({
+                "name": "Device aliases",
+                "value": ", ".join(f"`{a}`" for a in aliases[:6])
+                         + (f" +{len(aliases) - 6} more" if len(aliases) > 6 else ""),
+                "inline": False,
+            })
+        if side == "absent":
+            absent_min = details.get("_presence_absent_minutes")
+            last_seen = details.get("_presence_last_seen")
+            if absent_min is not None and gap is not None:
+                fields.append({
+                    "name": "Now absent",
+                    "value": f"silent for {absent_min:g} min "
+                             f"(> {gap} min gap)",
+                    "inline": True,
+                })
+            if last_seen:
+                fields.append({
+                    "name": "Last sighting",
+                    "value": _short_time(last_seen),
+                    "inline": True,
+                })
+        else:
+            actual = details.get("_presence_minutes")
+            started = details.get("_presence_stay_started")
+            if thr is not None and actual is not None:
+                gap_suffix = f", gap >{gap}m resets" if gap else ""
+                fields.append({
+                    "name": "Now present",
+                    "value": f"continuous for {actual:g} min "
+                             f"(≥ {thr} min{gap_suffix})",
+                    "inline": True,
+                })
+            if started:
+                fields.append({
+                    "name": "Stay started",
+                    "value": _short_time(started),
+                    "inline": True,
+                })
     if match_type == "absence_gap":
         thr = details.get("_absence_threshold_minutes")
         actual = details.get("_absence_minutes")
@@ -1196,6 +1473,60 @@ def _parse_arrival_gap_value(value: str) -> int | None:
     if n < 0:
         return None
     return n
+
+
+def _parse_presence_value(value: str) -> tuple[int | None, int, list[str]]:
+    """Parse 'N', 'N/G', 'N@id1,id2,...', or 'N/G@id1,id2,...' for the
+    sustained_presence flip-flop rule into (threshold_minutes,
+    gap_minutes, aliases). Aliases are lowercased device-id prefixes;
+    when non-empty, only sightings of those ids count toward the stay
+    AND the whole alias set is treated as one conceptual device (e.g.
+    a phone's wifi + bluetooth identities share a single present/absent
+    state). When empty, the rule matches any device. Returns
+    (None, 0, []) on invalid input."""
+    s = (value or "").strip()
+    aliases: list[str] = []
+    if "@" in s:
+        s, csv = s.split("@", 1)
+        aliases = [a.strip().lower() for a in csv.split(",") if a.strip()]
+    parts = [p.strip() for p in s.split("/")]
+    try:
+        n = int(parts[0]) if parts and parts[0] else 0
+        g = int(parts[1]) if len(parts) > 1 and parts[1] else 5
+    except (ValueError, IndexError):
+        return None, 0, []
+    if n < 1 or g < 1:
+        return None, 0, []
+    return n, g, aliases
+
+
+# Sentinel kind/device used inside _presence_state for multi-alias rules
+# so the alias set keeps a single shared state slot per (rule, location).
+_PRESENCE_GROUP_KIND = "_grp"
+_PRESENCE_GROUP_DEVICE = "_grp"
+
+
+def _presence_state_key(
+    rule_id: int, aliases: list[str],
+    device_kind: str, device_id_l: str, location_id: int,
+) -> tuple[int, str, str, int]:
+    """Build the (rule, kind, device, location) key the flip-flop state
+    machine uses. Multi-alias rules collapse to a single rule-level
+    slot; single-device rules key per (kind, device_id)."""
+    if aliases:
+        return (rule_id, _PRESENCE_GROUP_KIND, _PRESENCE_GROUP_DEVICE, location_id)
+    return (rule_id, device_kind, device_id_l, location_id)
+
+
+def _matches_any_alias(device_id_l: str, aliases: list[str]) -> bool:
+    """Return True if the sighting's device id matches any alias exactly
+    or as a prefix — same semantics as the value-based device_id rule."""
+    if not aliases:
+        return True
+    for a in aliases:
+        if device_id_l == a or device_id_l.startswith(a):
+            return True
+    return False
 
 
 def _parse_absence_gap_value(value: str) -> int | None:

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260517f" />
+  <link rel="stylesheet" href="/static/style.css?v=20260517i" />
 </head>
 <body>
   <header>
@@ -657,6 +657,7 @@
                   <option value="persistent_companion">persistent companion: M locations within H hours</option>
                   <option value="arrival_after_gap">arrival at location (after N min gap)</option>
                   <option value="absence_gap">absence at location (no sighting for N min)</option>
+                  <option value="sustained_presence">presence ⇄ absence flip-flop (N min sustained / G min gap, optional @id aliases)</option>
                 </optgroup>
                 <optgroup label="Follower detection">
                   <option value="co_arrival_transit">co-arrival on transit: M of last N arrivals within W s</option>
@@ -1279,6 +1280,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260517f"></script>
+  <script src="/static/app.js?v=20260517i"></script>
 </body>
 </html>
