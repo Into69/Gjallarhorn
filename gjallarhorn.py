@@ -812,13 +812,27 @@ async def api_integrity_check():
 
 @app.get("/api/maintenance/db/export")
 async def api_db_export():
-    """Stream the live SQLite file as a download. The on-disk file is
-    a single SQLite database; transferring it whole is the simplest
-    backup format. Safe to do while the app is running — SQLite handles
-    concurrent readers fine, and the file we serve is a point-in-time
-    copy via FileResponse's streaming."""
+    """Stream the live SQLite file as a download. Runs
+    `PRAGMA wal_checkpoint(TRUNCATE)` first so every committed write
+    sitting in the -wal sidecar gets folded into the main file before
+    we hand the bytes to the client — otherwise the exported .db can
+    miss recent rows that haven't checkpointed yet."""
     if not db.DB_PATH.exists():
         raise HTTPException(404, "database file not found")
+    # TRUNCATE mode also resets the WAL file to zero bytes after the
+    # checkpoint, which is harmless under load (a fresh WAL is created
+    # on the next write) and keeps the backup snapshot self-contained
+    # without needing to grab the .db-wal alongside.
+    try:
+        async with db._connect() as conn:
+            await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            await conn.commit()
+    except Exception as e:
+        # Don't fail the export if checkpoint can't run (e.g. another
+        # connection is holding a read lock); the backup still works,
+        # it just may lag the WAL tip slightly. Log so the operator
+        # knows.
+        log.warning("db export: wal_checkpoint failed (%s) — exporting anyway", e)
     return FileResponse(
         path=str(db.DB_PATH),
         filename=f"gjallarhorn-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db",
