@@ -12,13 +12,44 @@ async function api(path, opts = {}) {
 }
 
 // ---------- tabs ----------
+// Per-tab auto-poll: stays parked while the tab is hidden so a long
+// session doesn't burn CPU on background refreshes. The Mission tab
+// (live ticker, uptime, lifecycle) is the one that visibly benefits
+// from polling — most other tabs are user-driven.
+let _missionPollTimer = null;
+function startMissionPoll() {
+  stopMissionPoll();
+  // 5s feels live without hammering /api/about + /api/missions.
+  _missionPollTimer = setInterval(() => {
+    if (document.hidden) return;
+    refreshMission().catch(() => {});
+  }, 5000);
+}
+function stopMissionPoll() {
+  if (_missionPollTimer) {
+    clearInterval(_missionPollTimer);
+    _missionPollTimer = null;
+  }
+}
+// Pause/resume the poll when the browser tab itself goes
+// background/foreground — Chrome throttles intervals heavily on
+// hidden tabs, but stopping explicitly avoids surprise spikes when
+// the tab comes back.
+document.addEventListener("visibilitychange", () => {
+  const onMission = document.querySelector("#tab-mission.active");
+  if (!onMission) return;
+  if (document.hidden) stopMissionPoll();
+  else { refreshMission().catch(() => {}); startMissionPoll(); }
+});
+
 $$(".tab-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
     $$(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
     const id = btn.dataset.tab;
     $$(".tab").forEach((t) => t.classList.toggle("active", t.id === `tab-${id}`));
     if (id === "map" && map) setTimeout(() => map.invalidateSize(), 50);
-    if (id === "mission") refreshMission();
+    if (id === "mission") { refreshMission(); startMissionPoll(); }
+    else { stopMissionPoll(); }
     if (id === "devices") refreshDevices();
     if (id === "wifi-aps") refreshWifiAps();
     if (id === "locations") refreshLocations();
