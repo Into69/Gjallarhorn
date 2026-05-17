@@ -2584,12 +2584,7 @@ function renderAlertEvent(e) {
   // because nothing flipped it, but there's no actual latch to hold or
   // release. Hide the badge and unlatch button entirely for those.
   // rule_latch defaults to 1 for legacy events that pre-date the column.
-  // absence_gap is a special case: the rule type always latches
-  // server-side (fire once per absence period, regardless of the rule's
-  // latch flag) since 30s-poll spam would be useless. Mirror that here
-  // so the badge shows up even when the rule was saved with latch=0.
-  const ruleLatches = (e.rule_latch ?? 1) !== 0
-    || e.rule_match_type === "absence_gap";
+  const ruleLatches = (e.rule_latch ?? 1) !== 0;
   const latched = ruleLatches
     && (e.cleared === 0 || e.cleared === false || e.cleared == null);
   let latchBadge = "";
