@@ -465,6 +465,50 @@ main { height: calc(100vh - 53px); }
   max-width: 320px;
 }
 
+/* Map-tab "mission running" indicator. Sits at the top-center of the
+   map; clicking jumps to the Mission tab. Hidden when no mission is
+   active. Pulsing dot mirrors the running-state pill style used on the
+   scanner cards so the visual language is consistent. */
+.mission-indicator {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: inline-flex; align-items: center; gap: 8px;
+  background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%);
+  border: 1px solid #2e5a35;
+  border-left: 3px solid var(--ok);
+  border-radius: 999px;
+  padding: 5px 12px 5px 10px;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  font-family: inherit;
+}
+.mission-indicator[hidden] { display: none; }
+.mission-indicator:hover { border-color: var(--ok); }
+.mission-indicator-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+  animation: fix-pulse 1.6s ease-in-out infinite;
+  flex: 0 0 auto;
+}
+.mission-indicator-text {
+  display: inline-flex; align-items: baseline; gap: 8px;
+}
+.mission-indicator-name {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.mission-indicator-elapsed {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Banner shown while the map is in merge-pick mode. Anchored to the top
    centre so it's obvious without covering the map controls in the
    top-left corner. */

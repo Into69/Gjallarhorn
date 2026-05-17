@@ -4188,6 +4188,48 @@ function formatKindLabel(kind, details) {
   return kind || "";
 }
 
+// ---------- mission indicator on map ----------
+// Lightweight poll of the active mission so the map's top-center pill
+// reflects whether a mission is in progress, its name, and the running
+// elapsed time. The pill stays hidden when no mission is active.
+let _missionIndicatorStartedAt = null;
+async function refreshMissionIndicator() {
+  const pill = document.getElementById("mission-indicator");
+  if (!pill) return;
+  try {
+    const r = await api("/api/missions/active");
+    const m = r.mission || null;
+    if (!m) {
+      pill.hidden = true;
+      _missionIndicatorStartedAt = null;
+      return;
+    }
+    pill.hidden = false;
+    const nameEl = pill.querySelector(".mission-indicator-name");
+    if (nameEl) nameEl.textContent = m.name || `Mission #${m.id}`;
+    _missionIndicatorStartedAt = m.started_at ? Date.parse(m.started_at) : null;
+    _tickMissionIndicatorElapsed();
+  } catch {
+    // Leave the pill in whatever state it was — a transient API hiccup
+    // shouldn't flicker the indicator on/off.
+  }
+}
+function _tickMissionIndicatorElapsed() {
+  const pill = document.getElementById("mission-indicator");
+  if (!pill || pill.hidden || !_missionIndicatorStartedAt) return;
+  const el = pill.querySelector(".mission-indicator-elapsed");
+  if (!el) return;
+  const secs = Math.max(0, (Date.now() - _missionIndicatorStartedAt) / 1000);
+  el.textContent = formatUptime(secs);
+}
+// Clicking the pill jumps to the Mission tab — defer to the existing
+// nav-button click handler so all the tab-switch side effects (poll
+// start, etc.) fire the same way they would manually.
+document.getElementById("mission-indicator")?.addEventListener("click", () => {
+  const btn = document.querySelector('.tab-btn[data-tab="mission"]');
+  if (btn) btn.click();
+});
+
 // ---------- mission tab ----------
 // Polls /api/about for live DB stats + runtime info, lays them out in
 // the Mission control panel, and wires the bulk-action buttons that
@@ -4446,6 +4488,7 @@ async function _endActiveMission() {
   try {
     await api(`/api/missions/${active.id}/end`, { method: "POST" });
     await refreshMission();
+    await refreshMissionIndicator();
   } catch (e) {
     alert("Could not end mission: " + (e.message || e));
   }
@@ -4632,6 +4675,7 @@ document.getElementById("mission-start-form")?.addEventListener("submit", async 
     await api("/api/missions", { method: "POST", body: JSON.stringify(payload) });
     ev.target.reset();
     await refreshMission();
+    await refreshMissionIndicator();
   } catch (e) {
     alert("Could not start mission: " + (e.message || e));
   }
@@ -4860,6 +4904,11 @@ function formatTime(iso) {
   refreshTempWhitelist();
   startLogsPolling();
   setInterval(pollGps, 1500);
+  // Mission pill on the map: full refresh every 10s, elapsed-text tick
+  // every second so the duration stays smooth between fetches.
+  refreshMissionIndicator();
+  setInterval(refreshMissionIndicator, 10000);
+  setInterval(_tickMissionIndicatorElapsed, 1000);
   setInterval(refreshLocationMarkers, 5000);
   setInterval(refreshOuiStatus, 10000);
   setInterval(pollAlertsBadge, 4000);
