@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260517i" />
+  <link rel="stylesheet" href="/static/style.css?v=20260517j" />
 </head>
 <body>
   <header>
@@ -271,8 +271,8 @@
             <p class="muted small">No mission in progress. Start one to snapshot the DB and tag the report.</p>
           </div>
           <form id="mission-start-form" class="mission-start-form">
-            <label>Name <input type="text" name="name" placeholder="e.g. Saturday recon" required /></label>
-            <label>Description <input type="text" name="description" placeholder="optional" /></label>
+            <label>Name <input type="text" name="name" placeholder="e.g. Saturday recon" required data-help="Short label for this mission — appears in history, on the PDF cover, and in the map's mission pill. Free-form text." /></label>
+            <label>Description <input type="text" name="description" placeholder="optional" data-help="Optional context for the mission (where you went, what you were looking for). Shown in the mission history table and the PDF report." /></label>
             <button type="submit">Start mission</button>
           </form>
           <details class="mission-history">
@@ -464,7 +464,7 @@
             09:12", "tailed at intersection", "noise spike near
             shopping plaza".
           </p>
-          <textarea id="mission-journal" rows="8" placeholder="Field notes…"></textarea>
+          <textarea id="mission-journal" rows="8" placeholder="Field notes…" data-help="Free-form scratchpad for the current trip. Auto-saves to this browser only (not synced to the DB or shared with other clients). Use it for mid-mission observations you want to keep alongside the captured data."></textarea>
           <div class="toolbar">
             <button id="mission-journal-clear" type="button" class="secondary">Clear notes</button>
             <span id="mission-journal-status" class="muted small"></span>
@@ -503,7 +503,7 @@
         <label title="Show only devices with a best signal at or above this dBm (e.g. -70 = nearby only)">Min RSSI:
           <input type="number" id="dev-min-rssi" placeholder="any" min="-110" max="-20" />
         </label>
-        <input type="search" id="dev-search" placeholder="search MAC / SSID / name / vendor…" autocomplete="off" />
+        <input type="search" id="dev-search" placeholder="search MAC / SSID / name / vendor…" autocomplete="off" data-help="Filters the device list as you type. Matches MAC prefix, SSID/name substring, or vendor substring (case-insensitive). Combine with the kind / RSSI / since dropdowns to narrow further." />
         <label class="mission-switch" title="Merge wifi BSSIDs that share the same first 5 octets — these are typically the same physical AP advertising on multiple bands or SSIDs.">
           <span class="mission-switch-label">Group multi-BSSID APs</span>
           <input type="checkbox" id="dev-group-bssid" checked role="switch" />
@@ -559,7 +559,7 @@
         <label>Location:
           <select id="wap-location"></select>
         </label>
-        <input type="search" id="wap-search" placeholder="search SSID / BSSID / vendor / client MAC…" autocomplete="off" />
+        <input type="search" id="wap-search" placeholder="search SSID / BSSID / vendor / client MAC…" autocomplete="off" data-help="Filters the SSID groups as you type. Matches against SSID, BSSID prefix, vendor, and any client MAC seen probing for that SSID." />
         <label class="mission-switch" title="Hide groups where no AP was captured (clients probing for networks we never saw).">
           <span class="mission-switch-label">Hide probe-only SSIDs</span>
           <input type="checkbox" id="wap-hide-orphans" role="switch" />
@@ -633,7 +633,7 @@
 
           <form id="rule-form" class="rule-form" data-editing-id="">
             <h4 id="rule-form-title">New rule</h4>
-            <label>Name <input type="text" name="name" placeholder="Watch for…" required /></label>
+            <label>Name <input type="text" name="name" placeholder="Watch for…" required data-help="Short label that identifies this rule in the table, in alerts, and in Discord embeds. Pick something specific (e.g. 'My phone home') rather than the match value." /></label>
             <label>Kind
               <select name="kind">
                 <option value="">any</option>
@@ -669,7 +669,7 @@
                 </optgroup>
               </select>
             </label>
-            <label>Value <input type="text" name="match_value" id="rule-match-value" placeholder="aa:bb:cc or 'Apple' or -60" required /></label>
+            <label>Value <input type="text" name="match_value" id="rule-match-value" placeholder="aa:bb:cc or 'Apple' or -60" required data-help="Format depends on the Match type above. The placeholder updates with an example when you change the type." /></label>
             <label>Location
               <select name="location_id" id="rule-location">
                 <option value="">any</option>
@@ -725,7 +725,7 @@
             <button id="alerts-clear" class="danger">Clear feed</button>
           </div>
           <div class="feed-filters">
-            <input type="search" id="alerts-search" placeholder="search id / SSID / vendor…" autocomplete="off" />
+            <input type="search" id="alerts-search" placeholder="search id / SSID / vendor…" autocomplete="off" data-help="Filters the live alert feed. Matches device id (MAC) prefix, SSID/name, or vendor substring. Pair with the kind / rule dropdowns to drill into a specific source." />
             <select id="alerts-kind" title="Filter by device kind">
               <option value="">any kind</option>
               <option value="wifi">wifi</option>
@@ -887,8 +887,8 @@
         <fieldset>
           <legend>GPS</legend>
           <div class="field-row">
-            <label>gpsd host <input type="text" name="gpsd_host" /></label>
-            <label>gpsd port <input type="number" name="gpsd_port" min="1" max="65535" /></label>
+            <label>gpsd host <input type="text" name="gpsd_host" data-help="Hostname or IP of the gpsd daemon. Usually 'localhost' when gpsd runs on the same machine. Empty/null disables the GPS feed." /></label>
+            <label>gpsd port <input type="number" name="gpsd_port" min="1" max="65535" data-help="TCP port gpsd is listening on. Default is 2947." /></label>
           </div>
           <label>Poll interval (s)
             <input type="number" step="0.1" name="gps_poll_interval_s" min="0.2" max="10" />
@@ -970,7 +970,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             merged away and keep their drawn radius.
           </p>
           <label>Label template
-            <input type="text" name="location_label_template" />
+            <input type="text" name="location_label_template" data-help="Template for auto-generated location labels. Tokens like {id}, {lat}, {lon}, {iso} are substituted at create-time. Leave blank to fall back to 'Loc #ID'." />
           </label>
         </fieldset>
         </div>
@@ -1017,7 +1017,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <input type="url" name="discord_webhook_url" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" />
           </label>
           <label>Username
-            <input type="text" name="discord_username" placeholder="Gjallarhorn" />
+            <input type="text" name="discord_username" placeholder="Gjallarhorn" data-help="Display name the Discord webhook posts under. Falls back to 'Gjallarhorn' when empty." />
           </label>
           <div class="toolbar">
             <button type="button" id="discord-test" class="secondary">Send test</button>
@@ -1082,10 +1082,10 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             </select>
           </label>
           <label>Device id (or prefix)
-            <input type="text" name="device_id" placeholder="aa:bb:cc:dd:ee:ff or aa:bb:cc" required />
+            <input type="text" name="device_id" placeholder="aa:bb:cc:dd:ee:ff or aa:bb:cc" required data-help="Full MAC matches exactly. Shorter prefix (3+ octets) matches the whole OUI / vendor block — useful for silencing every device a manufacturer ships." />
           </label>
           <label>Note
-            <input type="text" name="note" placeholder="my phone, work AP, …" />
+            <input type="text" name="note" placeholder="my phone, work AP, …" data-help="Free-form label that shows in the table. Doesn't affect matching — for your own future reference." />
           </label>
           <button type="submit">Add</button>
           <span id="wl-form-status" class="muted"></span>
@@ -1151,7 +1151,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
           <dt>DB file</dt><dd id="oui-file">—</dd>
         </dl>
         <div class="toolbar">
-          <input type="text" id="oui-test-mac" placeholder="aa:bb:cc:dd:ee:ff" />
+          <input type="text" id="oui-test-mac" placeholder="aa:bb:cc:dd:ee:ff" data-help="Paste a MAC address (full or just the first 3 octets) to test the vendor lookup against the loaded OUI database." />
           <button id="oui-test" class="secondary">Look up</button>
           <span id="oui-test-result" class="muted"></span>
         </div>
@@ -1172,7 +1172,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <option value="CRITICAL">critical</option>
           </select>
         </label>
-        <input type="search" id="log-search" placeholder="search logger / message…" autocomplete="off" />
+        <input type="search" id="log-search" placeholder="search logger / message…" autocomplete="off" data-help="Filters the log stream as you type. Matches against logger name and message text (case-insensitive)." />
         <label class="check">
           <input type="checkbox" id="log-autoscroll" checked /> Auto-scroll
         </label>
@@ -1280,6 +1280,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260517i"></script>
+  <script src="/static/app.js?v=20260517j"></script>
 </body>
 </html>

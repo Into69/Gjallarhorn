@@ -2943,8 +2943,13 @@ function enterEditRuleMode(rule) {
   // whitelist muted every rule, and legacy rules carry that semantic.
   form.elements["include_whitelist"].checked = !!rule.include_whitelist;
   setExtraConditions(rule.extra_conditions || []);
-  // Update placeholder for the new match_type without clobbering the value.
-  $("#rule-match-value").placeholder = MATCH_TYPE_PLACEHOLDERS[rule.match_type] || "";
+  // Update placeholder + themed-tooltip text for the new match_type
+  // without clobbering the value.
+  const mv = $("#rule-match-value");
+  mv.placeholder = MATCH_TYPE_PLACEHOLDERS[rule.match_type] || "";
+  if (MATCH_TYPE_PLACEHOLDERS[rule.match_type]) {
+    mv.dataset.help = MATCH_TYPE_PLACEHOLDERS[rule.match_type];
+  }
   $("#rule-form-title").textContent = `Edit rule #${rule.id}`;
   $("#rule-form-submit").textContent = "Update rule";
   $("#rule-form-cancel").hidden = false;
@@ -3044,6 +3049,13 @@ const MATCH_TYPE_DEFAULTS = {
 function applyMatchTypeUI(matchType) {
   const v = $("#rule-match-value");
   v.placeholder = MATCH_TYPE_PLACEHOLDERS[matchType] || "";
+  // Mirror the placeholder into data-help so the themed hover tooltip
+  // gives the operator the same format hint that the placeholder does
+  // — but in full once they've started typing and the placeholder is
+  // no longer visible.
+  if (MATCH_TYPE_PLACEHOLDERS[matchType]) {
+    v.dataset.help = MATCH_TYPE_PLACEHOLDERS[matchType];
+  }
   // Always swap the value to the new type's default (or clear it for free-text
   // types) so a stale value from the previous type can't accidentally submit.
   v.value = MATCH_TYPE_DEFAULTS[matchType] || "";
@@ -4986,8 +4998,88 @@ function formatTime(iso) {
   try { return new Date(iso).toLocaleString(); } catch { return iso; }
 }
 
+// ---------- themed field tooltips ----------
+// One floating element drives every text input's helper popup. Inputs
+// opt in with either an explicit `data-help` attribute or by inheriting
+// from their existing `title` (which we migrate so the browser doesn't
+// also render its own unstyled tooltip on top of ours). Hover and focus
+// both show it; we position above the input by default and flip below
+// if the screen runs out of room.
+const _TIP_INPUT_SELECTOR = (
+  'input[type="text"], input[type="number"], input[type="search"], '
+  + 'input[type="password"], input[type="email"], input[type="url"], textarea'
+);
+function _initFieldTooltips() {
+  // Migrate any `title` on text inputs to `data-help` so the browser's
+  // own unstyled tooltip stops competing with ours. Skip if the input
+  // already declares data-help (explicit wins).
+  for (const el of document.querySelectorAll(_TIP_INPUT_SELECTOR)) {
+    if (!el.dataset.help && el.title) {
+      el.dataset.help = el.title;
+    }
+    if (el.dataset.help && el.title) el.title = "";
+  }
+  const tip = document.createElement("div");
+  tip.className = "field-tooltip";
+  tip.hidden = true;
+  document.body.appendChild(tip);
+  let activeEl = null;
+  const place = () => {
+    if (!activeEl) return;
+    const r = activeEl.getBoundingClientRect();
+    // Measure after content is set so the size is accurate.
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    // Prefer above the field; flip below if there isn't room.
+    const above = r.top - th - 8 >= 6;
+    const top = above ? r.top - th - 8 : Math.min(r.bottom + 8, window.innerHeight - th - 6);
+    const left = Math.max(6, Math.min(r.left, window.innerWidth - tw - 6));
+    tip.style.top = `${top}px`;
+    tip.style.left = `${left}px`;
+  };
+  const show = (el) => {
+    const text = el.dataset.help;
+    if (!text) return;
+    activeEl = el;
+    tip.textContent = text;
+    tip.hidden = false;
+    place();
+  };
+  const hide = () => {
+    activeEl = null;
+    tip.hidden = true;
+  };
+  // Delegate so dynamically-rendered inputs (rule edit form, etc.)
+  // still get tooltips without re-binding.
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
+    if (el && el.dataset.help) show(el);
+  });
+  document.addEventListener("mouseout", (e) => {
+    const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
+    if (!el) return;
+    // Ignore mouseouts that just move between child nodes inside the
+    // same input.
+    if (el.contains(e.relatedTarget)) return;
+    if (activeEl === el && document.activeElement !== el) hide();
+  });
+  document.addEventListener("focusin", (e) => {
+    const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
+    if (el && el.dataset.help) show(el);
+  });
+  document.addEventListener("focusout", (e) => {
+    const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
+    if (el && activeEl === el) hide();
+  });
+  // Keep position correct when the page scrolls / resizes while
+  // a tooltip is visible.
+  window.addEventListener("scroll", place, { passive: true, capture: true });
+  window.addEventListener("resize", place);
+}
+
 // ---------- boot ----------
 (async function main() {
+  _initFieldTooltips();
   await initMap();
   await loadInterfaces();
   await loadSettings();

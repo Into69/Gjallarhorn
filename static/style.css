@@ -311,6 +311,29 @@ main { height: calc(100vh - 53px); }
   max-width: 60%;
 }
 
+/* Themed hover/focus tooltip for text inputs. Same gradient + accent
+   stripe vocabulary as the mission-hero / map info popups so the helper
+   text reads as part of the app rather than the browser's native title
+   tooltip. JS positions an absolutely-placed .field-tooltip near the
+   triggering input on hover or focus. */
+.field-tooltip {
+  position: fixed;
+  z-index: 10000;
+  background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fg);
+  max-width: 320px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  white-space: normal;
+}
+.field-tooltip[hidden] { display: none; }
+
 /* ── leaflet location tooltip (themed) ─────────────── */
 .leaflet-tooltip.gj-tip {
   background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%);
