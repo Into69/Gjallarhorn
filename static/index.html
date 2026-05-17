@@ -345,7 +345,7 @@
             observations data. All actions are destructive — confirm
             prompts spell out the exact scope.
           </p>
-          <div class="mission-action-grid">
+          <div id="mission-locdev-grid" class="mission-action-grid">
             <button id="mission-reset" type="button" class="danger">
               Reset auto clusters
               <span class="mission-action-hint">Wipe auto-clustered locations + their devices/observations. Drawn geofences and whitelist history are preserved.</span>
@@ -374,6 +374,10 @@
               Delete all Wi-Fi clients
               <span class="mission-action-hint">Removes every probe-request capture and their observations.</span>
             </button>
+          </div>
+          <div id="mission-locdev-progress-row" class="mission-locdev-progress" hidden>
+            <progress id="mission-locdev-progress"></progress>
+            <span class="muted small">Working… the page will refresh when done.</span>
           </div>
         </section>
 

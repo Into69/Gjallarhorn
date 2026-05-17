@@ -1099,6 +1099,14 @@ body.stealth-mode .mission-status-grid dd { visibility: hidden; }
 .toolbar input[type="search"] { min-width: 220px; }
 .toolbar input[type="number"] { width: 70px; }
 
+.mission-locdev-progress {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+}
+.mission-locdev-progress progress { flex: 1; height: 10px; }
+
 /* Themed inline progress bar (used by the Locations "Merge contained"
    stepper). Plain <progress> is browser-styled, so we override both the
    webkit and firefox pseudo-elements. */

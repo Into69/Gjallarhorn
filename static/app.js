@@ -3519,17 +3519,22 @@ function renderPauseButton(paused) {
   _pausedState = paused;
   const btn = $("#map-pause");
   const icon = $("#map-pause-icon");
-  if (!btn || !icon) return;
-  if (paused) {
-    btn.classList.add("paused");
-    btn.title = "PAUSED — scanning, alerts, and new locations are suspended. Click to resume.";
-    btn.setAttribute("aria-label", "Resume scanning");
-    icon.innerHTML = ICON_PLAY;
-  } else {
-    btn.classList.remove("paused");
-    btn.title = "Pause scanning, alerts, and new-location creation";
-    btn.setAttribute("aria-label", "Pause scanning");
-    icon.innerHTML = ICON_PAUSE;
+  if (btn && icon) {
+    if (paused) {
+      btn.classList.add("paused");
+      btn.title = "PAUSED — scanning, alerts, and new locations are suspended. Click to resume.";
+      btn.setAttribute("aria-label", "Resume scanning");
+      icon.innerHTML = ICON_PLAY;
+    } else {
+      btn.classList.remove("paused");
+      btn.title = "Pause scanning, alerts, and new-location creation";
+      btn.setAttribute("aria-label", "Pause scanning");
+      icon.innerHTML = ICON_PAUSE;
+    }
+  }
+  const missionBtn = $("#mission-pause");
+  if (missionBtn) {
+    missionBtn.textContent = paused ? "Resume scanning" : "Pause scanning";
   }
 }
 
@@ -4277,8 +4282,7 @@ async function refreshMission() {
       api("/api/probe/status").catch(() => ({})),
     ]);
     const isPaused = !!paused.paused;
-    const btn = document.getElementById("mission-pause");
-    if (btn) btn.textContent = isPaused ? "Resume scanning" : "Pause scanning";
+    renderPauseButton(isPaused);
     const loc = document.getElementById("mission-stat-active-loc");
     if (loc) loc.textContent = gps.active_location_id != null
       ? `#${gps.active_location_id}` : "—";
@@ -4494,34 +4498,64 @@ async function _endActiveMission() {
   }
 }
 
-async function _missionAction(btn, label, fn) {
+async function _missionAction(btn, label, fn, opts = {}) {
   const status = document.getElementById("mission-action-status");
+  const progressRow = opts.progressRowId
+    ? document.getElementById(opts.progressRowId) : null;
+  const otherBtns = opts.disableSiblings
+    ? Array.from(opts.disableSiblings.querySelectorAll("button")).filter(b => b !== btn)
+    : [];
   const orig = btn.textContent;
   btn.disabled = true;
   btn.textContent = label;
+  otherBtns.forEach(b => { b.disabled = true; });
   if (status) status.textContent = "";
+  if (progressRow) progressRow.hidden = false;
+  let ok = false;
   try {
     const msg = await fn();
     if (status && msg) status.textContent = msg;
+    ok = true;
   } catch (e) {
     if (status) status.textContent = "error: " + (e.message || String(e));
   } finally {
+    if (ok && opts.reloadOnSuccess) {
+      // Keep the progress bar visible right up to the reload so the
+      // operator sees the action ran to completion. Buttons stay
+      // disabled too — the page is about to be replaced.
+      window.location.reload();
+      return;
+    }
     btn.disabled = false;
     btn.textContent = orig;
+    otherBtns.forEach(b => { b.disabled = false; });
+    if (progressRow) progressRow.hidden = true;
     await refreshMission();
   }
 }
 
+// Shared opts for every button in the Mission > Locations & devices
+// section: show the indeterminate progress bar, lock the sibling
+// buttons so a second action can't pile on, then hard-reload on
+// success so every tab/table re-derives from the new DB state.
+const _LOCDEV_ACTION_OPTS = () => ({
+  progressRowId: "mission-locdev-progress-row",
+  disableSiblings: document.getElementById("mission-locdev-grid"),
+  reloadOnSuccess: true,
+});
+
 document.getElementById("mission-refresh")?.addEventListener("click", refreshMission);
 
 document.getElementById("mission-pause")?.addEventListener("click", async () => {
+  const next = !_pausedState;
+  renderPauseButton(next);
   try {
-    const r = await api("/api/system/pause", { method: "POST" });
-    const btn = document.getElementById("mission-pause");
-    if (btn) btn.textContent = r.paused ? "Resume scanning" : "Pause scanning";
-    const stateEl = document.getElementById("mission-stat-state");
-    if (stateEl) stateEl.textContent = r.paused ? "paused" : "running";
+    const r = await api("/api/system/pause", {
+      method: "POST", body: JSON.stringify({ paused: next }),
+    });
+    renderPauseButton(!!r.paused);
   } catch (e) {
+    renderPauseButton(!next);
     alert("Could not toggle pause: " + (e.message || e));
   }
 });
@@ -4542,7 +4576,7 @@ document.getElementById("mission-reset")?.addEventListener("click", (e) => {
          + `${d.devices || 0} device row(s), `
          + `${d.observations || 0} observation(s)`
          + (d.preserved ? ` · archived ${d.preserved} whitelist row(s)` : "");
-  });
+  }, _LOCDEV_ACTION_OPTS());
 });
 
 document.getElementById("mission-delete-all")?.addEventListener("click", (e) => {
@@ -4559,7 +4593,7 @@ document.getElementById("mission-delete-all")?.addEventListener("click", (e) => 
     return `Deleted ${d.locations || 0} location(s), `
          + `${d.devices || 0} device(s), `
          + `${d.observations || 0} observation(s)`;
-  });
+  }, _LOCDEV_ACTION_OPTS());
 });
 
 document.getElementById("mission-purge")?.addEventListener("click", (e) => {
@@ -4573,7 +4607,7 @@ document.getElementById("mission-purge")?.addEventListener("click", (e) => {
     const r = await api("/api/maintenance/purge", { method: "POST", body: "{}" });
     const rm = r.removed || {};
     return `Removed ${rm.observations || 0} observation(s) and ${rm.devices || 0} device row(s)`;
-  });
+  }, _LOCDEV_ACTION_OPTS());
 });
 
 document.getElementById("mission-clear-alerts")?.addEventListener("click", (e) => {
@@ -4658,7 +4692,7 @@ document.querySelectorAll(".mission-kind-delete").forEach((btn) => {
         method: "POST",
       });
       return `Removed ${r.devices || 0} device row(s) and ${r.observations || 0} observation(s)`;
-    });
+    }, _LOCDEV_ACTION_OPTS());
   });
 });
 
