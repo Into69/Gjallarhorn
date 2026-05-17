@@ -2334,6 +2334,7 @@ const MATCH_TYPE_LABEL = {
   arrival_after_gap: "arrival after N min gap",
   absence_gap: "absence ≥ N min",
   sustained_presence: "presence ⇄ absence (N min)",
+  wifi_association: "wifi client → SSID",
 };
 let alertsLastSeenId = 0;
 
@@ -2950,6 +2951,20 @@ function enterEditRuleMode(rule) {
   if (MATCH_TYPE_PLACEHOLDERS[rule.match_type]) {
     mv.dataset.help = MATCH_TYPE_PLACEHOLDERS[rule.match_type];
   }
+  // wifi_association rules round-trip via the two-input composer; show
+  // it, populate datalists, and split the stored 'client@ssid' back
+  // into its parts so the operator sees the same form they originally
+  // submitted.
+  const isWifiAssoc = rule.match_type === "wifi_association";
+  const valLabel = $("#rule-match-value-label");
+  const composer = $("#rule-wifi-assoc");
+  if (valLabel) valLabel.hidden = isWifiAssoc;
+  if (composer) composer.hidden = !isWifiAssoc;
+  mv.required = !isWifiAssoc;
+  if (isWifiAssoc) {
+    _setWifiAssocFromValue(rule.match_value);
+    _populateWifiAssocLists();
+  }
   $("#rule-form-title").textContent = `Edit rule #${rule.id}`;
   $("#rule-form-submit").textContent = "Update rule";
   $("#rule-form-cancel").hidden = false;
@@ -2962,6 +2977,13 @@ function exitEditRuleMode() {
   const form = $("#rule-form");
   form.dataset.editingId = "";
   form.reset();
+  // form.reset() clears the named inputs but the wifi_association
+  // composer inputs (id-only, not name) are cleared explicitly so a
+  // stale value doesn't leak into the next rule.
+  const c = $("#rule-wifi-assoc-client");
+  const s = $("#rule-wifi-assoc-ssid");
+  if (c) c.value = "";
+  if (s) s.value = "";
   applyMatchTypeUI($("#rule-match-type").value);
   setExtraConditions([]);
   $("#rule-form-title").textContent = "New rule";
@@ -3029,6 +3051,7 @@ const MATCH_TYPE_PLACEHOLDERS = {
   arrival_after_gap: "30 — fire when this device shows up after ≥30 min away (0 = every sighting)",
   absence_gap: "30 — fire when this device hasn't been seen at the location for ≥30 min",
   sustained_presence: "10 (or 10/5) — flip-flop: 'present' after ≥10 min continuous, 'absent' after >5 min silent. Add @aa:bb,cc:dd to bind multiple ids to one conceptual device (e.g. a phone's wifi+ble MACs share one state).",
+  wifi_association: "aa:bb:cc@MyNetwork — fires when this client (MAC or OUI prefix) probes for this SSID. Leave either side blank for 'any'.",
 };
 const MATCH_TYPE_DEFAULTS = {
   rssi_above: "-60",
@@ -3044,6 +3067,7 @@ const MATCH_TYPE_DEFAULTS = {
   arrival_after_gap: "30",
   absence_gap: "30",
   sustained_presence: "10",
+  wifi_association: "@",
 };
 
 function applyMatchTypeUI(matchType) {
@@ -3056,12 +3080,97 @@ function applyMatchTypeUI(matchType) {
   if (MATCH_TYPE_PLACEHOLDERS[matchType]) {
     v.dataset.help = MATCH_TYPE_PLACEHOLDERS[matchType];
   }
+  // wifi_association swaps the plain Value field for a two-input
+  // composer (client + SSID) with datalists populated from already-
+  // scanned data. Form submit/edit logic round-trips the pair to and
+  // from the underlying match_value string.
+  const isWifiAssoc = matchType === "wifi_association";
+  const valLabel = $("#rule-match-value-label");
+  const composer = $("#rule-wifi-assoc");
+  if (valLabel) valLabel.hidden = isWifiAssoc;
+  v.required = !isWifiAssoc;
+  if (composer) composer.hidden = !isWifiAssoc;
+  if (isWifiAssoc) {
+    // Auto-set the kind filter to wifi_client since this rule only
+    // fires on probe-request sightings.
+    const kindEl = $('#rule-form select[name="kind"]');
+    if (kindEl && !kindEl.value) kindEl.value = "wifi_client";
+    _populateWifiAssocLists();
+  }
   // Always swap the value to the new type's default (or clear it for free-text
   // types) so a stale value from the previous type can't accidentally submit.
   v.value = MATCH_TYPE_DEFAULTS[matchType] || "";
 }
 $("#rule-match-type").addEventListener("change", (e) => applyMatchTypeUI(e.target.value));
 applyMatchTypeUI($("#rule-match-type").value);
+
+// wifi_association composer: keep the underlying match_value in sync
+// with the two-input UI so the existing form submit path still sees a
+// single string. Bidirectional — typing in either input writes the
+// composed value, and parseWifiAssoc(...) splits a stored string back
+// into the two fields when entering edit mode.
+function _syncWifiAssocToHidden() {
+  const client = ($("#rule-wifi-assoc-client")?.value || "").trim();
+  const ssid = ($("#rule-wifi-assoc-ssid")?.value || "").trim();
+  $("#rule-match-value").value = `${client}@${ssid}`;
+}
+$("#rule-wifi-assoc-client")?.addEventListener("input", _syncWifiAssocToHidden);
+$("#rule-wifi-assoc-ssid")?.addEventListener("input", _syncWifiAssocToHidden);
+$("#rule-wifi-assoc-client")?.addEventListener("change", _syncWifiAssocToHidden);
+$("#rule-wifi-assoc-ssid")?.addEventListener("change", _syncWifiAssocToHidden);
+
+function _setWifiAssocFromValue(value) {
+  const s = String(value || "");
+  const idx = s.indexOf("@");
+  const client = idx >= 0 ? s.slice(0, idx) : "";
+  const ssid = idx >= 0 ? s.slice(idx + 1) : s;
+  const c = $("#rule-wifi-assoc-client");
+  const ss = $("#rule-wifi-assoc-ssid");
+  if (c) c.value = client;
+  if (ss) ss.value = ssid;
+}
+
+// Datalists for the two composer inputs — populated from the same
+// /api/wifi/aps payload the WiFi AP tab uses, dedup'd into a flat list
+// of known clients (MACs) and SSIDs. Cached briefly so a quick open of
+// the form doesn't re-fetch.
+let _wifiAssocCache = { at: 0, clients: [], ssids: [] };
+async function _populateWifiAssocLists() {
+  const now = Date.now();
+  const fresh = (now - _wifiAssocCache.at) < 30000;
+  if (!fresh) {
+    try {
+      const data = await api("/api/wifi/aps");
+      const ssids = new Set();
+      const clients = new Set();
+      for (const ap of data.aps || []) {
+        if (ap.ssid) ssids.add(ap.ssid);
+        // Probe-request clients land under every SSID they named.
+        for (const c of (ap.clients || [])) {
+          if (c.device_id) clients.add(c.device_id);
+        }
+      }
+      _wifiAssocCache = {
+        at: now,
+        ssids: Array.from(ssids).sort(),
+        clients: Array.from(clients).sort(),
+      };
+    } catch {
+      // Leave any prior cache in place — the user can still type a
+      // value, the datalist just won't suggest anything.
+    }
+  }
+  const ssidList = $("#rule-wifi-ssid-list");
+  const clientList = $("#rule-wifi-client-list");
+  if (ssidList) {
+    ssidList.innerHTML = _wifiAssocCache.ssids
+      .map(s => `<option value="${escapeAttr(s)}"></option>`).join("");
+  }
+  if (clientList) {
+    clientList.innerHTML = _wifiAssocCache.clients
+      .map(c => `<option value="${escapeAttr(c)}"></option>`).join("");
+  }
+}
 
 // ---------- OUI ----------
 function formatBytes(n) {

@@ -506,9 +506,15 @@ class ScanOrchestrator:
             )
         else:
             is_new = False
+        # `_last_ssid` is the SSID captured in *this* probe (not the
+        # accumulated list). Used by the wifi_association rule to fire
+        # only when a client probes for a specific network on this scan,
+        # without treating every subsequent sighting as a re-match just
+        # because the SSID is still in the device's history.
+        eval_details = {**details, "_last_ssid": new_ssid}
         await alert_service.evaluate(
             device_kind="wifi_client", device_id=mac, rssi=rssi,
-            location_id=loc_id, details=details, is_new=is_new,
+            location_id=loc_id, details=eval_details, is_new=is_new,
             speed_mps=fix.speed,
         )
 

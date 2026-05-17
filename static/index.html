@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260517j" />
+  <link rel="stylesheet" href="/static/style.css?v=20260517k" />
 </head>
 <body>
   <header>
@@ -659,6 +659,9 @@
                   <option value="absence_gap">absence at location (no sighting for N min)</option>
                   <option value="sustained_presence">presence ⇄ absence flip-flop (N min sustained / G min gap, optional @id aliases)</option>
                 </optgroup>
+                <optgroup label="WiFi">
+                  <option value="wifi_association">wifi client probes for SSID (client → AP)</option>
+                </optgroup>
                 <optgroup label="Follower detection">
                   <option value="co_arrival_transit">co-arrival on transit: M of last N arrivals within W s</option>
                   <option value="travel_time_companion">travel-time companion: ≥T s of sightings at ≥V m/s</option>
@@ -669,7 +672,24 @@
                 </optgroup>
               </select>
             </label>
-            <label>Value <input type="text" name="match_value" id="rule-match-value" placeholder="aa:bb:cc or 'Apple' or -60" required data-help="Format depends on the Match type above. The placeholder updates with an example when you change the type." /></label>
+            <label id="rule-match-value-label">Value <input type="text" name="match_value" id="rule-match-value" placeholder="aa:bb:cc or 'Apple' or -60" required data-help="Format depends on the Match type above. The placeholder updates with an example when you change the type." /></label>
+            <div id="rule-wifi-assoc" class="rule-wifi-assoc" hidden>
+              <div class="rule-wifi-assoc-row">
+                <label>Client (MAC / prefix)
+                  <input type="text" id="rule-wifi-assoc-client" list="rule-wifi-client-list" placeholder="aa:bb:cc:dd:ee:ff (blank = any)" autocomplete="off" data-help="Wifi client MAC (full) or a prefix (e.g. 'aa:bb:cc' to catch a whole OUI). Pick from the dropdown of clients already captured, or type a custom value. Leave blank to fire for any client probing the SSID below." />
+                </label>
+                <span class="rule-wifi-assoc-arrow" aria-hidden="true">→</span>
+                <label>SSID
+                  <input type="text" id="rule-wifi-assoc-ssid" list="rule-wifi-ssid-list" placeholder="MyHomeWifi (blank = any new SSID)" autocomplete="off" data-help="Network name (SSID) the client is probing for. Pick from the dropdown of SSIDs already observed, or type one. Leave blank to fire on any newly-probed SSID for the client above." />
+                </label>
+              </div>
+              <datalist id="rule-wifi-client-list"></datalist>
+              <datalist id="rule-wifi-ssid-list"></datalist>
+              <p class="muted small">
+                Probe requests only — we can't see actual 802.11 associations, so this
+                fires when a client *advertises interest* in the named network.
+              </p>
+            </div>
             <label>Location
               <select name="location_id" id="rule-location">
                 <option value="">any</option>
@@ -1280,6 +1300,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260517j"></script>
+  <script src="/static/app.js?v=20260517k"></script>
 </body>
 </html>

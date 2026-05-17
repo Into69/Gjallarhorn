@@ -452,6 +452,42 @@ class AlertService:
                     except Exception:
                         pass
                 continue
+            elif mt == "wifi_association":
+                # "A wifi device probed for an access point" — fires only
+                # on wifi_client sightings whose *current* probe (the SSID
+                # captured this scan, stashed in details._last_ssid by
+                # _on_probe) matches the rule's target SSID, optionally
+                # narrowed to a specific client MAC / OUI prefix.
+                #
+                # match_value: 'client@ssid'. Either side may be blank to
+                # mean "any". The @ delimiter is mandatory so the form
+                # round-trips cleanly even when one side is empty.
+                if device_kind != "wifi_client":
+                    continue
+                parsed = _parse_wifi_association_value(rule.get("match_value") or "")
+                if parsed is None:
+                    continue
+                target_client, target_ssid = parsed
+                if target_client and not (
+                    device_id_l == target_client
+                    or device_id_l.startswith(target_client)
+                ):
+                    continue
+                last_ssid = (details.get("_last_ssid") or "")
+                if target_ssid and last_ssid != target_ssid:
+                    continue
+                if not target_ssid and not last_ssid:
+                    # 'any' on both sides without a fresh SSID is the
+                    # equivalent of every wifi_client tick — refuse to
+                    # fire on noise.
+                    continue
+                details = {
+                    **details,
+                    "_wifi_assoc_client": device_id_l,
+                    "_wifi_assoc_ssid": last_ssid,
+                    "_wifi_assoc_target_client": target_client,
+                    "_wifi_assoc_target_ssid": target_ssid,
+                }
             elif mt == "cross_kind_co_travel":
                 # match_value: "M/H" — a device of the *other* kind shares
                 # ≥ M of this device's locations within the last H hours.
@@ -1305,6 +1341,26 @@ def build_discord_payload(
             fields.append({
                 "name": "Arrival", "value": value, "inline": True,
             })
+    if match_type == "wifi_association":
+        client = details.get("_wifi_assoc_client")
+        ssid = details.get("_wifi_assoc_ssid")
+        target_client = details.get("_wifi_assoc_target_client")
+        target_ssid = details.get("_wifi_assoc_target_ssid")
+        if client and ssid:
+            fields.append({
+                "name": "Probed",
+                "value": f"`{client}` → SSID `{ssid}`",
+                "inline": False,
+            })
+        if target_client or target_ssid:
+            fields.append({
+                "name": "Rule match",
+                "value": (
+                    f"client `{target_client or 'any'}` "
+                    f"+ SSID `{target_ssid or 'any'}`"
+                ),
+                "inline": True,
+            })
     if match_type == "sustained_presence":
         side = details.get("_presence_state")
         thr = details.get("_presence_threshold_minutes")
@@ -1527,6 +1583,19 @@ def _matches_any_alias(device_id_l: str, aliases: list[str]) -> bool:
         if device_id_l == a or device_id_l.startswith(a):
             return True
     return False
+
+
+def _parse_wifi_association_value(value: str) -> tuple[str, str] | None:
+    """Parse 'client@ssid' for the wifi_association rule into
+    (client_id_or_prefix_lower, ssid). Either side may be empty (the
+    sentinel '@' alone is the only string that's outright rejected, so
+    a half-empty value still works for 'any client probes for SSID X'
+    or 'this client probes for any new SSID' style rules). Returns
+    None when no '@' delimiter is present."""
+    if "@" not in (value or ""):
+        return None
+    client, ssid = value.split("@", 1)
+    return client.strip().lower(), ssid.strip()
 
 
 def _parse_absence_gap_value(value: str) -> int | None:
