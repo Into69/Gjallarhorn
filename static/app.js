@@ -2749,12 +2749,12 @@ function playAlarm() {
 }
 
 function showAlertOnMap(e) {
-  // The visual toast can be suppressed via the Mission tab's "Hide alert
-  // popups" toggle without muting the audible alarm — the operator still
+  // The visual toast can be suppressed via the Mission control "Alert
+  // popups" slider without muting the audible alarm — the operator still
   // hears the rule fire, just no on-screen pop. Default (flag undefined)
-  // is to show the toast.
+  // is to show the toast; only an explicit `false` suppresses.
   const stack = $("#alert-toasts");
-  if (!stack || window._missionHideAlertPopups) {
+  if (!stack || window._missionShowAlertPopups === false) {
     if (e.rule_audible) playAlarm();
     return;
   }
@@ -4817,7 +4817,7 @@ document.getElementById("mission-report")?.addEventListener("click", async () =>
 // alerting on what it sees.
 (function setupMissionToggles() {
   const mute = document.getElementById("mission-mute-alarms");
-  const hidePopups = document.getElementById("mission-hide-alert-popups");
+  const showPopups = document.getElementById("mission-show-alert-popups");
   const stealth = document.getElementById("mission-stealth");
   const skipRec = document.getElementById("mission-skip-recording");
   const read = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -4831,12 +4831,16 @@ document.getElementById("mission-report")?.addEventListener("click", async () =>
       write("muteAudibleAlarms", mute.checked);
     });
   }
-  if (hidePopups) {
-    hidePopups.checked = read("hideAlertPopups") === "1";
-    window._missionHideAlertPopups = hidePopups.checked;
-    hidePopups.addEventListener("change", () => {
-      window._missionHideAlertPopups = hidePopups.checked;
-      write("hideAlertPopups", hidePopups.checked);
+  if (showPopups) {
+    // Default ON when no value has been written yet — popups have always
+    // shown by default and we don't want flipping a quiet machine on by
+    // adding the toggle.
+    const stored = read("showAlertPopups");
+    showPopups.checked = stored === null ? true : stored === "1";
+    window._missionShowAlertPopups = showPopups.checked;
+    showPopups.addEventListener("change", () => {
+      window._missionShowAlertPopups = showPopups.checked;
+      write("showAlertPopups", showPopups.checked);
     });
   }
   if (stealth) {

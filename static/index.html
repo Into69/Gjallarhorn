@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=20260517a" />
 </head>
 <body>
   <header>
@@ -226,6 +226,13 @@
             </p>
           </div>
           <div class="mission-hero-actions">
+            <label class="mission-switch" title="Toggle the corner alert toasts. Off suppresses just the visual pop — the alert is still recorded server-side, the badge still updates, and audible alarms keep their own mute toggle.">
+              <span class="mission-switch-label">Alert popups</span>
+              <input type="checkbox" id="mission-show-alert-popups" role="switch" />
+              <span class="mission-switch-track" aria-hidden="true">
+                <span class="mission-switch-thumb"></span>
+              </span>
+            </label>
             <button id="mission-pause" type="button" class="secondary">Pause scanning</button>
             <button id="mission-refresh" type="button" class="secondary">Refresh</button>
           </div>
@@ -292,10 +299,6 @@
             <label class="check">
               <input type="checkbox" id="mission-mute-alarms" />
               Mute audible alarms (this browser only)
-            </label>
-            <label class="check">
-              <input type="checkbox" id="mission-hide-alert-popups" title="Suppresses the corner toasts when a rule fires. The alert is still recorded server-side and the badge still updates — only the visual pop is skipped." />
-              Hide alert popups (this browser only)
             </label>
             <label class="check">
               <input type="checkbox" id="mission-stealth" />
@@ -1231,6 +1234,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20260517a"></script>
 </body>
 </html>

@@ -694,8 +694,64 @@ details.wap-group[open] > summary { border-bottom: 1px solid var(--border); }
   color: var(--accent);
 }
 .mission-hero-actions {
-  display: flex; gap: 8px; flex-wrap: wrap;
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
 }
+
+/* Slider toggle on the Mission control hero — visually distinct from the
+   plain .check checkboxes in Quick toggles so it reads as a hardware-style
+   on/off rather than a settings tick. Underlying input is a checkbox; the
+   track + thumb are pure CSS off the :checked state. */
+.mission-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--fg);
+  user-select: none;
+}
+.mission-switch-label { color: var(--muted); }
+.mission-switch input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0; height: 0;
+  pointer-events: none;
+}
+.mission-switch-track {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  transition: background 140ms ease, border-color 140ms ease;
+  flex-shrink: 0;
+}
+.mission-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: var(--muted);
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  transition: transform 140ms ease, background 140ms ease;
+}
+.mission-switch input:checked ~ .mission-switch-track {
+  background: rgba(121, 224, 140, 0.28);
+  border-color: var(--ok);
+}
+.mission-switch input:checked ~ .mission-switch-track .mission-switch-thumb {
+  transform: translateX(20px);
+  background: var(--ok);
+}
+.mission-switch input:focus-visible ~ .mission-switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.mission-switch:hover .mission-switch-label { color: var(--fg); }
 .mission-card {
   background: var(--panel);
   border: 1px solid var(--border);
