@@ -2749,11 +2749,18 @@ function playAlarm() {
 }
 
 function showAlertOnMap(e) {
+  // The visual toast can be suppressed via the Mission tab's "Hide alert
+  // popups" toggle without muting the audible alarm — the operator still
+  // hears the rule fire, just no on-screen pop. Default (flag undefined)
+  // is to show the toast.
+  const stack = $("#alert-toasts");
+  if (!stack || window._missionHideAlertPopups) {
+    if (e.rule_audible) playAlarm();
+    return;
+  }
   // Render as a floating toast in the map's corner — no longer pinned to
   // any location bubble, so the popup shows even if the marker isn't on
   // screen and doesn't drag the user's eye away from what they were looking at.
-  const stack = $("#alert-toasts");
-  if (!stack) return;
   const det = e.details || {};
   const label = det.ssid || det.name || "";
   const vendor = det.vendor || "";
@@ -4810,6 +4817,7 @@ document.getElementById("mission-report")?.addEventListener("click", async () =>
 // alerting on what it sees.
 (function setupMissionToggles() {
   const mute = document.getElementById("mission-mute-alarms");
+  const hidePopups = document.getElementById("mission-hide-alert-popups");
   const stealth = document.getElementById("mission-stealth");
   const skipRec = document.getElementById("mission-skip-recording");
   const read = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -4821,6 +4829,14 @@ document.getElementById("mission-report")?.addEventListener("click", async () =>
     mute.addEventListener("change", () => {
       window._missionMuteAlarms = mute.checked;
       write("muteAudibleAlarms", mute.checked);
+    });
+  }
+  if (hidePopups) {
+    hidePopups.checked = read("hideAlertPopups") === "1";
+    window._missionHideAlertPopups = hidePopups.checked;
+    hidePopups.addEventListener("change", () => {
+      window._missionHideAlertPopups = hidePopups.checked;
+      write("hideAlertPopups", hidePopups.checked);
     });
   }
   if (stealth) {
