@@ -1884,8 +1884,13 @@ function updateProbeChannelsSummary(selected) {
     out.textContent = "none selected — hopping disabled";
     return;
   }
-  const list = _serializeChannels(selected);
-  out.textContent = `${selected.size} selected: ${list}`;
+  // Concise label only: per-band breakdown already lives in each band
+  // header's count badge, and the pills themselves show which channels
+  // are on. Listing every channel here used to push the header row out
+  // to ~200 chars once the 6 GHz block was fully selected, forcing
+  // horizontal scroll on the settings tab.
+  const total = selected.size;
+  out.textContent = `${total} channel${total === 1 ? "" : "s"} selected · ~${(total * 100 / 1000).toFixed(1)} s for one full rotation at 100 ms dwell`;
 }
 
 async function refreshProbeChannelsForIface(_iface) {

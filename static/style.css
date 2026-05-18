@@ -1964,8 +1964,22 @@ select option:disabled { color: var(--muted); }
 .probe-channels-header {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin-bottom: 8px;
+  min-width: 0;
 }
 .probe-channels-header .secondary { padding: 4px 10px; font-size: 12px; }
+.probe-channels-header > span { min-width: 0; }
+/* Summary text drops to its own full-width row BELOW the buttons so
+   the title row stays compact and a long selection list never widens
+   the parent. `order: 1` floats it past the title/spacer/buttons
+   (all default order 0) without touching the HTML structure. */
+#probe-channels-summary {
+  order: 1;
+  flex-basis: 100%;
+  white-space: normal;
+  word-break: break-word;
+  font-size: 11px;
+  margin-top: 2px;
+}
 
 /* Band-grouped channel picker. Each band is its own section with a
    header showing the WiFi standards that use it, a 'N / total'
