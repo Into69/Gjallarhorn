@@ -80,6 +80,13 @@ class ProbeScanner:
         self._channel_set_count: int = 0
         # Channels we've already warned about so we don't spam logs.
         self._warned_channels: set[int] = set()
+        # Channels that `iw set channel` has rejected this session (e.g.
+        # the kernel reports 'Unknown channel' on a 6 GHz channel for a
+        # 2.4-GHz-only adapter). Disabled channels are skipped on every
+        # subsequent hop so the loop doesn't waste a dwell tick on them.
+        # Cleared on each start() so the operator can fix the underlying
+        # cause and re-test without editing settings.
+        self._disabled_channels: set[int] = set()
 
     @property
     def running(self) -> bool:
@@ -111,6 +118,7 @@ class ProbeScanner:
             "auto_monitor": self._auto_monitor,
             "channels": list(self._channels),
             "hop_ms": self._hop_ms,
+            "disabled_channels": sorted(self._disabled_channels),
             "current_channel": self._current_channel,
             "last_error": self._last_error,
             "last_channel_error": self._last_channel_error,
@@ -246,14 +254,36 @@ class ProbeScanner:
             self._current_channel = None
 
     async def _channel_hop(self) -> None:
-        """Cycle the interface through self._channels until stop is signalled."""
+        """Cycle the interface through self._channels until stop is signalled.
+
+        Channels the kernel rejects (`iw set channel` returns non-zero,
+        typically 'Unknown channel' / EINVAL on adapters that don't
+        support that band) are added to _disabled_channels and skipped
+        on every subsequent iteration this session, so the loop doesn't
+        burn its dwell budget retrying a hop the radio will never honour.
+        """
         if not self._channels or not self._iface:
             return
         self._warned_channels.clear()
+        self._disabled_channels.clear()
         self._last_channel_error = None
         i = 0
         while not self._stop.is_set():
-            ch = self._channels[i % len(self._channels)]
+            # Filter out anything the kernel has already rejected. Done
+            # fresh each iteration so a 'set channel' that succeeded
+            # earlier can clear its slot.
+            active = [c for c in self._channels if c not in self._disabled_channels]
+            if not active:
+                log.error(
+                    "probe scanner: every configured channel rejected by the kernel "
+                    "on %s — exiting hop loop. Disable bad channels in Settings, or "
+                    "restart the scanner to retry.",
+                    self._iface,
+                )
+                self._last_channel_error = "all configured channels rejected by the kernel"
+                self._current_channel = None
+                return
+            ch = active[i % len(active)]
             rc, _, err = await _run_cmd(["iw", "dev", self._iface, "set", "channel", str(ch)])
             if rc == 0:
                 self._current_channel = ch
@@ -262,12 +292,19 @@ class ProbeScanner:
             else:
                 msg = (err.strip() or f"rc={rc}")
                 self._last_channel_error = f"ch{ch}: {msg}"
-                # Warn once per failing channel per session so logs aren't spammed
-                # but the user can see *why* current_channel isn't advancing.
+                # Disable the channel for this session so the loop
+                # doesn't keep trying it. Warn once so the operator can
+                # see why their selection just shrunk.
+                self._disabled_channels.add(ch)
                 if ch not in self._warned_channels:
                     self._warned_channels.add(ch)
-                    log.warning("probe scanner: iw set channel %s failed on %s: %s",
-                                ch, self._iface, msg)
+                    log.warning(
+                        "probe scanner: iw set channel %s failed on %s: %s — "
+                        "channel disabled for this session (%d of %d still active)",
+                        ch, self._iface, msg,
+                        len(self._channels) - len(self._disabled_channels),
+                        len(self._channels),
+                    )
             i += 1
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._hop_ms / 1000.0)

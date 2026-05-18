@@ -2032,6 +2032,19 @@ select option:disabled { color: var(--muted); }
   background: rgba(121, 224, 140, 0.08);
 }
 .probe-channel:hover { border-color: var(--accent); }
+/* Channel rejected by the kernel this session (iw set channel returned
+   non-zero). Muted + warn-tinted so the operator can see at a glance
+   which selections aren't actually being honoured. Still clickable so
+   they can deselect it. */
+.probe-channel.channel-disabled {
+  opacity: 0.55;
+  border-color: rgba(255, 184, 107, 0.5);
+  background: rgba(255, 184, 107, 0.06);
+}
+.probe-channel.channel-disabled .probe-channel-num::after {
+  content: " ✕";
+  color: var(--warn);
+}
 
 /* Whitelist panel form. */
 .wl-form {

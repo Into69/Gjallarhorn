@@ -1846,6 +1846,26 @@ function renderProbeChannels(_channels, selected) {
   updateProbeChannelsSummary(selected);
 }
 
+function _markProbeDisabledChannels(disabledList) {
+  const grid = document.getElementById("probe-channels-grid");
+  if (!grid) return;
+  const disabled = new Set((disabledList || []).map(Number));
+  for (const lbl of grid.querySelectorAll(".probe-channel")) {
+    const input = lbl.querySelector("input");
+    if (!input) continue;
+    const ch = parseInt(input.value, 10);
+    const isDis = disabled.has(ch);
+    lbl.classList.toggle("channel-disabled", isDis);
+    if (isDis) {
+      lbl.title = `Channel ${ch} rejected by the kernel on this adapter — skipped during hopping until the scanner restarts.`;
+    } else {
+      // Restore the default tooltip when a channel is no longer disabled.
+      const band = lbl.querySelector(".probe-channel-num")?.textContent;
+      lbl.title = band ? `Channel ${band}` : "";
+    }
+  }
+}
+
 function _updateProbeBandCounts(selected) {
   for (const band of PROBE_BANDS) {
     const n = band.channels.reduce((acc, ch) => acc + (selected.has(ch) ? 1 : 0), 0);
@@ -1951,6 +1971,11 @@ async function refreshProbeStatus() {
 
     // ---- Map-sidebar card ----
     updateProbeMapCard(s);
+
+    // Mark channels the kernel just rejected so the operator can see
+    // which switches won't actually do anything. Disabled set is
+    // session-scoped on the scanner, so it clears on restart.
+    _markProbeDisabledChannels(s.disabled_channels || []);
   } catch (e) {
     const stateEl = $("#probe-state");
     if (stateEl) stateEl.textContent = "error: " + e.message;
