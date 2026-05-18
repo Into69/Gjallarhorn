@@ -1701,6 +1701,12 @@ fieldset label { display: grid; gap: 4px; margin-bottom: 10px; }
 .settings-content fieldset > label:not(.check):not(.mission-switch) {
   grid-column: auto;
 }
+/* Labels that embed a rich interface-info card (Wi-Fi / BLE adapter
+   pickers) need full width — the iface-card inside has its own
+   layout that gets crushed at the ~280 px single-cell width. */
+.settings-content fieldset > label:has(.iface-info) {
+  grid-column: 1 / -1;
+}
 .settings-content legend {
   color: var(--accent);
   font-size: 13px;
@@ -1886,7 +1892,12 @@ fieldset .code-block {
 #oui-stats dt { color: var(--muted); }
 #oui-stats dd { margin: 0; font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
 
-.iface-info { margin-top: 8px; display: grid; gap: 6px; }
+.iface-info {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
 .iface-card { background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 6px; padding: 8px; font-size: 12px; }
 .iface-card.connected { border-color: #3a2c14; }
