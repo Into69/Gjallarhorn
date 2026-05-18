@@ -1654,13 +1654,29 @@ fieldset label { display: grid; gap: 4px; margin-bottom: 10px; }
   padding: 0 8px;
   text-transform: uppercase;
 }
-.settings-content legend .icon-btn.wl-clear-all {
-  margin-left: 8px;
+/* Whitelist table: clear-all icon sits in the action column header so
+   it lines up vertically with the per-row delete buttons below it. */
+#wl-table th.wl-actions-col {
+  text-align: right;
+  padding-right: 6px;
+}
+#wl-table th.wl-actions-col .icon-btn.wl-clear-all {
+  padding: 2px 6px;
+  line-height: 1;
+  font-size: 14px;
+}
+#wl-table .icon-btn.wl-delete {
   padding: 1px 6px;
-  font-size: 12px;
-  vertical-align: middle;
-  text-transform: none;
-  letter-spacing: 0;
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* Alerts feed: 'clear feed' broom icon. Sized to match the toolbar
+   button height so it doesn't shrink the row. */
+.icon-btn.alerts-clear {
+  padding: 4px 10px;
+  font-size: 15px;
+  line-height: 1;
 }
 .settings-content .subsection-h {
   margin: 14px 0 8px;

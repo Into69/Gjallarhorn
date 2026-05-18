@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260517t" />
+  <link rel="stylesheet" href="/static/style.css?v=20260518a" />
 </head>
 <body>
   <header>
@@ -739,7 +739,9 @@
             <span id="alerts-count" class="muted"></span>
             <span class="toolbar-spacer"></span>
             <button id="alerts-unlatch-all" class="secondary" title="Mark every active latch as cleared. History is kept; rules can fire again on those devices.">Unlatch all</button>
-            <button id="alerts-clear" class="danger">Clear feed</button>
+            <button id="alerts-clear" class="icon-btn danger alerts-clear"
+                    title="Sweep the entire alert feed — deletes every fired alert event. Rules themselves stay; latches reset. Cannot be undone."
+                    aria-label="Clear the alert feed">🧹</button>
           </div>
           <div class="feed-filters">
             <input type="search" id="alerts-search" placeholder="search id / SSID / vendor…" autocomplete="off" data-help="Filters the live alert feed. Matches device id (MAC) prefix, SSID/name, or vendor substring. Pair with the kind / rule dropdowns to drill into a specific source." />
@@ -1090,12 +1092,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
 
       <div class="settings-section" data-section="whitelist">
       <fieldset id="whitelist-panel">
-        <legend>
-          Device whitelist
-          <button id="wl-clear-all" type="button" class="icon-btn danger wl-clear-all"
-                  title="Delete every whitelist entry — cannot be undone"
-                  aria-label="Delete all whitelist entries">🗑</button>
-        </legend>
+        <legend>Device whitelist</legend>
         <p class="muted">
           Whitelisted devices are excluded from PDF reports and never trigger alerts.
           The <code>device id</code> matches either exactly or as a prefix — entering
@@ -1132,7 +1129,12 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
               <th title="Best signal strength ever recorded across matching rows.">Best RSSI</th>
               <th>Last seen</th>
               <th>Added</th>
-              <th></th>
+              <th class="wl-actions-col">
+                <button id="wl-clear-all" type="button"
+                        class="icon-btn danger wl-clear-all"
+                        title="Clear the entire whitelist — wipe every entry. Cannot be undone."
+                        aria-label="Clear all whitelist entries">🧹</button>
+              </th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -1210,7 +1212,9 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
         </label>
         <span class="toolbar-spacer"></span>
         <span id="log-count" class="muted"></span>
-        <button id="log-clear" class="danger">Clear</button>
+        <button id="log-clear" class="icon-btn danger alerts-clear"
+                title="Sweep the in-memory log buffer — wipes the live view. Records already written to disk (journal / syslog) are unaffected."
+                aria-label="Clear in-memory log buffer">🧹</button>
       </div>
       <div id="log-list" class="log-list">
         <div class="muted">Loading…</div>
@@ -1315,6 +1319,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260517t"></script>
+  <script src="/static/app.js?v=20260518a"></script>
 </body>
 </html>

@@ -1023,7 +1023,7 @@ async function refreshLocations() {
       <td class="row-actions">
         <button type="button" class="icon-btn save-label" data-id="${loc.id}" title="Save label changes" aria-label="Save label">${ICON_FLOPPY}</button>
         <button type="button" class="icon-btn clear-loc-devices" data-id="${loc.id}" title="Clear devices at this location (keeps the location row; whitelisted devices are preserved)" aria-label="Clear devices">${ICON_ERASER}</button>
-        <button type="button" class="icon-btn danger delete-loc" data-id="${loc.id}" title="Delete this location and all of its devices/observations" aria-label="Delete location">${ICON_TRASH}</button>
+        <button type="button" class="icon-btn danger delete-loc" data-id="${loc.id}" title="Delete this location and all of its devices/observations" aria-label="Delete location">🗑️</button>
       </td>
     `;
     tbody.appendChild(tr);
@@ -2577,7 +2577,7 @@ async function refreshAlertRules() {
       <td>${sw("rule-latch", r.latch ?? 1)}</td>
       <td>${sw("rule-include-wl", r.include_whitelist)}</td>
       <td class="mono">${formatTime(r.created_at)}</td>
-      <td><button class="danger rule-delete" data-id="${r.id}">Delete</button></td>
+      <td><button class="icon-btn danger rule-delete" data-id="${r.id}" title="Delete this rule" aria-label="Delete rule">🗑️</button></td>
     `;
     tr.addEventListener("dblclick", (ev) => {
       // Don't hijack double-clicks on inline controls (switches included —
@@ -2975,13 +2975,19 @@ function showAlertOnMap(e) {
   // hears the rule fire, just no on-screen pop. Default (flag undefined)
   // is to show the toast; only an explicit `false` suppresses.
   const stack = $("#alert-toasts");
-  // Suppress the visual toast when:
-  //   - the slider on the Mission control hero is off, OR
-  //   - the operator is on the Alerts tab (the live feed is already
-  //     showing the alert in-line; a floating duplicate is just noise).
-  // Audible alarm still fires (gated by its own mute toggle).
-  const onAlertsTab = document.getElementById("tab-alerts")?.classList.contains("active");
-  if (!stack || window._missionShowAlertPopups === false || onAlertsTab) {
+  // Only render the visual toast when the operator is on the Map or
+  // Mission tab. Other tabs either show the alert in-line (the Alerts
+  // feed) or aren't operational views where a floating popup helps —
+  // a fire while you're editing Settings is just a distraction. The
+  // Mission control slider can also turn the toast off entirely.
+  // Audible alarm still fires regardless (gated by its own mute toggle).
+  const onMap = document.getElementById("tab-map")?.classList.contains("active");
+  const onMission = document.getElementById("tab-mission")?.classList.contains("active");
+  if (
+    !stack
+    || window._missionShowAlertPopups === false
+    || !(onMap || onMission)
+  ) {
     if (e.rule_audible) playAlarm();
     return;
   }
@@ -3492,7 +3498,7 @@ async function refreshTempWhitelist() {
         <td class="mono">${escapeHtml(formatTime(e.created_at))}</td>
         <td class="row-actions">
           <button type="button" class="icon-btn wl-temp-promote" data-kind="${escapeAttr(e.kind)}" data-id="${escapeAttr(e.device_id)}" title="Promote to permanent whitelist" aria-label="Promote">★</button>
-          <button type="button" class="icon-btn danger wl-temp-remove" data-kind="${escapeAttr(e.kind)}" data-id="${escapeAttr(e.device_id)}" title="Un-silence (future matches will fire alerts again)" aria-label="Remove">×</button>
+          <button type="button" class="icon-btn danger wl-temp-remove" data-kind="${escapeAttr(e.kind)}" data-id="${escapeAttr(e.device_id)}" title="Un-silence (future matches will fire alerts again)" aria-label="Remove">🗑️</button>
         </td>
       </tr>
     `).join("");
@@ -3582,7 +3588,7 @@ function _makeWhitelistRow(e) {
     <td>${e.best_rssi != null ? e.best_rssi + " dBm" : ""}</td>
     <td class="mono">${escapeHtml(formatTime(e.last_seen))}</td>
     <td class="mono">${escapeHtml(formatTime(e.created_at))}</td>
-    <td><button type="button" class="icon-btn danger wl-delete" data-id="${e.id}" title="Remove from whitelist" aria-label="Remove">×</button></td>
+    <td><button type="button" class="icon-btn danger wl-delete" data-id="${e.id}" title="Remove from whitelist" aria-label="Remove">🗑️</button></td>
   `;
   tr.querySelector(".wl-delete").addEventListener("click", async (ev) => {
     ev.stopPropagation();
@@ -4814,7 +4820,7 @@ async function _refreshMissionLifecycle() {
         <td class="mono">${diff(null, "total")}</td>
         <td class="mono">${diff("alert_events")}</td>
         <td>
-          <button class="icon-btn mission-delete-row danger" data-id="${m.id}" title="Remove this mission record (data is unaffected)" aria-label="Delete">×</button>
+          <button class="icon-btn mission-delete-row danger" data-id="${m.id}" title="Remove this mission record (data is unaffected)" aria-label="Delete">🗑️</button>
         </td>
       </tr>`;
   }).join("");
