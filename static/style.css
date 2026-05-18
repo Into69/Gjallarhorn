@@ -1582,7 +1582,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    each section visually compact. */
 .settings-layout {
   display: grid;
-  grid-template-columns: 200px 1fr;
+  /* Narrower nav (was 200px) so the content area gets ~40px more
+     room before any of its grids need to scroll horizontally. The
+     longest item ('Location clustering') still fits at 13px / 600
+     weight in this width. */
+  grid-template-columns: 160px 1fr;
   gap: 20px;
   max-width: 960px;
   margin: 0 auto;
@@ -1970,12 +1974,16 @@ select option:disabled { color: var(--muted); }
    fit on a normal viewport. */
 .probe-channels-wrap {
   display: flex; flex-direction: column; gap: 14px;
+  min-width: 0;            /* let auto-fill grids shrink instead of overflowing */
 }
 .probe-band {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
+  min-width: 0;
+  overflow: hidden;        /* defensive — keeps a stray wide child from
+                              forcing horizontal scroll on the whole tab */
 }
 .probe-band-header {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -2007,25 +2015,43 @@ select option:disabled { color: var(--muted); }
 .probe-band-note { margin: 0 0 8px; font-size: 10.5px; }
 .probe-band-channels {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-  gap: 6px;
+  /* Tighter min-width than the previous 72px so we get ~10-12 columns
+     in the 740px content area instead of 7-8. Combined with the
+     smaller switch sizing below, the 59-entry 6 GHz block fits in
+     ~5 rows. */
+  grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
+  gap: 4px;
 }
 /* Compact channel pill — switch on the right, channel number on the
    left. Smaller-than-default mission-switch so the 6-GHz block still
    reads at a glance. */
 .probe-channel.mission-switch {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 6px;
+  gap: 4px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 4px 6px 4px 8px;
+  padding: 3px 5px;
   cursor: pointer;
+  min-width: 0;
 }
 .probe-channel .probe-channel-num {
   font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--fg);
+}
+/* Shrink the switch inside a channel pill below the .mission-switch.small
+   defaults so the pill stays narrow enough for ~12-column packing. */
+.probe-channel.mission-switch .mission-switch-track {
+  width: 22px;
+  height: 12px;
+}
+.probe-channel.mission-switch .mission-switch-thumb {
+  width: 8px;
+  height: 8px;
+}
+.probe-channel.mission-switch input:checked ~ .mission-switch-track .mission-switch-thumb {
+  transform: translateX(10px);
 }
 .probe-channel:has(input:checked) {
   border-color: var(--ok);
