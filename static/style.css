@@ -1689,19 +1689,17 @@ fieldset label { display: grid; gap: 4px; margin-bottom: 10px; }
   gap: 8px 18px;
   min-width: 0;
 }
-.settings-content fieldset > legend,
-.settings-content fieldset > p,
-.settings-content fieldset > h3,
-.settings-content fieldset > h4,
-.settings-content fieldset > pre,
-.settings-content fieldset > dl,
-.settings-content fieldset > .toolbar,
-.settings-content fieldset > .field-row,
-.settings-content fieldset > .probe-channels-block,
-.settings-content fieldset > input[type="hidden"],
-.settings-content fieldset > label.check,
-.settings-content fieldset > label.mission-switch {
+/* Default: every direct child of the fieldset spans the full width.
+   Only plain <label> elements (a label + its input) opt into the
+   multi-column flow; .check / .mission-switch labels and everything
+   else (legend, p, form, table, div, dl, pre, toolbar, …) stay
+   full-width so their internal layouts aren't shrunk to a single
+   280 px column. */
+.settings-content fieldset > * {
   grid-column: 1 / -1;
+}
+.settings-content fieldset > label:not(.check):not(.mission-switch) {
+  grid-column: auto;
 }
 .settings-content legend {
   color: var(--accent);
