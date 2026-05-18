@@ -1642,6 +1642,38 @@ async def list_latched_pairs() -> list[tuple[int, str]]:
             return [(int(r[0]), r[1]) for r in await cur.fetchall()]
 
 
+async def delete_alert_event(event_id: int) -> dict | None:
+    """Delete a single alert_events row by id. Returns metadata about
+    the row (rule_id, lowercased device_id, prior cleared flag, and
+    the count of still-uncleared events left for the (rule, device)
+    pair) so the caller can decide whether to drop the in-memory latch.
+    Returns None if no row matched."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT rule_id, lower(device_id), cleared "
+            "FROM alert_events WHERE id=?",
+            (event_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        rule_id, device_id_l, was_cleared = int(row[0]), row[1], int(row[2])
+        await db.execute("DELETE FROM alert_events WHERE id=?", (event_id,))
+        await db.commit()
+        async with db.execute(
+            "SELECT COUNT(*) FROM alert_events "
+            "WHERE rule_id=? AND lower(device_id)=? AND cleared=0",
+            (rule_id, device_id_l),
+        ) as cur:
+            remaining = int((await cur.fetchone())[0])
+    return {
+        "rule_id": rule_id,
+        "device_id_l": device_id_l,
+        "was_cleared": bool(was_cleared),
+        "uncleared_remaining": remaining,
+    }
+
+
 async def clear_alert_pair(rule_id: int, device_id: str) -> int:
     """Mark every event for (rule_id, device_id_lower) as cleared. Caller
     is responsible for removing the matching latch from AlertService."""

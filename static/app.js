@@ -2976,6 +2976,7 @@ function renderAlertEvent(e) {
         · ${escapeHtml(where)}
         · ${formatTime(e.triggered_at)}
         ${latchBtn}${wlBtn}
+        <button type="button" class="icon-btn danger alert-delete" data-id="${escapeAttr(e.id)}" title="Delete this alert from the feed (rules and other events untouched)" aria-label="Delete alert">🗑️</button>
       </div>
     </div>
   `;
@@ -3032,6 +3033,25 @@ $("#alerts-list")?.addEventListener("click", async (ev) => {
     } catch (err) {
       alert("Unlatch failed: " + err.message);
       clrBtn.disabled = false;
+    }
+  }
+  // Per-row delete: drop this alert event from the feed.
+  const delBtn = ev.target.closest(".alert-delete");
+  if (delBtn && !delBtn.disabled) {
+    const eventId = parseInt(delBtn.dataset.id, 10);
+    if (!Number.isFinite(eventId)) return;
+    if (!confirm("Delete this alert from the feed?\n\nOther events from the same rule/device are kept, and the rule itself is untouched.")) return;
+    delBtn.disabled = true;
+    try {
+      await api(`/api/alerts/events/${eventId}`, { method: "DELETE" });
+      // Drop from local cache and re-render so the row disappears
+      // without waiting for the next poll.
+      const idx = alertsCache.findIndex(x => x.id === eventId);
+      if (idx >= 0) alertsCache.splice(idx, 1);
+      renderFilteredAlerts();
+    } catch (err) {
+      alert("Delete failed: " + err.message);
+      delBtn.disabled = false;
     }
   }
 });

@@ -1435,6 +1435,23 @@ async def api_clear_events():
     return {"deleted": n}
 
 
+@app.delete("/api/alerts/events/{event_id}")
+async def api_delete_event(event_id: int):
+    """Delete a single alert_events row. Used by the live-feed per-row
+    trash icon. If this was the last un-cleared event for its (rule,
+    device) pair, also remove the in-memory latch — otherwise the
+    pair would stay 'latched' against an event row that no longer
+    exists, blocking future fires."""
+    result = await db.delete_alert_event(event_id)
+    if result is None:
+        raise HTTPException(404, "alert event not found")
+    if not result["was_cleared"] and result["uncleared_remaining"] == 0:
+        alert_service._latched.discard(
+            (result["rule_id"], result["device_id_l"])
+        )
+    return {"ok": True}
+
+
 @app.post("/api/alerts/clear")
 async def api_clear_latch(payload: dict):
     """Clear a single latched (rule, device) pair so future matches fire
