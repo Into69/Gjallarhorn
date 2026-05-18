@@ -1654,6 +1654,14 @@ fieldset label { display: grid; gap: 4px; margin-bottom: 10px; }
   padding: 0 8px;
   text-transform: uppercase;
 }
+.settings-content legend .icon-btn.wl-clear-all {
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 12px;
+  vertical-align: middle;
+  text-transform: none;
+  letter-spacing: 0;
+}
 .settings-content .subsection-h {
   margin: 14px 0 8px;
   font-size: 11px;

@@ -220,6 +220,18 @@ async def api_delete_whitelist(entry_id: int):
     return {"ok": True}
 
 
+@app.delete("/api/whitelist")
+async def api_clear_whitelist():
+    """Drop every entry from the permanent whitelist. The temp /
+    silenced list is untouched (it has its own DELETE endpoint). Used
+    by the Settings panel's bulk-delete icon."""
+    n = await db.clear_whitelist()
+    if n:
+        await alert_service.reload()
+        log.info("Cleared whitelist: %d entries removed", n)
+    return {"ok": True, "removed": n}
+
+
 @app.get("/api/preserved-devices")
 async def api_list_preserved_devices(kind: Optional[str] = None):
     """Whitelisted device sightings archived from deleted locations."""

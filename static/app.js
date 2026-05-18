@@ -3679,6 +3679,33 @@ $("#wl-form")?.addEventListener("submit", async (ev) => {
   }
 });
 
+// Clear every whitelist entry. Reuses the existing wl-form-status pill
+// for the result message so the operator gets a quick confirmation
+// inline. Temp / silenced list is unaffected (has its own clear flow).
+$("#wl-clear-all")?.addEventListener("click", async () => {
+  const n = (_whitelistCache || []).length;
+  if (!n) {
+    $("#wl-form-status").textContent = "Whitelist is already empty";
+    setTimeout(() => $("#wl-form-status").textContent = "", 1500);
+    return;
+  }
+  if (!confirm(
+    `Delete all ${n} whitelist entr${n === 1 ? "y" : "ies"}?\n\n`
+    + "Every device currently silenced by the whitelist will alert "
+    + "again on its next sighting. The temp / silenced list is "
+    + "untouched. This cannot be undone."
+  )) return;
+  $("#wl-form-status").textContent = "clearing…";
+  try {
+    const r = await api("/api/whitelist", { method: "DELETE" });
+    $("#wl-form-status").textContent = `Removed ${r.removed || 0} entr${(r.removed || 0) === 1 ? "y" : "ies"}`;
+    setTimeout(() => $("#wl-form-status").textContent = "", 2000);
+    await refreshWhitelist();
+  } catch (err) {
+    $("#wl-form-status").textContent = "error: " + err.message;
+  }
+});
+
 async function quickWhitelistToggle(kind, deviceId) {
   // Find an existing entry that exactly matches; if found, delete it.
   // Otherwise add a new entry.

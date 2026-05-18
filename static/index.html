@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260517s" />
+  <link rel="stylesheet" href="/static/style.css?v=20260517t" />
 </head>
 <body>
   <header>
@@ -1090,7 +1090,12 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
 
       <div class="settings-section" data-section="whitelist">
       <fieldset id="whitelist-panel">
-        <legend>Device whitelist</legend>
+        <legend>
+          Device whitelist
+          <button id="wl-clear-all" type="button" class="icon-btn danger wl-clear-all"
+                  title="Delete every whitelist entry — cannot be undone"
+                  aria-label="Delete all whitelist entries">🗑</button>
+        </legend>
         <p class="muted">
           Whitelisted devices are excluded from PDF reports and never trigger alerts.
           The <code>device id</code> matches either exactly or as a prefix — entering
@@ -1310,6 +1315,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260517s"></script>
+  <script src="/static/app.js?v=20260517t"></script>
 </body>
 </html>

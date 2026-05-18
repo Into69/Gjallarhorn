@@ -2794,6 +2794,16 @@ async def delete_whitelist(entry_id: int) -> bool:
         return cur.rowcount > 0
 
 
+async def clear_whitelist() -> int:
+    """Drop every row from device_whitelist and return the deleted count.
+    Backs the 'Clear all' icon in the Settings > whitelist panel; the
+    temp / silenced list lives in its own table and isn't touched."""
+    async with _connect() as db:
+        cur = await db.execute("DELETE FROM device_whitelist")
+        await db.commit()
+        return cur.rowcount or 0
+
+
 async def list_preserved_devices(kind: str | None = None) -> list[dict]:
     """Whitelisted devices archived from deleted locations. Shape mirrors
     devices_at_location for easy reuse on the Devices tab."""
