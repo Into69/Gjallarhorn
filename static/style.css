@@ -1719,16 +1719,18 @@ fieldset label { display: grid; gap: 4px; margin-bottom: 10px; }
 /* Inputs inside the multi-column grid would otherwise stretch to fill
    their grid cell (~280 px+), making a 3-digit number input look
    comically wide. Cap each type to a reasonable width and align to
-   the left of the cell so multi-column rows still look balanced. */
-.settings-content fieldset > label > input[type="number"] {
+   the left of the cell so multi-column rows still look balanced.
+   Selector matches labels at any depth so .field-row > label > input
+   pairs (Sensors block) get the same cap. */
+.settings-content fieldset label > input[type="number"] {
   max-width: 140px;
   justify-self: start;
 }
-.settings-content fieldset > label > input[type="text"],
-.settings-content fieldset > label > input[type="url"],
-.settings-content fieldset > label > input[type="email"],
-.settings-content fieldset > label > input[type="password"],
-.settings-content fieldset > label > select {
+.settings-content fieldset label > input[type="text"],
+.settings-content fieldset label > input[type="url"],
+.settings-content fieldset label > input[type="email"],
+.settings-content fieldset label > input[type="password"],
+.settings-content fieldset label > select {
   max-width: 360px;
   justify-self: start;
   width: 100%;            /* fill up to the max — looks tidier than auto */
