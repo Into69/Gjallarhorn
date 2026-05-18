@@ -601,6 +601,22 @@ async def api_delete_location_devices(loc_id: int):
     return {"ok": True, "deleted": counts}
 
 
+async def _disable_broken_rules_after_location_delete() -> list[dict]:
+    """Sweep alert rules for now-dangling location_id references, disable
+    them, and reload the alert service so the orchestrator stops trying
+    to evaluate them. Logs each rule it touches so the operator can find
+    out from the log what got disabled without inspecting the table."""
+    disabled = await db.disable_rules_with_missing_location()
+    for r in disabled:
+        log.warning(
+            "Alert rule #%s '%s' disabled: %s",
+            r["id"], r["name"], r["disabled_reason"],
+        )
+    if disabled:
+        await alert_service.reload()
+    return disabled
+
+
 @app.delete("/api/locations/{loc_id}")
 async def api_delete_location(loc_id: int):
     """Delete one location and its associated devices/observations.
@@ -614,6 +630,9 @@ async def api_delete_location(loc_id: int):
         location_manager._active_lat = None  # type: ignore[attr-defined]
         location_manager._active_lon = None  # type: ignore[attr-defined]
     log.info("Deleted location %d: %s", loc_id, counts)
+    disabled = await _disable_broken_rules_after_location_delete()
+    if disabled:
+        counts["rules_disabled"] = disabled
     return {"ok": True, "deleted": counts}
 
 
@@ -674,6 +693,9 @@ async def api_merge_contained_locations():
     if result["merged"]:
         log.info("Merged %d contained locations: %s",
                  result["merged"], result["loser_ids"])
+    disabled = await _disable_broken_rules_after_location_delete()
+    if disabled:
+        result["rules_disabled"] = disabled
     return {"ok": True, **result}
 
 
@@ -697,6 +719,9 @@ async def api_merge_into(loser_id: int, winner_id: int):
         location_manager._active_lat = None  # type: ignore[attr-defined]
         location_manager._active_lon = None  # type: ignore[attr-defined]
     log.info("Manual merge: location %d into %d", loser_id, winner_id)
+    disabled = await _disable_broken_rules_after_location_delete()
+    if disabled:
+        result["rules_disabled"] = disabled
     return {"ok": True, **result}
 
 
@@ -716,6 +741,9 @@ async def api_merge_contained_step():
         location_manager._active_lat = None  # type: ignore[attr-defined]
         location_manager._active_lon = None  # type: ignore[attr-defined]
     log.info("Merged location %d into %d (step)", p["loser_id"], p["winner_id"])
+    disabled = await _disable_broken_rules_after_location_delete()
+    if disabled:
+        merged["rules_disabled"] = disabled
     # `remaining` is the count *before* this step's merge, minus 1 for the
     # pair we just collapsed. The next find_contained_locations may reveal
     # more or fewer than that — UIs should treat it as a hint, not a total.
@@ -1091,6 +1119,9 @@ async def api_reset_locations():
     counts["alerts_cleared"] = await db.clear_alert_events()
     alert_service._latched.clear()  # type: ignore[attr-defined]
     log.info("reset locations (auto only): %s", counts)
+    disabled = await _disable_broken_rules_after_location_delete()
+    if disabled:
+        counts["rules_disabled"] = disabled
     return {"ok": True, "deleted": counts}
 
 
@@ -1108,6 +1139,9 @@ async def api_delete_all_locations():
     counts["alerts_cleared"] = await db.clear_alert_events()
     alert_service._latched.clear()  # type: ignore[attr-defined]
     log.info("Deleted all locations: %s", counts)
+    disabled = await _disable_broken_rules_after_location_delete()
+    if disabled:
+        counts["rules_disabled"] = disabled
     return {"ok": True, "deleted": counts}
 
 
@@ -1243,6 +1277,13 @@ async def api_create_rule(payload: dict):
             location_id = int(location_id)
         except (TypeError, ValueError):
             raise HTTPException(400, "location_id must be an integer")
+        # Reject creation against a missing location so a rule can't
+        # spawn pre-broken. -1 (active-location sentinel) and NULL stay
+        # exempt — those are valid even with no concrete location.
+        if location_id != -1 and not await db.location_exists(location_id):
+            raise HTTPException(
+                400, f"location #{location_id} does not exist",
+            )
     notify_discord = bool(payload.get("notify_discord"))
     audible = bool(payload.get("audible"))
     extra_conditions = _validate_extra_conditions(payload.get("extra_conditions"))
@@ -1324,6 +1365,38 @@ async def api_update_rule(rule_id: int, payload: dict):
         fields["extra_conditions"] = _json.dumps(
             _validate_extra_conditions(payload["extra_conditions"])
         )
+
+    # Broken-reference enforcement. After computing the resulting
+    # location_id (from this patch or the stored row), reject re-enables
+    # of a rule that still points at a missing location, and clear the
+    # disabled_reason when the rule's reference is now valid (the
+    # operator just fixed it). This is what makes a rule "stuck disabled"
+    # until the operator either re-targets it or pulls it back to a
+    # non-specific scope.
+    current = await db.get_alert_rule(rule_id)
+    if current is None:
+        raise HTTPException(404, "rule not found")
+    effective_loc = fields["location_id"] if "location_id" in fields else current.get("location_id")
+    loc_valid = (
+        effective_loc is None
+        or effective_loc == -1
+        or await db.location_exists(int(effective_loc))
+    )
+    if not loc_valid:
+        reason = f"location #{effective_loc} no longer exists"
+        fields["disabled_reason"] = reason
+        fields["enabled"] = 0
+        if "enabled" in payload and payload["enabled"]:
+            raise HTTPException(
+                400,
+                f"cannot enable rule: {reason} — change the location filter first",
+            )
+    elif current.get("disabled_reason"):
+        # Reference is back in a valid shape — clear the broken-reason
+        # mark. enabled stays at whatever the patch (or DB) set; the
+        # operator still has to flip it on explicitly.
+        fields["disabled_reason"] = None
+
     await db.update_alert_rule(rule_id, fields)
     await alert_service.reload()
     return {"ok": True}

@@ -227,6 +227,15 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE alert_rules ADD COLUMN include_whitelist INTEGER NOT NULL DEFAULT 0"
         )
+    if "disabled_reason" not in cols:
+        # Set by the broken-reference sweep when a rule's location_id
+        # points at a now-deleted sensor_location. Non-NULL value blocks
+        # re-enabling the rule until the operator fixes the reference
+        # (PATCH endpoint clears it when location_id moves to a valid /
+        # null value).
+        await db.execute(
+            "ALTER TABLE alert_rules ADD COLUMN disabled_reason TEXT"
+        )
 
     async with db.execute("PRAGMA table_info(sensor_locations)") as cur:
         loc_cols = {row[1] for row in await cur.fetchall()}
@@ -1177,6 +1186,37 @@ async def insert_observation(
 
 
 # ---------- alerts ----------
+async def get_alert_rule(rule_id: int) -> dict | None:
+    """Single alert_rule row (with parsed extra_conditions), or None
+    if no row matches. Used by the PATCH endpoint to reason about the
+    rule's *current* state before applying changes."""
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM alert_rules WHERE id=?", (rule_id,),
+        ) as cur:
+            row = await cur.fetchone()
+    if row is None:
+        return None
+    out = dict(row)
+    raw = out.get("extra_conditions") or "[]"
+    try:
+        out["extra_conditions"] = json.loads(raw)
+    except (TypeError, ValueError):
+        out["extra_conditions"] = []
+    return out
+
+
+async def location_exists(loc_id: int) -> bool:
+    """Quick existence check used by the rule PATCH endpoint to decide
+    whether a location_id reference is currently valid."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT 1 FROM sensor_locations WHERE id=? LIMIT 1", (loc_id,),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
 async def list_alert_rules() -> list[dict]:
     async with _connect() as db:
         db.row_factory = aiosqlite.Row
@@ -1226,6 +1266,46 @@ async def update_alert_rule(rule_id: int, fields: dict) -> None:
     async with _connect() as db:
         await db.execute(f"UPDATE alert_rules SET {cols} WHERE id=?", args)
         await db.commit()
+
+
+async def disable_rules_with_missing_location() -> list[dict]:
+    """Scan every alert_rule whose location_id points at a specific
+    location (not NULL = 'any', not -1 = 'active') and disable any rule
+    whose target no longer exists. Stamps a human-readable reason so the
+    UI can surface it and the PATCH endpoint can block re-enabling
+    until the rule is fixed.
+
+    Returns the list of rules that were just disabled (each shaped
+    {id, name, location_id, disabled_reason}). Already-disabled rules
+    that meet the criteria are still updated so disabled_reason stays
+    current, but they're not returned (no behaviour change to flag)."""
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT r.id, r.name, r.enabled, r.location_id "
+            "FROM alert_rules r "
+            "WHERE r.location_id IS NOT NULL AND r.location_id != -1 "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM sensor_locations l WHERE l.id = r.location_id"
+            ")"
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+        newly_disabled: list[dict] = []
+        for r in rows:
+            reason = f"location #{r['location_id']} no longer exists"
+            was_enabled = bool(r["enabled"])
+            await db.execute(
+                "UPDATE alert_rules SET enabled=0, disabled_reason=? WHERE id=?",
+                (reason, r["id"]),
+            )
+            if was_enabled:
+                newly_disabled.append({
+                    "id": r["id"], "name": r["name"],
+                    "location_id": r["location_id"],
+                    "disabled_reason": reason,
+                })
+        await db.commit()
+    return newly_disabled
 
 
 async def delete_alert_rule(rule_id: int) -> None:
