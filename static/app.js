@@ -4831,7 +4831,12 @@ async function refreshMission() {
     );
     // Probe scanner has different state semantics: it's a long-running
     // capture that either runs continuously or doesn't. "running" maps
-    // to scanning; absence of an interface = disabled.
+    // to scanning; absence of an interface = disabled. When hopping is
+    // active we also surface the channel the radio is currently parked
+    // on so the operator can see the hop in real time, not just a
+    // static 'scanning' label.
+    const probeChan = probe?.current_channel;
+    const probeExtra = probeChan != null ? `ch ${probeChan}` : "";
     _renderScannerStateTile(
       "mission-stat-probe-state", _classifyScannerState({
         paused: isPaused,
@@ -4839,6 +4844,7 @@ async function refreshMission() {
         last_error: probe?.last_error,
         enabled: !!probe?.interface,
       }),
+      probeExtra,
     );
   } catch {}
   // Active + historical mission + live ticker — best-effort, each
@@ -4855,10 +4861,10 @@ function _classifyScannerState({ paused, running, last_error, enabled }) {
   return "idle";
 }
 
-function _renderScannerStateTile(id, state) {
+function _renderScannerStateTile(id, state, extra) {
   const el = document.getElementById(id);
   if (!el) return;
-  el.textContent = state;
+  el.textContent = extra ? `${state} · ${extra}` : state;
   // Drop any prior state-* class so the next tick repaints cleanly.
   el.className = "mission-scanner-state state-" + state;
 }
