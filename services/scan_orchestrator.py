@@ -427,20 +427,23 @@ class ScanOrchestrator:
                 want_backend = s.probe_backend
                 want_auto = s.probe_auto_monitor
                 want_channels = parse_channels(s.probe_channels)
+                want_hop_ms = int(getattr(s, "probe_channel_hop_ms", 100) or 100)
                 if want_iface:
                     cur = (
                         probe_scanner.interface,
                         probe_scanner.backend,
                         probe_scanner.auto_monitor,
                         probe_scanner.channels,
-                    ) if probe_scanner.running else (None, None, None, [])
-                    target = (want_iface, want_backend, want_auto, want_channels)
+                        getattr(probe_scanner, "_hop_ms", 100),
+                    ) if probe_scanner.running else (None, None, None, [], 0)
+                    target = (want_iface, want_backend, want_auto, want_channels, want_hop_ms)
                     if cur != target:
                         await probe_scanner.start(
                             want_iface, self._on_probe,
                             backend=want_backend,
                             auto_monitor=want_auto,
                             channels=want_channels,
+                            hop_ms=want_hop_ms,
                         )
                 elif probe_scanner.running:
                     await probe_scanner.stop()
@@ -470,9 +473,14 @@ class ScanOrchestrator:
         mac = probe["mac"]
         new_ssid = (probe.get("ssid") or "").strip()
         channel = probe.get("channel")
+        frame_type = probe.get("frame_type") or "probe"
+        new_bssid = (probe.get("bssid") or "").strip().lower()
 
         # Merge with any existing details so the SSID list and channels
-        # accumulate across observations of the same client.
+        # accumulate across observations of the same client. associated_bssids
+        # is the AP MAC(s) the client has sent association / reassociation
+        # requests to — strong evidence of an actual connection, where the
+        # probed-SSIDs list is only "wanted to find this network".
         prior = await db.get_device_details(loc_id, "wifi_client", mac) or {}
         ssids = list(prior.get("ssids") or [])
         if new_ssid and new_ssid not in ssids:
@@ -480,6 +488,13 @@ class ScanOrchestrator:
         channels = list(prior.get("channels") or [])
         if channel is not None and channel not in channels:
             channels.append(channel)
+        associated_bssids = list(prior.get("associated_bssids") or [])
+        if (
+            frame_type in ("assoc", "reassoc")
+            and new_bssid
+            and new_bssid not in associated_bssids
+        ):
+            associated_bssids.append(new_bssid)
         vendor = prior.get("vendor")
         if not vendor:
             try:
@@ -490,6 +505,7 @@ class ScanOrchestrator:
             "vendor": vendor,
             "ssids": ssids,
             "channels": channels,
+            "associated_bssids": associated_bssids,
             "randomized": probe.get("randomized", False),
         }
 
@@ -502,7 +518,12 @@ class ScanOrchestrator:
             await db.insert_observation(
                 location_id=loc_id, kind="wifi_client", device_id=mac,
                 rssi=rssi, lat=fix.lat, lon=fix.lon,
-                raw={**details, "ssid": new_ssid, "channel": channel},
+                raw={
+                    **details,
+                    "ssid": new_ssid, "channel": channel,
+                    "frame_type": frame_type,
+                    "bssid": new_bssid or None,
+                },
             )
         else:
             is_new = False

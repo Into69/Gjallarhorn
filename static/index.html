@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260518b" />
+  <link rel="stylesheet" href="/static/style.css?v=20260518d" />
 </head>
 <body>
   <header>
@@ -960,6 +960,10 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <input type="hidden" name="probe_channels" id="probe-channels-value" value="" />
             <div id="probe-channels-grid" class="muted">Pick an interface above to see its supported channels.</div>
           </div>
+          <label>Channel dwell (ms)
+            <input type="number" name="probe_channel_hop_ms" min="50" max="2000" step="10"
+                   data-help="Time the radio sits on each channel before hopping. Lower = more aggressive (more channels per second, less capture per channel). 100 ms is a good baseline; 50 ms is the floor most drivers can settle to; 250 ms or higher trades coverage for capture density. Only matters when at least one channel is selected above." />
+          </label>
           <label>Minimum RSSI (dBm)
             <input type="number" name="probe_min_rssi" min="-110" max="-20" />
           </label>
@@ -1319,6 +1323,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260518b"></script>
+  <script src="/static/app.js?v=20260518d"></script>
 </body>
 </html>

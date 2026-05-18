@@ -2462,12 +2462,17 @@ async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
         except (TypeError, ValueError):
             det = {}
         ssids = [s for s in (det.get("ssids") or []) if isinstance(s, str)]
+        assoc = [
+            s.lower() for s in (det.get("associated_bssids") or [])
+            if isinstance(s, str) and s
+        ]
         entry = {
             "device_id": r["device_id"],
             "location_id": r["location_id"],
             "vendor": det.get("vendor"),
             "channels": det.get("channels") or [],
             "ssids": ssids,
+            "associated_bssids": assoc,
             "randomized": bool(det.get("randomized")),
             "best_rssi": r["best_rssi"],
             "last_rssi": r["last_rssi"],

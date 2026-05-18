@@ -2433,9 +2433,18 @@ function renderWapGroup(g) {
           const probed = (c.ssids || []).filter(s => s).slice(0, 6).join(", ");
           const more = (c.ssids || []).filter(s => s).length > 6
             ? ` (+${(c.ssids || []).filter(s => s).length - 6})` : "";
+          // Associated badge: client sent an 802.11 assoc / reassoc
+          // request to THIS BSSID. Strong evidence of an actual
+          // connection — distinct from 'probed for this SSID', which
+          // is just intent.
+          const assocList = (c.associated_bssids || []).map(b => (b || "").toLowerCase());
+          const isAssoc = assocList.includes((b.bssid || "").toLowerCase());
+          const assocBadge = isAssoc
+            ? ` <span class="wap-badge assoc" title="Captured an 802.11 association request from this client to this BSSID — best-effort evidence the client actually connected.">★ associated</span>`
+            : "";
           return `
             <tr>
-              <td class="mono">${escapeHtml(c.device_id)}${c.randomized ? ' <span class="wap-badge rand">rand</span>' : ""}</td>
+              <td class="mono">${escapeHtml(c.device_id)}${c.randomized ? ' <span class="wap-badge rand">rand</span>' : ""}${assocBadge}</td>
               <td>${escapeHtml(c.vendor || "")}</td>
               <td>${(c.channels || []).join(", ")}</td>
               <td>${c.best_rssi != null ? c.best_rssi + " dBm" : ""}</td>

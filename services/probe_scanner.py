@@ -63,6 +63,9 @@ class ProbeScanner:
         self._backend: str = "tshark"
         self._auto_monitor: bool = False
         self._channels: list[int] = []
+        # Default dwell matches probe_channel_hop_ms's default; the
+        # orchestrator overrides via start(..., hop_ms=...).
+        self._hop_ms: int = 100
         self._on_probe: Optional[ProbeCallback] = None
         # Bookkeeping for restoring the interface on stop.
         self._restore_type: Optional[str] = None
@@ -107,6 +110,7 @@ class ProbeScanner:
             "scapy_available": scapy_available(),
             "auto_monitor": self._auto_monitor,
             "channels": list(self._channels),
+            "hop_ms": self._hop_ms,
             "current_channel": self._current_channel,
             "last_error": self._last_error,
             "last_channel_error": self._last_channel_error,
@@ -121,15 +125,22 @@ class ProbeScanner:
         *, backend: str = "tshark",
         auto_monitor: bool = False,
         channels: Optional[list[int]] = None,
+        hop_ms: int = 100,
     ) -> None:
         """Start (or restart) the scanner on the given interface + backend."""
         if backend not in VALID_BACKENDS:
             raise ValueError(f"backend must be one of {VALID_BACKENDS}")
         channels = list(channels or [])
+        # Clamp to a sane range. Below ~50 ms most drivers can't finish
+        # the channel-set ioctl and re-tune the radio before we're on
+        # to the next hop, so captures get nothing. Above 2000 ms it's
+        # not really 'hopping' anymore.
+        hop_ms = max(50, min(2000, int(hop_ms or 100)))
         if (self._task is not None and self._iface == interface
                 and self._backend == backend
                 and self._auto_monitor == auto_monitor
-                and self._channels == channels):
+                and self._channels == channels
+                and self._hop_ms == hop_ms):
             self._on_probe = on_probe
             return  # already running with the same config
         await self.stop()
@@ -137,6 +148,7 @@ class ProbeScanner:
         self._backend = backend
         self._auto_monitor = auto_monitor
         self._channels = channels
+        self._hop_ms = hop_ms
         self._on_probe = on_probe
         self._stop.clear()
         self._last_error = None
@@ -258,13 +270,19 @@ class ProbeScanner:
                                 ch, self._iface, msg)
             i += 1
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=0.25)
+                await asyncio.wait_for(self._stop.wait(), timeout=self._hop_ms / 1000.0)
                 return
             except asyncio.TimeoutError:
                 pass
 
     # ── tshark backend ─────────────────────────────────────────────
     async def _run_tshark(self) -> None:
+        # Capture probe-requests AND association/reassociation requests.
+        # Probes (subtype 4) reveal what networks a client is hunting
+        # for; assoc-req (subtype 0) and reassoc-req (subtype 2) reveal
+        # which AP a client actually connected to. Both are management
+        # frames — low volume, no payload decryption involved, MACs in
+        # plaintext.
         cmd = [
             "tshark",
             "-i", self._iface or "",
@@ -275,7 +293,9 @@ class ProbeScanner:
             "-e", "wlan_radio.signal_dbm",
             "-e", "wlan.ssid",
             "-e", "wlan_radio.channel",
-            "-f", "type mgt subtype probe-req",
+            "-e", "wlan.fc.type_subtype",
+            "-e", "wlan.bssid",
+            "-f", "type mgt and (subtype probe-req or subtype assoc-req or subtype reassoc-req)",
             "-Q",                 # suppress packet-count summary
         ]
         log.info("probe scanner [tshark]: starting %s", " ".join(cmd))
@@ -331,12 +351,14 @@ class ProbeScanner:
         if not line:
             return
         parts = line.split("|")
-        while len(parts) < 4:
+        while len(parts) < 6:
             parts.append("")
         mac = parts[0].strip().lower()
         rssi_s = parts[1].strip()
         ssid = parts[2]
         channel_s = parts[3].strip()
+        subtype_s = parts[4].strip()
+        bssid = parts[5].strip().lower()
         if len(mac) != 17:
             return
         try:
@@ -347,13 +369,23 @@ class ProbeScanner:
             channel = int(channel_s) if channel_s else None
         except ValueError:
             channel = None
-        await self._dispatch(_build_probe(mac, rssi, ssid, channel))
+        # wlan.fc.type_subtype is printed as a hex string like '0x0004'.
+        # 0x0004 = probe-req, 0x0000 = assoc-req, 0x0002 = reassoc-req.
+        frame_type = _frame_type_from_subtype(subtype_s)
+        if frame_type is None:
+            return
+        await self._dispatch(_build_frame(
+            mac=mac, rssi=rssi, ssid=ssid, channel=channel,
+            frame_type=frame_type, bssid=bssid,
+        ))
 
     # ── scapy backend ──────────────────────────────────────────────
     async def _run_scapy(self) -> None:
         try:
             from scapy.all import AsyncSniffer
-            from scapy.layers.dot11 import Dot11ProbeReq, Dot11Elt
+            from scapy.layers.dot11 import (
+                Dot11ProbeReq, Dot11AssoReq, Dot11ReassoReq, Dot11Elt,
+            )
         except Exception as e:
             self._last_error = f"scapy import failed: {e}"
             log.error("probe scanner [scapy]: %s", self._last_error)
@@ -363,11 +395,21 @@ class ProbeScanner:
 
         def packet_handler(pkt) -> None:
             try:
-                if not pkt.haslayer(Dot11ProbeReq):
+                if pkt.haslayer(Dot11ProbeReq):
+                    frame_type = "probe"
+                elif pkt.haslayer(Dot11AssoReq):
+                    frame_type = "assoc"
+                elif pkt.haslayer(Dot11ReassoReq):
+                    frame_type = "reassoc"
+                else:
                     return
                 mac = (pkt.addr2 or "").lower()
                 if len(mac) != 17:
                     return
+                # For assoc/reassoc requests, addr1 = AP (BSSID); for
+                # probes addr1 is broadcast which we'll filter out at
+                # dispatch.
+                bssid = (pkt.addr1 or "").lower() if frame_type != "probe" else ""
                 ssid = ""
                 # Walk the Information Elements; ID 0 is the SSID.
                 elt = pkt.getlayer(Dot11Elt)
@@ -392,9 +434,12 @@ class ProbeScanner:
                         channel = _freq_to_channel(int(ch_freq))
                     except (TypeError, ValueError):
                         channel = None
-                probe = _build_probe(mac, rssi, ssid, channel)
+                frame = _build_frame(
+                    mac=mac, rssi=rssi, ssid=ssid, channel=channel,
+                    frame_type=frame_type, bssid=bssid,
+                )
                 # AsyncSniffer's prn runs in its own thread — bridge to the asyncio loop.
-                asyncio.run_coroutine_threadsafe(self._dispatch(probe), loop)
+                asyncio.run_coroutine_threadsafe(self._dispatch(frame), loop)
             except Exception as e:
                 log.warning("scapy packet parse failed: %s", e)
 
@@ -404,7 +449,9 @@ class ProbeScanner:
             prn=packet_handler,
             store=False,
             monitor=True,
-            filter="type mgt subtype probereq",
+            # Capture probes AND assoc/reassoc requests so we can record
+            # which AP a wifi_client actually connected to.
+            filter="type mgt and (subtype probereq or subtype assocreq or subtype reassocreq)",
         )
         try:
             sniffer.start()
@@ -435,14 +482,55 @@ class ProbeScanner:
             log.exception("probe callback failed: %s", e)
 
 
-def _build_probe(mac: str, rssi: Optional[int], ssid: str, channel: Optional[int]) -> dict:
+def _build_frame(
+    *, mac: str, rssi: Optional[int], ssid: str, channel: Optional[int],
+    frame_type: str, bssid: str,
+) -> dict:
+    """Build the dispatch dict for any wifi-client frame the scanner
+    cares about. frame_type is one of probe / assoc / reassoc;
+    callers branch on it. bssid is meaningful only for assoc/reassoc;
+    probes broadcast to ff:ff:ff:ff:ff:ff which we treat as None."""
+    if bssid in ("", "ff:ff:ff:ff:ff:ff"):
+        bssid = ""
     return {
         "mac": mac,
         "rssi": rssi,
         "ssid": ssid,
         "channel": channel,
+        "frame_type": frame_type,
+        "bssid": bssid,
         "randomized": _is_randomized_mac(mac),
     }
+
+
+def _frame_type_from_subtype(subtype_s: str) -> Optional[str]:
+    """Map tshark's wlan.fc.type_subtype hex output to the frame_type
+    label we dispatch. Anything outside probe/assoc/reassoc is dropped
+    by the caller (the BPF filter already restricts capture to these,
+    but a defensive check costs nothing)."""
+    s = (subtype_s or "").strip().lower()
+    if not s:
+        return None
+    try:
+        v = int(s, 16) if s.startswith("0x") else int(s)
+    except ValueError:
+        return None
+    if v == 0x04:
+        return "probe"
+    if v == 0x00:
+        return "assoc"
+    if v == 0x02:
+        return "reassoc"
+    return None
+
+
+# Backwards-compatible alias for any external caller (none in-repo)
+# that still expects the old probe-only builder shape.
+def _build_probe(mac: str, rssi: Optional[int], ssid: str, channel: Optional[int]) -> dict:
+    return _build_frame(
+        mac=mac, rssi=rssi, ssid=ssid, channel=channel,
+        frame_type="probe", bssid="",
+    )
 
 
 def _is_randomized_mac(mac: str) -> bool:

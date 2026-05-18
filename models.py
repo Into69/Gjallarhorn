@@ -186,6 +186,13 @@ class AppSettings(BaseModel):
     # land on and misses probes on every other channel. Default cycles the
     # 2.4 GHz non-overlapping channels (1, 6, 11). Empty disables hopping.
     probe_channels: str = "1,6,11"
+    # Dwell time per channel in milliseconds. Lower = more aggressive hop
+    # (catches more channels per second, but trades capture density on
+    # each one). 100 ms is a good baseline: 10 hops/sec on a 3-channel
+    # list still gives ~30 ms of usable capture per dwell after the
+    # `iw set channel` settles. Min 50 ms (driver-settle floor on most
+    # adapters); max 2000 ms (= "park on each channel for 2 s").
+    probe_channel_hop_ms: int = 100
 
     # notifications
     discord_webhook_url: Optional[str] = None

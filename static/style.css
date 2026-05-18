@@ -648,6 +648,7 @@ details.wap-group[open] > summary { border-bottom: 1px solid var(--border); }
 .wap-badge.enc { color: var(--ok); border-color: #1e3a25; background: rgba(121, 224, 140, 0.08); }
 .wap-badge.open { color: var(--warn); border-color: #5a4424; background: rgba(255, 184, 107, 0.08); }
 .wap-badge.rand { color: var(--accent); border-color: #1e4257; background: rgba(92, 209, 255, 0.10); margin-left: 4px; }
+.wap-badge.assoc { color: var(--ok); border-color: #1e3a25; background: rgba(121, 224, 140, 0.10); margin-left: 4px; }
 .wap-badge.mesh     { color: #c79afc; border-color: #3d2f5a; background: rgba(184, 163, 255, 0.10); }
 .wap-badge.ess      { color: var(--accent); border-color: #1e4257; background: rgba(92, 209, 255, 0.10); }
 .wap-badge.multiband{ color: var(--ok); border-color: #1e3a25; background: rgba(121, 224, 140, 0.06); }
