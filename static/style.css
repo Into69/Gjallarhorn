@@ -1707,6 +1707,15 @@ fieldset label { display: grid; gap: 4px; margin-bottom: 10px; }
 .settings-content fieldset > label:has(.iface-info) {
   grid-column: 1 / -1;
 }
+/* Fieldsets with <h4> subsection dividers (currently just the Sensors
+   panel, which splits Wi-Fi / BLE / BR/EDR) shouldn't try to flow
+   labels into the multi-column grid — the subsection headers already
+   span the row, leaving lone labels stranded in a single cell with
+   empty space to their right. Force every label in those fieldsets
+   to take the full row so each block stacks cleanly under its h4. */
+.settings-content fieldset:has(.subsection-h) > label {
+  grid-column: 1 / -1;
+}
 /* Inputs inside the multi-column grid would otherwise stretch to fill
    their grid cell (~280 px+), making a 3-digit number input look
    comically wide. Cap each type to a reasonable width and align to
