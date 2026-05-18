@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260517m" />
+  <link rel="stylesheet" href="/static/style.css?v=20260517n" />
 </head>
 <body>
   <header>
@@ -51,7 +51,6 @@
             <span id="map-baseline-icon" aria-hidden="true"></span>
           </button>
         </div>
-        <div id="alert-toasts" class="alert-toasts" aria-live="polite"></div>
         <button id="mission-indicator" class="mission-indicator" type="button"
                 title="Mission running — click to open the Mission tab" hidden>
           <span class="mission-indicator-dot" aria-hidden="true"></span>
@@ -1288,6 +1287,12 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
     </section>
   </main>
 
+  <!-- Floating alert toast stack. Body-level (not inside the map tab)
+       so the popups are visible regardless of which tab is active —
+       the operator can be on the Mission or Alerts tab and still see
+       a rule fire in the corner of the screen. -->
+  <div id="alert-toasts" class="alert-toasts" aria-live="polite"></div>
+
   <!-- Reusable modal overlay. Populated by the Devices-tab timeline view. -->
   <div id="modal-overlay" class="modal-overlay" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
@@ -1300,6 +1305,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260517m"></script>
+  <script src="/static/app.js?v=20260517n"></script>
 </body>
 </html>
