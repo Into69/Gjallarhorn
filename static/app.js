@@ -3035,12 +3035,14 @@ $("#alerts-list")?.addEventListener("click", async (ev) => {
       clrBtn.disabled = false;
     }
   }
-  // Per-row delete: drop this alert event from the feed.
+  // Per-row delete: drop this alert event from the feed. No confirm —
+  // single-row delete is cheap to undo by waiting for the next match,
+  // and the feed is high-volume enough that a modal per click would
+  // be friction. The 'Clear feed' broom keeps its confirm.
   const delBtn = ev.target.closest(".alert-delete");
   if (delBtn && !delBtn.disabled) {
     const eventId = parseInt(delBtn.dataset.id, 10);
     if (!Number.isFinite(eventId)) return;
-    if (!confirm("Delete this alert from the feed?\n\nOther events from the same rule/device are kept, and the rule itself is untouched.")) return;
     delBtn.disabled = true;
     try {
       await api(`/api/alerts/events/${eventId}`, { method: "DELETE" });
