@@ -2412,19 +2412,66 @@ function renderWapGroup(g) {
     ? `<span class="wap-state visible" title="Visible — ${g.bssid_count} AP${g.bssid_count === 1 ? "" : "s"} captured for this SSID" aria-label="visible"></span>`
     : `<span class="wap-state wanted" title="Wanted — clients have probed for this SSID but no AP has been captured" aria-label="probe-only"></span>`;
   const bestRssi = g.best_rssi != null ? `${g.best_rssi} dBm` : "—";
+  // Per-BSSID expansion: each BSSID row is clickable, and reveals a
+  // hidden sibling row listing the wifi_clients that probed for this
+  // SSID *at the same location*. "Associated" here is the best-effort
+  // inference we have — we only see probes, not 802.11 association
+  // frames, so colocation is the proxy. A BSSID with no clients in the
+  // sense gets no expand arrow.
   const bssidRows = g.bssids.length
-    ? g.bssids.map(b => `
-        <tr>
-          <td class="mono">${escapeHtml(b.bssid)}</td>
-          <td>${escapeHtml(b.vendor || "")}</td>
-          <td>${b.channel != null ? escapeHtml(String(b.channel)) : ""}${b.band ? ` <span class="muted">${escapeHtml(b.band)}</span>` : ""}</td>
-          <td>${escapeHtml(b.encryption || "open")}</td>
-          <td>${b.best_rssi != null ? b.best_rssi + " dBm" : ""}</td>
-          <td>${b.seen_count ?? ""}</td>
-          <td class="mono">${escapeHtml(formatTime(b.last_seen))}</td>
-          <td>${b.location_id != null ? `#${b.location_id}` : ""}</td>
-        </tr>`).join("")
-    : `<tr><td colspan="8" class="muted">No AP captured for this SSID — clients have been probing for it.</td></tr>`;
+    ? g.bssids.map((b, i) => {
+        const matched = (b.location_id != null)
+          ? g.clients.filter(c => c.location_id === b.location_id)
+          : [];
+        const clientCount = matched.length;
+        const expandable = clientCount > 0;
+        const arrow = expandable
+          ? `<span class="wap-expand-arrow" aria-hidden="true">▸</span>`
+          : "";
+        const rowCls = expandable ? "wap-bssid-row expandable" : "wap-bssid-row";
+        const subRows = matched.map(c => {
+          const probed = (c.ssids || []).filter(s => s).slice(0, 6).join(", ");
+          const more = (c.ssids || []).filter(s => s).length > 6
+            ? ` (+${(c.ssids || []).filter(s => s).length - 6})` : "";
+          return `
+            <tr>
+              <td class="mono">${escapeHtml(c.device_id)}${c.randomized ? ' <span class="wap-badge rand">rand</span>' : ""}</td>
+              <td>${escapeHtml(c.vendor || "")}</td>
+              <td>${(c.channels || []).join(", ")}</td>
+              <td>${c.best_rssi != null ? c.best_rssi + " dBm" : ""}</td>
+              <td>${c.seen_count ?? ""}</td>
+              <td class="mono">${escapeHtml(formatTime(c.last_seen))}</td>
+              <td>${escapeHtml(probed)}${more ? `<span class="muted">${escapeHtml(more)}</span>` : ""}</td>
+            </tr>`;
+        }).join("");
+        const detailRow = expandable
+          ? `
+            <tr class="wap-bssid-clients" hidden>
+              <td colspan="9">
+                <table class="wap-table wap-bssid-clients-table">
+                  <thead><tr>
+                    <th>MAC</th><th>Vendor</th><th>Channels</th><th>Best RSSI</th>
+                    <th>Probes</th><th>Last seen</th><th>Other SSIDs probed</th>
+                  </tr></thead>
+                  <tbody>${subRows}</tbody>
+                </table>
+              </td>
+            </tr>`
+          : "";
+        return `
+          <tr class="${rowCls}" data-bssid-idx="${i}">
+            <td class="mono">${arrow}${escapeHtml(b.bssid)}</td>
+            <td>${escapeHtml(b.vendor || "")}</td>
+            <td>${b.channel != null ? escapeHtml(String(b.channel)) : ""}${b.band ? ` <span class="muted">${escapeHtml(b.band)}</span>` : ""}</td>
+            <td>${escapeHtml(b.encryption || "open")}</td>
+            <td>${b.best_rssi != null ? b.best_rssi + " dBm" : ""}</td>
+            <td>${b.seen_count ?? ""}</td>
+            <td class="mono">${escapeHtml(formatTime(b.last_seen))}</td>
+            <td>${b.location_id != null ? `#${b.location_id}` : ""}</td>
+            <td class="wap-bssid-clients-count">${clientCount}</td>
+          </tr>${detailRow}`;
+      }).join("")
+    : `<tr><td colspan="9" class="muted">No AP captured for this SSID — clients have been probing for it.</td></tr>`;
 
   const clientRows = g.clients.length
     ? g.clients.map(c => {
@@ -2457,11 +2504,12 @@ function renderWapGroup(g) {
         </span>
       </summary>
       <div class="wap-body">
-        <h4 class="wap-h">Access points</h4>
-        <table class="wap-table">
+        <h4 class="wap-h">Access points <span class="muted small">(click a row to see clients probing here)</span></h4>
+        <table class="wap-table wap-aps-table">
           <thead><tr>
             <th>BSSID</th><th>Vendor</th><th>Channel</th><th>Encryption</th>
             <th>Best RSSI</th><th>Seen</th><th>Last seen</th><th>Loc</th>
+            <th title="Wifi clients that probed for this SSID at the same location as this BSSID. Best-effort 'associated' — we only see probes, not actual 802.11 association frames.">Clients</th>
           </tr></thead>
           <tbody>${bssidRows}</tbody>
         </table>
@@ -2479,6 +2527,20 @@ function renderWapGroup(g) {
 
 $("#wap-refresh")?.addEventListener("click", refreshWifiAps);
 $("#wap-location")?.addEventListener("change", refreshWifiAps);
+
+// Delegated click on the AP table: toggle the per-BSSID 'clients probing
+// here' detail row. Skip clicks on interactive children (links, buttons,
+// inputs) so the row click doesn't fight any future row-level controls.
+$("#wap-list")?.addEventListener("click", (ev) => {
+  const row = ev.target.closest(".wap-bssid-row.expandable");
+  if (!row || !row.parentNode) return;
+  if (ev.target.closest("a, button, input, select, .wap-bssid-clients")) return;
+  const detail = row.nextElementSibling;
+  if (!detail || !detail.classList.contains("wap-bssid-clients")) return;
+  const isOpen = !detail.hidden;
+  detail.hidden = isOpen;
+  row.classList.toggle("expanded", !isOpen);
+});
 $("#wap-search")?.addEventListener("input", () => {
   clearTimeout(_wapSearchTimer);
   _wapSearchTimer = setTimeout(renderWifiAps, 120);

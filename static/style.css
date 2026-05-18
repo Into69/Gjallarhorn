@@ -695,6 +695,37 @@ details.wap-group[open] > summary { border-bottom: 1px solid var(--border); }
 .wap-table tbody tr:last-child td { border-bottom: none; }
 .wap-table .mono { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
 
+/* Per-BSSID expansion in the Access points table: clickable rows that
+   reveal a nested 'clients probing here' table just below. */
+.wap-bssid-row.expandable { cursor: pointer; }
+.wap-bssid-row.expandable:hover { background: rgba(92, 209, 255, 0.05); }
+.wap-bssid-row .wap-bssid-clients-count { color: var(--muted); }
+.wap-bssid-row.expandable .wap-bssid-clients-count { color: var(--accent); }
+.wap-expand-arrow {
+  display: inline-block;
+  color: var(--muted);
+  margin-right: 6px;
+  transition: transform 120ms ease;
+}
+.wap-bssid-row.expanded .wap-expand-arrow {
+  transform: rotate(90deg);
+  color: var(--accent);
+}
+.wap-bssid-clients > td {
+  background: var(--panel-2);
+  padding: 0 !important;
+  border-bottom: 1px solid var(--border);
+}
+.wap-bssid-clients-table {
+  margin: 0;
+}
+.wap-bssid-clients-table th {
+  background: var(--panel);
+}
+.wap-bssid-clients-table th, .wap-bssid-clients-table td {
+  padding-left: 24px;
+}
+
 /* ── Mission tab ────────────────────────────────────────
    Centralised mission/trip control panel — hero header, live status
    + DB stats cards, grouped destructive actions, and a localStorage
