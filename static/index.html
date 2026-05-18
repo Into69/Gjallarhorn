@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260517n" />
+  <link rel="stylesheet" href="/static/style.css?v=20260517s" />
 </head>
 <body>
   <header>
@@ -596,8 +596,6 @@
         <button id="loc-report" class="secondary">Generate report (PDF)</button>
         <progress id="loc-report-progress" value="0" max="1" hidden></progress>
         <span id="loc-report-progress-label" class="muted" hidden></span>
-        <span class="toolbar-spacer"></span>
-        <span class="muted" title="Reset and Delete all moved to the Mission tab.">Bulk actions moved to the Mission tab →</span>
       </div>
       <table id="loc-table">
         <thead>
@@ -772,6 +770,12 @@
     </section>
 
     <section id="tab-settings" class="tab">
+      <div class="settings-search-bar">
+        <input type="search" id="settings-search" placeholder="Search settings…" autocomplete="off"
+               aria-label="Search settings fields"
+               data-help="Filters every settings section at once. Matches against field labels, hints, and section headers. Non-matching fields collapse so you can scan the whole page in one pass — clear the box to return to the normal section view." />
+        <span id="settings-search-summary" class="muted small" hidden></span>
+      </div>
       <div class="settings-layout">
       <nav class="settings-nav" aria-label="Settings sections">
         <div class="settings-nav-group">
@@ -1047,6 +1051,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
 
         <div class="form-actions">
           <button type="submit">Save</button>
+          <span id="settings-changed-count" class="settings-changed-count" hidden></span>
           <span id="save-status"></span>
         </div>
       </form>
@@ -1305,6 +1310,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260517n"></script>
+  <script src="/static/app.js?v=20260517s"></script>
 </body>
 </html>

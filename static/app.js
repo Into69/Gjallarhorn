@@ -1464,7 +1464,185 @@ async function loadSettings() {
   applyFontScale(s.font_scale || "default");
   // Kick off the probe channel checkbox grid for the saved interface (if any).
   refreshProbeChannelsForIface((s.probe_interface || "").trim() || null);
+  // Tag each label as a searchable / change-trackable field, then snap
+  // the just-loaded values so the diff indicator starts clean.
+  _markSettingFields();
+  _snapshotSettings();
+  _updateSettingsChangeCount();
 }
+
+// Per-field state machinery for the search filter and the unsaved-change
+// diff. We use the natural <label> wrappers inside the Settings form as
+// the unit; each gets a `.setting-field` class on first touch so CSS
+// can hang the changed-dot and search-collapse rules off a single hook.
+function _markSettingFields() {
+  // Tag every label-like field across every section (incl. the
+  // whitelist / silenced / updates / oui panels that live outside
+  // #settings-form) so the search filter can find them. Diff tracking
+  // is gated by _settingsSnapshot which only enumerates #settings-form
+  // — labels in unrelated forms inherit the .setting-field class for
+  // search purposes but never get the .setting-changed marker.
+  for (const lbl of document.querySelectorAll(".settings-section fieldset > label")) {
+    lbl.classList.add("setting-field");
+  }
+  for (const lbl of document.querySelectorAll(".settings-section .field-row > label")) {
+    lbl.classList.add("setting-field");
+  }
+  for (const lbl of document.querySelectorAll(".settings-section form > label")) {
+    lbl.classList.add("setting-field");
+  }
+}
+
+let _settingsSnapshot = new Map();
+function _snapshotSettings() {
+  _settingsSnapshot.clear();
+  const form = document.getElementById("settings-form");
+  if (!form) return;
+  for (const el of form.elements) {
+    if (!el.name) continue;
+    const v = el.type === "checkbox" ? !!el.checked : (el.value ?? "");
+    _settingsSnapshot.set(el.name, v);
+  }
+}
+
+function _settingFieldIsChanged(el) {
+  if (!_settingsSnapshot.has(el.name)) return false;
+  const cur = el.type === "checkbox" ? !!el.checked : (el.value ?? "");
+  return cur !== _settingsSnapshot.get(el.name);
+}
+
+function _updateSettingsChangeCount() {
+  const form = document.getElementById("settings-form");
+  if (!form) return;
+  let count = 0;
+  // Clear any prior markers, then re-paint for whatever's changed now.
+  for (const lbl of form.querySelectorAll(".setting-field.setting-changed")) {
+    lbl.classList.remove("setting-changed");
+  }
+  for (const el of form.elements) {
+    if (!el.name) continue;
+    if (!_settingFieldIsChanged(el)) continue;
+    count++;
+    const lbl = el.closest(".setting-field") || el.closest("label");
+    if (lbl) lbl.classList.add("setting-changed");
+  }
+  const badge = document.getElementById("settings-changed-count");
+  if (badge) {
+    if (count > 0) {
+      badge.hidden = false;
+      badge.textContent = `${count} unsaved change${count === 1 ? "" : "s"}`;
+    } else {
+      badge.hidden = true;
+      badge.textContent = "";
+    }
+  }
+}
+
+// Field-search: filter every section at once. Labels whose text doesn't
+// contain the query get .no-search-match; fieldsets and sections with
+// no surviving children pick up the same class and collapse via CSS.
+// Sidebar nav items get a per-section match count badge.
+function _applySettingsSearch(rawQuery) {
+  const q = (rawQuery || "").trim().toLowerCase();
+  const body = document.body;
+  body.classList.toggle("settings-searching", q.length > 0);
+  const sections = document.querySelectorAll("#settings-form .settings-section, .settings-content > .settings-section");
+  const summary = document.getElementById("settings-search-summary");
+  const matchCounts = new Map();   // section name -> match count
+  let totalMatches = 0;
+  // Also count fields that live in detached sections (whitelist, etc.)
+  // that aren't inside #settings-form.
+  for (const sec of sections) {
+    let secMatches = 0;
+    const fieldsets = sec.querySelectorAll("fieldset");
+    if (!fieldsets.length) {
+      // Sections without a fieldset (e.g. update-panel) — treat the
+      // whole section as one match unit.
+      const haystack = sec.textContent.toLowerCase();
+      const matched = !q || haystack.includes(q);
+      sec.classList.toggle("no-search-match", q && !matched);
+      if (matched && q) secMatches++;
+    } else {
+      for (const fs of fieldsets) {
+        const legendText = (fs.querySelector("legend")?.textContent || "").toLowerCase();
+        const legendHit = !!q && legendText.includes(q);
+        const labels = fs.querySelectorAll(".setting-field");
+        let fsMatches = 0;
+        if (!labels.length) {
+          // No labels (just buttons/hints) — fall back to whole-fieldset text.
+          const matched = !q || fs.textContent.toLowerCase().includes(q);
+          fs.classList.toggle("no-search-match", q && !matched);
+          if (matched && q) fsMatches++;
+        } else {
+          for (const lbl of labels) {
+            const text = lbl.textContent.toLowerCase();
+            const matched = !q || legendHit || text.includes(q);
+            lbl.classList.toggle("no-search-match", q && !matched);
+            if (matched && q) fsMatches++;
+          }
+          fs.classList.toggle("no-search-match", q && fsMatches === 0);
+        }
+        secMatches += fsMatches;
+      }
+      sec.classList.toggle("no-search-match", q && secMatches === 0);
+    }
+    if (sec.dataset.section) matchCounts.set(sec.dataset.section, secMatches);
+    totalMatches += secMatches;
+  }
+  // Decorate nav items with their match counts.
+  for (const btn of document.querySelectorAll(".settings-nav-item")) {
+    const name = btn.dataset.section;
+    const n = matchCounts.get(name) || 0;
+    let badge = btn.querySelector(".settings-nav-count");
+    if (q) {
+      if (!badge) {
+        badge = document.createElement("span");
+        badge.className = "settings-nav-count";
+        btn.appendChild(badge);
+      }
+      badge.textContent = String(n);
+      btn.classList.toggle("has-matches", n > 0);
+      btn.classList.toggle("zero-matches", n === 0);
+    } else {
+      btn.classList.remove("has-matches", "zero-matches");
+      if (badge) badge.remove();
+    }
+  }
+  if (summary) {
+    if (q) {
+      summary.hidden = false;
+      summary.textContent = totalMatches === 0
+        ? "No matches"
+        : `${totalMatches} match${totalMatches === 1 ? "" : "es"}`;
+    } else {
+      summary.hidden = true;
+      summary.textContent = "";
+    }
+  }
+}
+
+(function setupSettingsSearchAndDiff() {
+  const search = document.getElementById("settings-search");
+  if (search) {
+    let t = null;
+    search.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(() => _applySettingsSearch(search.value), 80);
+    });
+    // Pressing Escape while focused clears the filter.
+    search.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        search.value = "";
+        _applySettingsSearch("");
+      }
+    });
+  }
+  const form = document.getElementById("settings-form");
+  if (form) {
+    form.addEventListener("input", _updateSettingsChangeCount);
+    form.addEventListener("change", _updateSettingsChangeCount);
+  }
+})();
 
 // Set the body[data-font-scale] attribute that drives the global zoom
 // CSS rules. "default" is the no-zoom path, so we clear the attribute
@@ -1528,6 +1706,10 @@ $("#settings-form").addEventListener("submit", async (e) => {
     const updated = await api("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
     $("#save-status").textContent = "saved";
     await applyMapProvider(updated.map_provider);
+    // Re-snapshot so the diff badges reset — every field is now in the
+    // saved state, so nothing is "unsaved" anymore.
+    _snapshotSettings();
+    _updateSettingsChangeCount();
     setTimeout(() => ($("#save-status").textContent = ""), 1500);
   } catch (err) {
     $("#save-status").textContent = "error: " + err.message;
@@ -2357,16 +2539,35 @@ async function refreshAlertRules() {
     const extraBadge = extras.length
       ? ` <span class="rule-extra-badge" title="${escapeAttr("AND " + extraTip)}">+${extras.length} AND</span>`
       : "";
-    const sw = (cls, on) => `
-      <label class="mission-switch small">
-        <input type="checkbox" class="${cls}" data-id="${r.id}" role="switch" ${on ? "checked" : ""}>
-        <span class="mission-switch-track" aria-hidden="true">
-          <span class="mission-switch-thumb"></span>
-        </span>
-      </label>`;
+    const sw = (cls, on, opts = {}) => {
+      const disAttr = opts.disabled ? " disabled" : "";
+      const wrapAttr = opts.title ? ` title="${escapeAttr(opts.title)}"` : "";
+      const wrapCls = opts.disabled ? " disabled" : "";
+      return `
+        <label class="mission-switch small${wrapCls}"${wrapAttr}>
+          <input type="checkbox" class="${cls}" data-id="${r.id}" role="switch" ${on ? "checked" : ""}${disAttr}>
+          <span class="mission-switch-track" aria-hidden="true">
+            <span class="mission-switch-thumb"></span>
+          </span>
+        </label>`;
+    };
+    // A broken rule (disabled_reason set by the server when its
+    // location_id reference disappeared) can't be re-enabled until the
+    // operator edits the rule to fix the reference. Lock the On switch
+    // and surface the reason as a tooltip + row decoration.
+    const brokenReason = r.disabled_reason || "";
+    if (brokenReason) tr.classList.add("rule-broken");
+    const brokenBadge = brokenReason
+      ? `<span class="rule-broken-badge" title="${escapeAttr(brokenReason)}">⚠ broken</span>`
+      : "";
     tr.innerHTML = `
-      <td>${sw("rule-toggle", r.enabled)}</td>
-      <td>${escapeHtml(r.name)}</td>
+      <td>${sw("rule-toggle", r.enabled, {
+        disabled: !!brokenReason,
+        title: brokenReason
+          ? `Broken: ${brokenReason}. Edit the rule to fix.`
+          : "",
+      })}</td>
+      <td>${escapeHtml(r.name)}${brokenBadge}</td>
       <td>${escapeHtml(r.kind || "any")}</td>
       <td>${escapeHtml(MATCH_TYPE_LABEL[r.match_type] || r.match_type)}${extraBadge}</td>
       <td class="mono">${escapeHtml(r.match_value)}</td>
@@ -2390,9 +2591,18 @@ async function refreshAlertRules() {
   }
   $$(".rule-toggle").forEach(cb =>
     cb.addEventListener("change", async () => {
-      await api(`/api/alerts/rules/${cb.dataset.id}`, {
-        method: "PATCH", body: JSON.stringify({ enabled: cb.checked }),
-      });
+      const want = cb.checked;
+      try {
+        await api(`/api/alerts/rules/${cb.dataset.id}`, {
+          method: "PATCH", body: JSON.stringify({ enabled: want }),
+        });
+      } catch (e) {
+        // Most likely a broken-rule re-enable attempt — back the toggle
+        // out and surface the server's reason so the operator knows to
+        // edit the rule rather than retry.
+        cb.checked = !want;
+        alert("Could not toggle rule: " + (e.message || e));
+      }
     })
   );
   $$(".rule-discord").forEach(cb =>
@@ -2765,7 +2975,13 @@ function showAlertOnMap(e) {
   // hears the rule fire, just no on-screen pop. Default (flag undefined)
   // is to show the toast; only an explicit `false` suppresses.
   const stack = $("#alert-toasts");
-  if (!stack || window._missionShowAlertPopups === false) {
+  // Suppress the visual toast when:
+  //   - the slider on the Mission control hero is off, OR
+  //   - the operator is on the Alerts tab (the live feed is already
+  //     showing the alert in-line; a floating duplicate is just noise).
+  // Audible alarm still fires (gated by its own mute toggle).
+  const onAlertsTab = document.getElementById("tab-alerts")?.classList.contains("active");
+  if (!stack || window._missionShowAlertPopups === false || onAlertsTab) {
     if (e.rule_audible) playAlarm();
     return;
   }
@@ -4503,6 +4719,11 @@ async function _refreshMissionLifecycle() {
   const active = activeRes.mission || null;
   const missions = listRes.missions || [];
 
+  // Lock the Start submit whenever a mission is active. Hiding the
+  // whole form is the primary UX; disabling the button is a defensive
+  // second layer so a stale view (or a click landing between polls)
+  // can't post a duplicate-mission request that the server would 409.
+  const submitBtn = startForm.querySelector('button[type="submit"]');
   if (active) {
     const dur = active.started_at
       ? formatUptime((Date.now() - Date.parse(active.started_at)) / 1000)
@@ -4520,10 +4741,18 @@ async function _refreshMissionLifecycle() {
         <button id="mission-end" type="button" class="danger">End mission</button>
       </div>`;
     startForm.hidden = true;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.title = "A mission is already running — end it before starting a new one.";
+    }
     document.getElementById("mission-end")?.addEventListener("click", _endActiveMission);
   } else {
     activeBlock.innerHTML = `<p class="muted small">No mission in progress. Start one to snapshot the DB and tag the report.</p>`;
     startForm.hidden = false;
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.title = "";
+    }
   }
 
   if (!missions.length) {
