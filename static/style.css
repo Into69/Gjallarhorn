@@ -1962,32 +1962,76 @@ select option:disabled { color: var(--muted); }
   margin-bottom: 8px;
 }
 .probe-channels-header .secondary { padding: 4px 10px; font-size: 12px; }
-.probe-channels-band {
-  margin-top: 6px;
+
+/* Band-grouped channel picker. Each band is its own section with a
+   header showing the WiFi standards that use it, a 'N / total'
+   counter, and per-band All / None buttons. Channels render as
+   compact switch-pills inside a packed grid so 59 6-GHz entries still
+   fit on a normal viewport. */
+.probe-channels-wrap {
+  display: flex; flex-direction: column; gap: 14px;
 }
-.probe-channels-band-title {
-  font-size: 11px; color: var(--muted); text-transform: uppercase;
-  letter-spacing: 0.06em; margin-bottom: 4px;
-}
-.probe-channels-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-  gap: 4px;
-}
-.probe-channels-grid label {
-  display: flex; align-items: center; gap: 4px;
+.probe-band {
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 3px 6px;
-  font-size: 12px;
-  cursor: pointer;
-  margin: 0;
+  border-radius: 8px;
+  padding: 10px 12px;
 }
-.probe-channels-grid label:hover { border-color: var(--accent); }
-.probe-channels-grid label.disabled { opacity: 0.5; }
-.probe-channels-grid label.no-ir   { background: rgba(255, 184, 107, 0.06); }
-.probe-channels-grid input { margin: 0; }
+.probe-band-header {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.probe-band-label {
+  font-size: 13px; font-weight: 600; color: var(--accent);
+  letter-spacing: 0.04em;
+}
+.probe-band-tags {
+  font-size: 10px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em;
+}
+.probe-band-count {
+  margin-left: auto;
+  font-size: 11px; color: var(--muted);
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+}
+.probe-band-count.has-selection {
+  color: var(--ok); border-color: var(--ok);
+}
+.probe-band-toggle.secondary {
+  padding: 2px 8px; font-size: 11px;
+}
+.probe-band-note { margin: 0 0 8px; font-size: 10.5px; }
+.probe-band-channels {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 6px;
+}
+/* Compact channel pill — switch on the right, channel number on the
+   left. Smaller-than-default mission-switch so the 6-GHz block still
+   reads at a glance. */
+.probe-channel.mission-switch {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px 4px 8px;
+  cursor: pointer;
+}
+.probe-channel .probe-channel-num {
+  font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
+  font-size: 12px;
+  color: var(--fg);
+}
+.probe-channel:has(input:checked) {
+  border-color: var(--ok);
+  background: rgba(121, 224, 140, 0.08);
+}
+.probe-channel:hover { border-color: var(--accent); }
 
 /* Whitelist panel form. */
 .wl-form {

@@ -1717,8 +1717,6 @@ $("#settings-form").addEventListener("submit", async (e) => {
 });
 
 // ── probe scanner channel picker ──────────────────────
-let _probeChannelsCache = null;       // most recent fetched channel list
-let _probeChannelsIface = null;       // iface those channels were fetched for
 
 function _parseChannelList(s) {
   // Tolerant of whitespace and bad entries; mirrors services/probe_scanner.parse_channels.
@@ -1733,63 +1731,130 @@ function _serializeChannels(set) {
   return [...set].sort((a, b) => a - b).join(",");
 }
 
-function renderProbeChannels(channels, selected) {
+// Full channel inventory for the probe-channel picker. Grouped by band
+// since the same channel number is shared across WiFi 4/5/6/6E/7 — the
+// physical channel is what we tune, the standard is just modulation /
+// features. Each band header advertises the standards that use it so
+// the operator gets the version mapping without channel duplication.
+//
+// 2.4 GHz: 1–14 (ch 14 is JP-only but harmless to include).
+// 5 GHz : UNII-1 (36-48), UNII-2A DFS (52-64), UNII-2C DFS (100-144),
+//         UNII-3 (149-165).
+// 6 GHz : every 4 from 1 to 233 — 59 channels covering the WiFi 6E
+//         320 MHz superset that WiFi 7 inherits.
+const PROBE_BANDS = [
+  {
+    key: "2.4",
+    label: "2.4 GHz",
+    tags: "WiFi 4 · 6 · 7",
+    note: "Crowded but everywhere — most legacy devices and a lot of IoT live here.",
+    channels: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+  },
+  {
+    key: "5",
+    label: "5 GHz",
+    tags: "WiFi 4 · 5 · 6 · 7",
+    note: "Cleaner than 2.4 GHz. UNII-2/2C channels (52–144) are DFS — many adapters need passive-scan/no-IR rules.",
+    channels: [
+      36, 40, 44, 48,
+      52, 56, 60, 64,
+      100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
+      149, 153, 157, 161, 165,
+    ],
+  },
+  {
+    key: "6",
+    label: "6 GHz",
+    tags: "WiFi 6E · 7",
+    note: "Only modern adapters tune here. 59 × 20 MHz channels every 4 from ch 1 to ch 233.",
+    channels: Array.from({length: 59}, (_, i) => 1 + i * 4), // 1, 5, 9, … 233
+  },
+];
+
+function renderProbeChannels(_channels, selected) {
   const grid = $("#probe-channels-grid");
   if (!grid) return;
-  if (!channels || !channels.length) {
-    grid.className = "muted";
-    grid.textContent = _probeChannelsIface
-      ? `No supported channels reported for ${_probeChannelsIface} (iw not available, or interface offline?).`
-      : "Pick an interface above to see its supported channels.";
-    updateProbeChannelsSummary(selected);
-    return;
-  }
-  grid.className = "";
+  grid.className = "probe-channels-wrap";
   grid.innerHTML = "";
-  // Group by band; render each band as its own grid.
-  const bands = {};
-  for (const c of channels) {
-    (bands[c.band] = bands[c.band] || []).push(c);
-  }
-  // Stable order: 2.4 → 5 → 6 → other
-  const ORDER = ["2.4GHz", "5GHz", "6GHz"];
-  const bandKeys = Object.keys(bands).sort((a, b) => {
-    const ai = ORDER.indexOf(a), bi = ORDER.indexOf(b);
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-  });
-  for (const band of bandKeys) {
-    const wrap = document.createElement("div");
-    wrap.className = "probe-channels-band";
-    wrap.innerHTML = `<div class="probe-channels-band-title">${escapeHtml(band)}</div>`;
-    const inner = document.createElement("div");
-    inner.className = "probe-channels-grid";
-    for (const c of bands[band]) {
-      const checked = selected.has(c.channel);
-      const flags = [];
-      if (c.no_ir)    flags.push("no-IR");
-      if (c.disabled) flags.push("disabled");
-      const flagStr = flags.length ? ` (${flags.join(", ")})` : "";
+  for (const band of PROBE_BANDS) {
+    const section = document.createElement("section");
+    section.className = "probe-band";
+    section.dataset.band = band.key;
+    const header = document.createElement("header");
+    header.className = "probe-band-header";
+    header.innerHTML = `
+      <span class="probe-band-label">${escapeHtml(band.label)}</span>
+      <span class="probe-band-tags">${escapeHtml(band.tags)}</span>
+      <span class="probe-band-count" data-band="${band.key}">0 / ${band.channels.length}</span>
+      <button type="button" class="secondary probe-band-toggle" data-band="${band.key}" data-mode="all">All</button>
+      <button type="button" class="secondary probe-band-toggle" data-band="${band.key}" data-mode="none">None</button>
+    `;
+    section.appendChild(header);
+    const note = document.createElement("p");
+    note.className = "probe-band-note muted small";
+    note.textContent = band.note;
+    section.appendChild(note);
+    const list = document.createElement("div");
+    list.className = "probe-band-channels";
+    for (const ch of band.channels) {
+      const id = `probe-ch-${band.key}-${ch}`;
+      const checked = selected.has(ch);
       const label = document.createElement("label");
-      label.title = `${c.freq_mhz} MHz${flagStr}`;
-      if (c.disabled) label.classList.add("disabled");
-      if (c.no_ir)    label.classList.add("no-ir");
+      label.className = "probe-channel mission-switch small";
+      label.htmlFor = id;
+      label.title = `Channel ${ch} · ${band.label}`;
       label.innerHTML = `
-        <input type="checkbox" value="${c.channel}" ${checked ? "checked" : ""} />
-        <span>${c.channel}</span>
-      `;
-      label.querySelector("input").addEventListener("change", () => {
+        <span class="probe-channel-num">${ch}</span>
+        <input type="checkbox" id="${id}" data-band="${band.key}" value="${ch}" role="switch" ${checked ? "checked" : ""} />
+        <span class="mission-switch-track" aria-hidden="true">
+          <span class="mission-switch-thumb"></span>
+        </span>`;
+      label.querySelector("input").addEventListener("change", (ev) => {
         const cur = _parseChannelList($("#probe-channels-value").value);
-        const ch = c.channel;
-        if (label.querySelector("input").checked) cur.add(ch); else cur.delete(ch);
+        if (ev.target.checked) cur.add(ch); else cur.delete(ch);
         $("#probe-channels-value").value = _serializeChannels(cur);
         updateProbeChannelsSummary(cur);
+        _updateProbeBandCounts(cur);
       });
-      inner.appendChild(label);
+      list.appendChild(label);
     }
-    wrap.appendChild(inner);
-    grid.appendChild(wrap);
+    section.appendChild(list);
+    grid.appendChild(section);
   }
+  // Wire up the per-band All / None buttons.
+  for (const btn of grid.querySelectorAll(".probe-band-toggle")) {
+    btn.addEventListener("click", () => {
+      const band = PROBE_BANDS.find(b => b.key === btn.dataset.band);
+      if (!band) return;
+      const cur = _parseChannelList($("#probe-channels-value").value);
+      if (btn.dataset.mode === "all") {
+        for (const ch of band.channels) cur.add(ch);
+      } else {
+        for (const ch of band.channels) cur.delete(ch);
+      }
+      $("#probe-channels-value").value = _serializeChannels(cur);
+      // Re-sync the visible switches for this band without re-rendering
+      // the whole picker — much cheaper for the 59-switch 6 GHz block.
+      for (const input of grid.querySelectorAll(`input[data-band="${band.key}"]`)) {
+        input.checked = cur.has(parseInt(input.value, 10));
+      }
+      updateProbeChannelsSummary(cur);
+      _updateProbeBandCounts(cur);
+    });
+  }
+  _updateProbeBandCounts(selected);
   updateProbeChannelsSummary(selected);
+}
+
+function _updateProbeBandCounts(selected) {
+  for (const band of PROBE_BANDS) {
+    const n = band.channels.reduce((acc, ch) => acc + (selected.has(ch) ? 1 : 0), 0);
+    const out = document.querySelector(`.probe-band-count[data-band="${band.key}"]`);
+    if (out) {
+      out.textContent = `${n} / ${band.channels.length}`;
+      out.classList.toggle("has-selection", n > 0);
+    }
+  }
 }
 
 function updateProbeChannelsSummary(selected) {
@@ -1803,24 +1868,13 @@ function updateProbeChannelsSummary(selected) {
   out.textContent = `${selected.size} selected: ${list}`;
 }
 
-async function refreshProbeChannelsForIface(iface) {
+async function refreshProbeChannelsForIface(_iface) {
+  // The full channel inventory is static — every WiFi band is rendered
+  // up-front so the operator can pick anything without needing the
+  // interface to announce it first. iface is kept as an arg for the
+  // call sites that pass it; it's a no-op here now.
   const selected = _parseChannelList($("#probe-channels-value").value);
-  if (!iface) {
-    _probeChannelsCache = null;
-    _probeChannelsIface = null;
-    renderProbeChannels(null, selected);
-    return;
-  }
-  try {
-    const r = await api(`/api/interfaces/wifi/${encodeURIComponent(iface)}/channels`);
-    _probeChannelsCache = r.channels || [];
-    _probeChannelsIface = iface;
-    renderProbeChannels(_probeChannelsCache, selected);
-  } catch (e) {
-    _probeChannelsCache = [];
-    _probeChannelsIface = iface;
-    renderProbeChannels([], selected);
-  }
+  renderProbeChannels(null, selected);
 }
 
 $("#set-probe-iface")?.addEventListener("change", (e) => {
@@ -1828,12 +1882,11 @@ $("#set-probe-iface")?.addEventListener("change", (e) => {
 });
 $("#probe-channels-defaults")?.addEventListener("click", () => {
   $("#probe-channels-value").value = "1,6,11";
-  // Re-render to reflect the new state in the checkboxes.
-  renderProbeChannels(_probeChannelsCache, _parseChannelList("1,6,11"));
+  renderProbeChannels(null, _parseChannelList("1,6,11"));
 });
 $("#probe-channels-clear")?.addEventListener("click", () => {
   $("#probe-channels-value").value = "";
-  renderProbeChannels(_probeChannelsCache, new Set());
+  renderProbeChannels(null, new Set());
 });
 
 // Cached for the per-second relative-time ticker, and for rate computation
