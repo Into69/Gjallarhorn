@@ -2487,7 +2487,14 @@ async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
 
     # Index probed-SSIDs to a map ssid → list of client entries. A single
     # client can probe many networks, so it ends up under every group
-    # whose SSID it ever requested.
+    # whose SSID it ever requested. While we're walking the clients we
+    # also build a reverse index bssid → list of client entries from
+    # the `associated_bssids` field (populated by the broadened probe
+    # scanner from mgmt + data frames). That index is attached per
+    # BSSID below as `attached_clients` so the UI can show 'who's
+    # actually using this AP' separately from 'who probed for this
+    # SSID'.
+    bssid_to_attached: dict[str, list[dict]] = {}
     for r in client_rows:
         try:
             det = json.loads(r.pop("details_json") or "{}")
@@ -2534,6 +2541,27 @@ async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
                     "last_seen": None,
                 })
             g["clients"].append(entry)
+        # Reverse-index for the per-BSSID 'attached devices' list. We
+        # dedupe by device_id so a client that hopped between locations
+        # only shows once under a given BSSID.
+        for b in assoc:
+            attached_list = bssid_to_attached.setdefault(b, [])
+            if not any(c["device_id"] == entry["device_id"] for c in attached_list):
+                attached_list.append(entry)
+
+    # Attach the reverse-index hits to each BSSID. 'attached_clients'
+    # is best-effort evidence — populated whenever a client emits any
+    # mgmt frame or data frame whose Addr3 names this BSSID.
+    for g in groups.values():
+        for b in g["bssids"]:
+            attached = bssid_to_attached.get((b["bssid"] or "").lower(), [])
+            # Sort by recency so the most-recently-seen device shows first.
+            b["attached_clients"] = sorted(
+                attached,
+                key=lambda c: c.get("last_seen") or "",
+                reverse=True,
+            )
+            b["attached_client_count"] = len(b["attached_clients"])
 
     # Sort BSSIDs by signal (strongest first), clients by recency.
     for g in groups.values():

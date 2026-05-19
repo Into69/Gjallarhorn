@@ -2495,35 +2495,43 @@ function renderWapGroup(g) {
     ? `<span class="wap-state visible" title="Visible — ${g.bssid_count} AP${g.bssid_count === 1 ? "" : "s"} captured for this SSID" aria-label="visible"></span>`
     : `<span class="wap-state wanted" title="Wanted — clients have probed for this SSID but no AP has been captured" aria-label="probe-only"></span>`;
   const bestRssi = g.best_rssi != null ? `${g.best_rssi} dBm` : "—";
-  // Per-BSSID expansion: each BSSID row is clickable, and reveals a
-  // hidden sibling row listing the wifi_clients that probed for this
-  // SSID *at the same location*. "Associated" here is the best-effort
-  // inference we have — we only see probes, not 802.11 association
-  // frames, so colocation is the proxy. A BSSID with no clients in the
-  // sense gets no expand arrow.
+  // Per-BSSID expansion: each BSSID row is clickable and reveals a
+  // hidden sibling row with up to two nested tables:
+  //   1. Clients that probed for this SSID at the same location
+  //      (intent — they wanted to find this network).
+  //   2. Devices actually attached to this BSSID — clients whose
+  //      associated_bssids set contains this BSSID, populated by the
+  //      probe-scanner from mgmt + data frames. Catches devices that
+  //      never probed but were seen talking to the AP.
+  // A BSSID with neither list populated gets no expand arrow.
   const bssidRows = g.bssids.length
     ? g.bssids.map((b, i) => {
+        const bssidLc = (b.bssid || "").toLowerCase();
         const matched = (b.location_id != null)
           ? g.clients.filter(c => c.location_id === b.location_id)
           : [];
-        const clientCount = matched.length;
-        const expandable = clientCount > 0;
+        const matchedIds = new Set(matched.map(c => (c.device_id || "").toLowerCase()));
+        // attached_clients comes pre-computed from the API. Filter out
+        // clients already in the probed list so the second table only
+        // shows the *new* signal (associated-but-didn't-probe).
+        const attached = (b.attached_clients || []).filter(
+          c => !matchedIds.has((c.device_id || "").toLowerCase())
+        );
+        const probedCount = matched.length;
+        const attachedCount = attached.length;
+        const expandable = (probedCount + attachedCount) > 0;
         const arrow = expandable
           ? `<span class="wap-expand-arrow" aria-hidden="true">▸</span>`
           : "";
         const rowCls = expandable ? "wap-bssid-row expandable" : "wap-bssid-row";
-        const subRows = matched.map(c => {
+        const renderClientRow = (c, isAttached) => {
           const probed = (c.ssids || []).filter(s => s).slice(0, 6).join(", ");
           const more = (c.ssids || []).filter(s => s).length > 6
             ? ` (+${(c.ssids || []).filter(s => s).length - 6})` : "";
-          // Associated badge: client sent an 802.11 assoc / reassoc
-          // request to THIS BSSID. Strong evidence of an actual
-          // connection — distinct from 'probed for this SSID', which
-          // is just intent.
-          const assocList = (c.associated_bssids || []).map(b => (b || "").toLowerCase());
-          const isAssoc = assocList.includes((b.bssid || "").toLowerCase());
+          const assocList = (c.associated_bssids || []).map(x => (x || "").toLowerCase());
+          const isAssoc = isAttached || assocList.includes(bssidLc);
           const assocBadge = isAssoc
-            ? ` <span class="wap-badge assoc" title="Captured an 802.11 association request from this client to this BSSID — best-effort evidence the client actually connected.">★ associated</span>`
+            ? ` <span class="wap-badge assoc" title="Captured an 802.11 mgmt or data frame between this client and this BSSID — best-effort evidence of an actual association.">★ associated</span>`
             : "";
           return `
             <tr>
@@ -2535,21 +2543,34 @@ function renderWapGroup(g) {
               <td class="mono">${escapeHtml(formatTime(c.last_seen))}</td>
               <td>${escapeHtml(probed)}${more ? `<span class="muted">${escapeHtml(more)}</span>` : ""}</td>
             </tr>`;
-        }).join("");
+        };
+        const probedSubRows = matched.map(c => renderClientRow(c, false)).join("");
+        const attachedSubRows = attached.map(c => renderClientRow(c, true)).join("");
+        const subTableHead = `
+          <thead><tr>
+            <th>MAC</th><th>Vendor</th><th>Channels</th><th>Best RSSI</th>
+            <th>Probes</th><th>Last seen</th><th>Other SSIDs probed</th>
+          </tr></thead>`;
+        const probedSection = probedCount > 0 ? `
+          <h5 class="wap-h wap-h-sub">Probed for this SSID here <span class="muted small">(${probedCount})</span></h5>
+          <table class="wap-table wap-bssid-clients-table">${subTableHead}<tbody>${probedSubRows}</tbody></table>` : "";
+        const attachedSection = attachedCount > 0 ? `
+          <h5 class="wap-h wap-h-sub">Attached devices <span class="muted small">(${attachedCount} — seen exchanging frames with this BSSID)</span></h5>
+          <table class="wap-table wap-bssid-clients-table">${subTableHead}<tbody>${attachedSubRows}</tbody></table>` : "";
         const detailRow = expandable
           ? `
             <tr class="wap-bssid-clients" hidden>
               <td colspan="9">
-                <table class="wap-table wap-bssid-clients-table">
-                  <thead><tr>
-                    <th>MAC</th><th>Vendor</th><th>Channels</th><th>Best RSSI</th>
-                    <th>Probes</th><th>Last seen</th><th>Other SSIDs probed</th>
-                  </tr></thead>
-                  <tbody>${subRows}</tbody>
-                </table>
+                ${probedSection}
+                ${attachedSection}
               </td>
             </tr>`
           : "";
+        // 'Clients' column shows the combined count. Tooltip breaks it
+        // down so the operator can see at a glance how many came from
+        // probes vs from actual frame exchange.
+        const combinedCount = probedCount + attachedCount;
+        const countTip = `${probedCount} probed · ${attachedCount} attached`;
         return `
           <tr class="${rowCls}" data-bssid-idx="${i}">
             <td class="mono">${arrow}${escapeHtml(b.bssid)}</td>
@@ -2560,7 +2581,7 @@ function renderWapGroup(g) {
             <td>${b.seen_count ?? ""}</td>
             <td class="mono">${escapeHtml(formatTime(b.last_seen))}</td>
             <td>${b.location_id != null ? `#${b.location_id}` : ""}</td>
-            <td class="wap-bssid-clients-count">${clientCount}</td>
+            <td class="wap-bssid-clients-count" title="${escapeAttr(countTip)}">${combinedCount}</td>
           </tr>${detailRow}`;
       }).join("")
     : `<tr><td colspan="9" class="muted">No AP captured for this SSID — clients have been probing for it.</td></tr>`;

@@ -718,13 +718,23 @@ details.wap-group[open] > summary { border-bottom: 1px solid var(--border); }
   border-bottom: 1px solid var(--border);
 }
 .wap-bssid-clients-table {
-  margin: 0;
+  margin: 0 0 8px;
 }
 .wap-bssid-clients-table th {
   background: var(--panel);
 }
 .wap-bssid-clients-table th, .wap-bssid-clients-table td {
   padding-left: 24px;
+}
+/* Sub-section heading inside a per-BSSID expansion — distinguishes
+   the 'probed for this SSID here' table from the 'attached devices'
+   table now that both can render together. */
+.wap-h-sub {
+  margin: 10px 0 4px 24px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
 }
 
 /* ── Mission tab ────────────────────────────────────────
