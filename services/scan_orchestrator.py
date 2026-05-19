@@ -245,20 +245,24 @@ class ScanOrchestrator:
                         if s.hide_random_bt_addresses and d.address_type == "random":
                             continue
                         details = d.model_dump(mode="json")
+                        # upsert_bluetooth normalizes the MAC to uppercase
+                        # and absorbs any matching Classic row at this
+                        # location into the BLE row.
+                        address = (d.address or "").upper()
                         if self._recording:
-                            is_new = await db.upsert_device(
-                                location_id=loc_id, kind="bluetooth", device_id=d.address,
+                            is_new, _eff = await db.upsert_bluetooth(
+                                location_id=loc_id, kind="bluetooth", device_id=address,
                                 rssi=d.rssi, details=details,
                             )
                             await db.insert_observation(
-                                location_id=loc_id, kind="bluetooth", device_id=d.address,
+                                location_id=loc_id, kind="bluetooth", device_id=address,
                                 rssi=d.rssi, lat=fix.lat, lon=fix.lon,
                                 raw=details,
                             )
                         else:
                             is_new = False
                         await alert_service.evaluate(
-                            device_kind="bluetooth", device_id=d.address, rssi=d.rssi,
+                            device_kind="bluetooth", device_id=address, rssi=d.rssi,
                             location_id=loc_id, details=details, is_new=is_new,
                             speed_mps=fix.speed,
                         )
@@ -314,20 +318,27 @@ class ScanOrchestrator:
                         if d.rssi < s.min_rssi:
                             continue
                         details = d.model_dump(mode="json")
+                        # upsert_bluetooth uppercases the MAC and folds
+                        # this Classic sighting into the existing BLE row
+                        # (if any) at this location, returning the kind
+                        # the row actually ended up under so the
+                        # observation and alert eval match.
+                        address = (d.address or "").upper()
                         if self._recording:
-                            is_new = await db.upsert_device(
+                            is_new, effective_kind = await db.upsert_bluetooth(
                                 location_id=loc_id, kind="bluetooth_classic",
-                                device_id=d.address, rssi=d.rssi, details=details,
+                                device_id=address, rssi=d.rssi, details=details,
                             )
                             await db.insert_observation(
-                                location_id=loc_id, kind="bluetooth_classic",
-                                device_id=d.address, rssi=d.rssi,
+                                location_id=loc_id, kind=effective_kind,
+                                device_id=address, rssi=d.rssi,
                                 lat=fix.lat, lon=fix.lon, raw=details,
                             )
                         else:
                             is_new = False
+                            effective_kind = "bluetooth_classic"
                         await alert_service.evaluate(
-                            device_kind="bluetooth_classic", device_id=d.address,
+                            device_kind=effective_kind, device_id=address,
                             rssi=d.rssi, location_id=loc_id, details=details,
                             is_new=is_new, speed_mps=fix.speed,
                         )

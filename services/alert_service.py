@@ -1059,7 +1059,7 @@ def build_discord_payload(
     # BLE devices get split by address_type — public is dual-mode hardware
     # (speakers, peripherals), random is privacy-mode BLE (phones, AirTags).
     # Falls back to plain "BLE" / "Bluetooth" when the type is missing.
-    kind_display = db.kind_label(device_kind, details.get("address_type"))
+    kind_display = db.kind_label(device_kind, details.get("address_type"), details)
 
     fields: list[dict] = [
         {"name": "Device", "value": f"`{device_id}`", "inline": True},

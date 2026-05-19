@@ -4773,9 +4773,16 @@ function formatKindLabel(kind, details) {
   if (kind === "wifi_client") return "WiFi client";
   if (kind === "bluetooth") {
     const at = (details && details.address_type) || "";
-    if (at === "public") return "BLE (public)";
-    if (at === "random") return "BLE (random)";
-    return "BLE";
+    // A merged dual-mode device carries its Classic side under
+    // details.classic — surface the CoD major-class so the row reads
+    // "BLE + Classic (Audio/Video)" rather than just "BLE".
+    const classic = details && details.classic;
+    const sub = classic && classic.device_class_label;
+    const baseLabel = at === "public" ? "BLE (public)"
+                    : at === "random" ? "BLE (random)"
+                    : "BLE";
+    if (classic) return sub ? `${baseLabel} + Classic (${sub})` : `${baseLabel} + Classic`;
+    return baseLabel;
   }
   if (kind === "bluetooth_classic") {
     // Append the CoD major-class when the inquiry reported one — e.g.

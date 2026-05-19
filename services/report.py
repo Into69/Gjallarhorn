@@ -415,7 +415,7 @@ def _render_suspect(sus: dict, s: dict, *, total_locations: int):
     # Pull the BLE address_type from the device's details so the label
     # splits "BLE (public)" / "BLE (random)" — matches what the Devices
     # tab and Discord embeds show.
-    kind_label = db.kind_label(sus.get("kind", ""), det.get("address_type"))
+    kind_label = db.kind_label(sus.get("kind", ""), det.get("address_type"), det)
     name = det.get("ssid") or det.get("name") or ""
     vendor = det.get("vendor") or ""
     n_locs = sus.get("n_locations") or 0

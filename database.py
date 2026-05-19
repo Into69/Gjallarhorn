@@ -284,6 +284,155 @@ async def _migrate(db: aiosqlite.Connection) -> None:
             "ALTER TABLE alert_events ADD COLUMN cleared INTEGER NOT NULL DEFAULT 0"
         )
 
+    # Bluetooth case + cross-kind merge. The Classic scanner used to
+    # store MACs lowercase while bleak's BLE rows are uppercase, so the
+    # same physical device could land in two rows at one location. Two
+    # passes:
+    #   1. Collapse every (BLE, Classic) pair at the same location into
+    #      the BLE row, folding Classic-only fields under
+    #      details['classic'] and repointing observations / alert
+    #      events at the survivor.
+    #   2. Normalize remaining bluetooth* device_ids to uppercase across
+    #      every table that stores raw MACs. Where a within-kind case
+    #      duplicate exists (rare — bleak is consistent), merge the
+    #      lowercase row into the uppercase one rather than letting the
+    #      PRIMARY KEY collision abort the migration.
+    async with db.execute(
+        "SELECT location_id, lower(device_id) FROM devices "
+        "WHERE kind IN ('bluetooth','bluetooth_classic') "
+        "GROUP BY location_id, lower(device_id) "
+        "HAVING COUNT(DISTINCT kind) > 1"
+    ) as cur:
+        cross_pairs = await cur.fetchall()
+    for loc_id, mac_l in cross_pairs:
+        mac = mac_l.upper()
+        async with db.execute(
+            "SELECT kind, device_id, details_json, first_seen, best_rssi, seen_count "
+            "FROM devices WHERE location_id=? "
+            "AND kind IN ('bluetooth','bluetooth_classic') "
+            "AND lower(device_id)=?",
+            (loc_id, mac_l),
+        ) as cur2:
+            rows = await cur2.fetchall()
+        ble_row = next((r for r in rows if r[0] == "bluetooth"), None)
+        classic_row = next((r for r in rows if r[0] == "bluetooth_classic"), None)
+        if not (ble_row and classic_row):
+            continue
+        try:
+            ble_details = json.loads(ble_row[2] or "{}")
+        except (TypeError, ValueError):
+            ble_details = {}
+        try:
+            classic_details = json.loads(classic_row[2] or "{}")
+        except (TypeError, ValueError):
+            classic_details = {}
+        folded = {k: v for k, v in {
+            "device_class": classic_details.get("device_class"),
+            "device_class_label": classic_details.get("device_class_label"),
+            "paired": classic_details.get("paired"),
+            "connected": classic_details.get("connected"),
+        }.items() if v is not None}
+        if folded:
+            prior = dict(ble_details.get("classic") or {})
+            prior.update(folded)
+            ble_details["classic"] = prior
+        if not ble_details.get("name") and classic_details.get("name"):
+            ble_details["name"] = classic_details["name"]
+        if not ble_details.get("vendor") and classic_details.get("vendor"):
+            ble_details["vendor"] = classic_details["vendor"]
+        merged_first = min([s for s in (ble_row[3], classic_row[3]) if s])
+        merged_best = max([s for s in (ble_row[4], classic_row[4]) if s is not None])
+        merged_seen = (ble_row[5] or 0) + (classic_row[5] or 0)
+        payload = json.dumps(ble_details, default=str)
+        sig = compute_ble_signature("bluetooth", ble_details)
+        await db.execute(
+            "DELETE FROM devices WHERE location_id=? AND kind='bluetooth_classic' "
+            "AND lower(device_id)=?",
+            (loc_id, mac_l),
+        )
+        await db.execute(
+            "UPDATE devices SET device_id=?, first_seen=?, best_rssi=?, "
+            "seen_count=?, details_json=?, signature=? "
+            "WHERE location_id=? AND kind='bluetooth' AND lower(device_id)=?",
+            (mac, merged_first, merged_best, merged_seen, payload, sig,
+             loc_id, mac_l),
+        )
+        await db.execute(
+            "UPDATE observations SET kind='bluetooth', device_id=? "
+            "WHERE location_id=? AND kind='bluetooth_classic' AND lower(device_id)=?",
+            (mac, loc_id, mac_l),
+        )
+        await db.execute(
+            "UPDATE alert_events SET device_kind='bluetooth', device_id=? "
+            "WHERE location_id=? AND device_kind='bluetooth_classic' AND lower(device_id)=?",
+            (mac, loc_id, mac_l),
+        )
+
+    # Uppercase the surviving rows. Handle the (rare) within-kind case
+    # duplicate by absorbing the lowercase row into its uppercase twin.
+    async with db.execute(
+        "SELECT location_id, kind, device_id, details_json, first_seen, "
+        "       best_rssi, seen_count "
+        "FROM devices WHERE kind IN ('bluetooth','bluetooth_classic') "
+        "AND device_id <> upper(device_id)"
+    ) as cur:
+        needs_upper = await cur.fetchall()
+    for loc_id, k, did, raw, first_seen, best_rssi, seen_count in needs_upper:
+        upper_id = did.upper()
+        async with db.execute(
+            "SELECT first_seen, best_rssi, seen_count, details_json "
+            "FROM devices WHERE location_id=? AND kind=? AND device_id=?",
+            (loc_id, k, upper_id),
+        ) as cur2:
+            twin = await cur2.fetchone()
+        if twin is None:
+            await db.execute(
+                "UPDATE devices SET device_id=? "
+                "WHERE location_id=? AND kind=? AND device_id=?",
+                (upper_id, loc_id, k, did),
+            )
+        else:
+            try:
+                d_lower = json.loads(raw or "{}")
+            except (TypeError, ValueError):
+                d_lower = {}
+            try:
+                d_upper = json.loads(twin[3] or "{}")
+            except (TypeError, ValueError):
+                d_upper = {}
+            merged_d = {**d_lower, **d_upper}
+            merged_first2 = min([s for s in (first_seen, twin[0]) if s])
+            merged_best2 = max([s for s in (best_rssi, twin[1]) if s is not None])
+            merged_seen2 = (seen_count or 0) + (twin[2] or 0)
+            payload2 = json.dumps(merged_d, default=str)
+            sig2 = compute_ble_signature(k, merged_d)
+            await db.execute(
+                "UPDATE devices SET first_seen=?, best_rssi=?, seen_count=?, "
+                "details_json=?, signature=? "
+                "WHERE location_id=? AND kind=? AND device_id=?",
+                (merged_first2, merged_best2, merged_seen2, payload2, sig2,
+                 loc_id, k, upper_id),
+            )
+            await db.execute(
+                "DELETE FROM devices WHERE location_id=? AND kind=? AND device_id=?",
+                (loc_id, k, did),
+            )
+
+    # Related tables don't have a PRIMARY KEY on device_id, so the
+    # straight uppercase UPDATE can't collide.
+    for table, kind_col in [
+        ("observations", "kind"),
+        ("alert_events", "device_kind"),
+        ("preserved_devices", "kind"),
+        ("device_whitelist", "kind"),
+        ("device_temp_whitelist", "kind"),
+    ]:
+        await db.execute(
+            f"UPDATE {table} SET device_id = upper(device_id) "
+            f"WHERE {kind_col} IN ('bluetooth','bluetooth_classic') "
+            f"AND device_id <> upper(device_id)"
+        )
+
 
 # Manufacturer IDs for known commercial trackers. Integer values (Bluetooth
 # SIG-assigned company IDs); JSON-serialized manufacturer_data keys come
@@ -293,26 +442,31 @@ _MFG_TILE = 1660     # 0x067C
 _MFG_SAMSUNG = 117   # 0x0075
 
 
-def kind_label(kind: str, address_type: Optional[str] = None) -> str:
+def kind_label(kind: str, address_type: Optional[str] = None,
+               details: Optional[dict] = None) -> str:
     """Human-friendly label for a device kind. BLE devices get split by
     address_type since the scanner is BLE-only and the public/random
     distinction is the most useful breakdown the operator has — public
     addresses are usually fixed-MAC dual-mode peripherals (speakers,
     keyboards), random addresses are modern privacy-mode BLE (phones,
-    AirTags). Mirrors formatKindLabel() in static/app.js."""
+    AirTags). A dual-mode device whose Classic side has been merged
+    in carries its CoD label under details['classic']. Mirrors
+    formatKindLabel() in static/app.js."""
     if kind == "wifi":
         return "WiFi AP"
     if kind == "wifi_client":
         return "WiFi client (probe)"
     if kind == "bluetooth":
         at = (address_type or "").lower()
-        if at == "public":
-            return "BLE (public)"
-        if at == "random":
-            return "BLE (random)"
-        return "BLE"
+        base = "BLE (public)" if at == "public" else ("BLE (random)" if at == "random" else "BLE")
+        classic = (details or {}).get("classic") if isinstance(details, dict) else None
+        if classic:
+            sub = classic.get("device_class_label") if isinstance(classic, dict) else None
+            return f"{base} + Classic ({sub})" if sub else f"{base} + Classic"
+        return base
     if kind == "bluetooth_classic":
-        return "Bluetooth Classic"
+        sub = (details or {}).get("device_class_label") if isinstance(details, dict) else None
+        return f"Bluetooth Classic ({sub})" if sub else "Bluetooth Classic"
     return kind or ""
 
 
@@ -978,6 +1132,155 @@ async def update_location_radius(location_id: int, radius_m: float) -> bool:
         )
         await db.commit()
         return (cur.rowcount or 0) > 0
+
+
+def _classic_subset(d: dict) -> dict:
+    """Pull just the Classic-only fields out of a Classic-shaped details
+    dict. Used by upsert_bluetooth when folding Classic data into a BLE
+    row's `classic` sub-dict."""
+    if not isinstance(d, dict):
+        return {}
+    return {k: v for k, v in {
+        "device_class": d.get("device_class"),
+        "device_class_label": d.get("device_class_label"),
+        "paired": d.get("paired"),
+        "connected": d.get("connected"),
+    }.items() if v is not None}
+
+
+async def upsert_bluetooth(
+    location_id: int,
+    kind: str,
+    device_id: str,
+    rssi: int,
+    details: dict,
+) -> tuple[bool, str]:
+    """Upsert a Bluetooth device row with BLE ↔ Classic merge.
+
+    When both a BLE and a Classic sighting exist for the same MAC at the
+    same location, they're collapsed into a single BLE row — Classic-only
+    fields (device_class / device_class_label / paired / connected) move
+    under details['classic'] so the major-class label and pair state
+    still surface on the device card. MACs are normalized to uppercase
+    on the way in, regardless of the case the scanner produced.
+
+    Returns (is_new, effective_kind). effective_kind is the kind of the
+    row that was actually written — 'bluetooth' whenever any BLE data
+    is present (existing or incoming), else 'bluetooth_classic'."""
+    address = (device_id or "").upper()
+    address_l = address.lower()
+    is_classic_input = (kind == "bluetooth_classic")
+    now = datetime.now().isoformat()
+
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT kind, device_id, details_json, first_seen, best_rssi, seen_count "
+            "FROM devices WHERE location_id=? AND "
+            "kind IN ('bluetooth','bluetooth_classic') AND lower(device_id)=?",
+            (location_id, address_l),
+        ) as cur:
+            rows = await cur.fetchall()
+
+        ble_existing = next((r for r in rows if r[0] == "bluetooth"), None)
+        classic_existing = next((r for r in rows if r[0] == "bluetooth_classic"), None)
+        # BLE wins whenever BLE evidence exists — either a prior BLE row
+        # or this upsert being BLE-flavored.
+        target_kind = "bluetooth" if (ble_existing or not is_classic_input) else "bluetooth_classic"
+
+        def _parse(row):
+            try:
+                return json.loads(row[2] or "{}")
+            except (TypeError, ValueError):
+                return {}
+
+        target_row = ble_existing if target_kind == "bluetooth" else classic_existing
+        merged = _parse(target_row) if target_row else {}
+
+        if target_kind == "bluetooth_classic":
+            # Pure Classic path — no BLE data anywhere. Overlay incoming
+            # details on top of any prior classic details.
+            merged = {**merged, **details}
+        else:
+            if is_classic_input:
+                # Folding a Classic sighting into a BLE row. Classic
+                # fields nest under "classic"; name/vendor fall back to
+                # Classic only when BLE didn't already provide them.
+                prior_classic = dict(merged.get("classic") or {})
+                prior_classic.update(_classic_subset(details))
+                merged["classic"] = prior_classic
+                if not merged.get("name") and details.get("name"):
+                    merged["name"] = details["name"]
+                if not merged.get("vendor") and details.get("vendor"):
+                    merged["vendor"] = details["vendor"]
+            else:
+                # BLE upsert. Top-level fields come from the scan; any
+                # existing classic sub-dict survives.
+                prior_classic = merged.get("classic")
+                merged = {**merged, **details}
+                if prior_classic and "classic" not in details:
+                    merged["classic"] = prior_classic
+                # First-time promotion: a Classic row exists but no BLE
+                # row did. Pull Classic fields into the new BLE row's
+                # classic sub-dict before we delete the Classic row.
+                if classic_existing and not ble_existing:
+                    folded = _classic_subset(_parse(classic_existing))
+                    if folded:
+                        prev = dict(merged.get("classic") or {})
+                        prev.update(folded)
+                        merged["classic"] = prev
+
+        first_seen_candidates = [r[3] for r in rows if r[3]]
+        first_seen_candidates.append(now)
+        merged_first = min(first_seen_candidates)
+        best_candidates = [r[4] for r in rows if r[4] is not None]
+        best_candidates.append(rssi)
+        merged_best = max(best_candidates)
+        merged_seen = sum((r[5] or 0) for r in rows) + 1
+
+        signature = compute_ble_signature(target_kind, merged)
+        payload = json.dumps(merged, default=str)
+
+        # When promoting to BLE, drop the Classic row and repoint its
+        # historical observations + alert events so they hang off the
+        # surviving (merged) row.
+        if target_kind == "bluetooth" and classic_existing:
+            await db.execute(
+                "DELETE FROM devices WHERE location_id=? AND kind='bluetooth_classic' "
+                "AND lower(device_id)=?",
+                (location_id, address_l),
+            )
+            await db.execute(
+                "UPDATE observations SET kind='bluetooth', device_id=? "
+                "WHERE location_id=? AND kind='bluetooth_classic' AND lower(device_id)=?",
+                (address, location_id, address_l),
+            )
+            await db.execute(
+                "UPDATE alert_events SET device_kind='bluetooth', device_id=? "
+                "WHERE location_id=? AND device_kind='bluetooth_classic' AND lower(device_id)=?",
+                (address, location_id, address_l),
+            )
+
+        survivor = ble_existing if target_kind == "bluetooth" else classic_existing
+        is_new = survivor is None
+        if is_new:
+            await db.execute(
+                "INSERT INTO devices(location_id,kind,device_id,first_seen,last_seen,"
+                "best_rssi,last_rssi,seen_count,details_json,signature) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (location_id, target_kind, address, merged_first, now,
+                 merged_best, rssi, merged_seen, payload, signature),
+            )
+        else:
+            await db.execute(
+                "UPDATE devices SET device_id=?, first_seen=?, last_seen=?, "
+                "best_rssi=?, last_rssi=?, seen_count=?, details_json=?, signature=? "
+                "WHERE location_id=? AND kind=? AND device_id=?",
+                (address, merged_first, now, merged_best, rssi, merged_seen,
+                 payload, signature, location_id, target_kind, survivor[1]),
+            )
+        await db.commit()
+
+    return is_new, target_kind
 
 
 async def upsert_device(

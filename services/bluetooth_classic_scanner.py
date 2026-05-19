@@ -223,8 +223,8 @@ async def _harvest_devices(bus, mgr, adapter_path: str) -> dict[str, dict]:
         addr_type = (get("AddressType") or "").lower()
         if addr_type and addr_type != "public":
             continue
-        out[addr.lower()] = {
-            "Address": addr,
+        out[addr.upper()] = {
+            "Address": addr.upper(),
             "Name": get("Name"),
             "Alias": get("Alias"),
             "RSSI": get("RSSI"),
@@ -264,8 +264,8 @@ def _harvest_devices_from_mgr(mgr, adapter_path: str) -> dict[str, dict]:
         addr_type = (_get("AddressType", "address_type") or "").lower()
         if addr_type and addr_type != "public":
             continue
-        out[addr.lower()] = {
-            "Address": addr,
+        out[addr.upper()] = {
+            "Address": addr.upper(),
             "Name": _get("Name", "name"),
             "Alias": _get("Alias", "alias"),
             "RSSI": _get("RSSI", "rssi"),
