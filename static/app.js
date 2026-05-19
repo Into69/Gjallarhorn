@@ -2497,12 +2497,15 @@ function renderWapGroup(g) {
   const bestRssi = g.best_rssi != null ? `${g.best_rssi} dBm` : "—";
   // Per-BSSID expansion: each BSSID row is clickable and reveals a
   // hidden sibling row with up to two nested tables:
-  //   1. Clients that probed for this SSID at the same location
-  //      (intent — they wanted to find this network).
-  //   2. Devices actually attached to this BSSID — clients whose
-  //      associated_bssids set contains this BSSID, populated by the
-  //      probe-scanner from mgmt + data frames. Catches devices that
-  //      never probed but were seen talking to the AP.
+  //   1. Linked clients — every client this BSSID is connected to,
+  //      either by a directed probe-req for the SSID or by an
+  //      observed 802.11 frame exchange (assoc/data/etc.). Filtered
+  //      to the BSSID's own location. The ★ associated badge marks
+  //      the stronger frame-evidence cases.
+  //   2. Devices attached to this BSSID at other locations — same
+  //      assoc evidence, but for client rows that fell outside the
+  //      BSSID's location filter (e.g., the AP and the client were
+  //      seen at different locations).
   // A BSSID with neither list populated gets no expand arrow.
   const bssidRows = g.bssids.length
     ? g.bssids.map((b, i) => {
@@ -2552,10 +2555,10 @@ function renderWapGroup(g) {
             <th>Probes</th><th>Last seen</th><th>Other SSIDs probed</th>
           </tr></thead>`;
         const probedSection = probedCount > 0 ? `
-          <h5 class="wap-h wap-h-sub">Probed for this SSID here <span class="muted small">(${probedCount})</span></h5>
+          <h5 class="wap-h wap-h-sub">Linked clients <span class="muted small">(${probedCount} at this BSSID's location — ★ marks frame-exchange evidence)</span></h5>
           <table class="wap-table wap-bssid-clients-table">${subTableHead}<tbody>${probedSubRows}</tbody></table>` : "";
         const attachedSection = attachedCount > 0 ? `
-          <h5 class="wap-h wap-h-sub">Attached devices <span class="muted small">(${attachedCount} — seen exchanging frames with this BSSID)</span></h5>
+          <h5 class="wap-h wap-h-sub">Attached at other locations <span class="muted small">(${attachedCount} — seen exchanging frames with this BSSID elsewhere)</span></h5>
           <table class="wap-table wap-bssid-clients-table">${subTableHead}<tbody>${attachedSubRows}</tbody></table>` : "";
         const detailRow = expandable
           ? `
@@ -2584,7 +2587,7 @@ function renderWapGroup(g) {
             <td class="wap-bssid-clients-count" title="${escapeAttr(countTip)}">${combinedCount}</td>
           </tr>${detailRow}`;
       }).join("")
-    : `<tr><td colspan="9" class="muted">No AP captured for this SSID — clients have been probing for it.</td></tr>`;
+    : `<tr><td colspan="9" class="muted">No AP captured for this SSID — clients have probed for it without finding it.</td></tr>`;
 
   const clientRows = g.clients.length
     ? g.clients.map(c => {
@@ -2601,7 +2604,7 @@ function renderWapGroup(g) {
           <td>${escapeHtml(probed)}${more ? `<span class="muted">${escapeHtml(more)}</span>` : ""}</td>
         </tr>`;
       }).join("")
-    : `<tr><td colspan="7" class="muted">No clients have been observed probing for this network.</td></tr>`;
+    : `<tr><td colspan="7" class="muted">No clients have been linked to this network.</td></tr>`;
 
   return `
     <details class="wap-group"${opened} data-ssid="${escapeAttr(g.ssid)}">
@@ -2612,21 +2615,21 @@ function renderWapGroup(g) {
         ${meshBadge}
         <span class="wap-stats">
           <span class="wap-stat" title="Access points (BSSIDs) advertising this SSID">${g.bssid_count} AP${g.bssid_count === 1 ? "" : "s"}</span>
-          <span class="wap-stat" title="WiFi clients seen probing for this SSID">${g.client_count} client${g.client_count === 1 ? "" : "s"}</span>
+          <span class="wap-stat" title="WiFi clients linked to this SSID — either by a directed probe for the SSID or by observed frame exchange with one of its BSSIDs">${g.client_count} client${g.client_count === 1 ? "" : "s"}</span>
           <span class="wap-stat" title="Strongest RSSI across all BSSIDs for this SSID">${bestRssi}</span>
         </span>
       </summary>
       <div class="wap-body">
-        <h4 class="wap-h">Access points <span class="muted small">(click a row to see clients probing here)</span></h4>
+        <h4 class="wap-h">Access points <span class="muted small">(click a row to see linked clients)</span></h4>
         <table class="wap-table wap-aps-table">
           <thead><tr>
             <th>BSSID</th><th>Vendor</th><th>Channel</th><th>Encryption</th>
             <th>Best RSSI</th><th>Seen</th><th>Last seen</th><th>Loc</th>
-            <th title="Wifi clients that probed for this SSID at the same location as this BSSID. Best-effort 'associated' — we only see probes, not actual 802.11 association frames.">Clients</th>
+            <th title="WiFi clients linked to this BSSID — either by a directed probe for the SSID at the same location, or by observed 802.11 frame exchange (assoc / data / etc.). ★ in the expansion marks frame-evidence rows.">Clients</th>
           </tr></thead>
           <tbody>${bssidRows}</tbody>
         </table>
-        <h4 class="wap-h">Clients seen probing for this network</h4>
+        <h4 class="wap-h">Clients linked to this network</h4>
         <table class="wap-table">
           <thead><tr>
             <th>MAC</th><th>Vendor</th><th>Channels</th><th>Best RSSI</th>

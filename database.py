@@ -2485,15 +2485,28 @@ async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
         if g["last_seen"] is None or (r["last_seen"] or "") > g["last_seen"]:
             g["last_seen"] = r["last_seen"]
 
-    # Index probed-SSIDs to a map ssid → list of client entries. A single
-    # client can probe many networks, so it ends up under every group
-    # whose SSID it ever requested. While we're walking the clients we
-    # also build a reverse index bssid → list of client entries from
-    # the `associated_bssids` field (populated by the broadened probe
-    # scanner from mgmt + data frames). That index is attached per
-    # BSSID below as `attached_clients` so the UI can show 'who's
-    # actually using this AP' separately from 'who probed for this
-    # SSID'.
+    # Map captured BSSIDs back to the SSID group they belong to. Used
+    # below so a client observed exchanging frames with a known AP lands
+    # in that AP's named-SSID group even if it never sent a directed
+    # probe — modern clients lean almost entirely on wildcard probes,
+    # so without this path every named SSID stays empty and only the
+    # (hidden) bucket fills up.
+    bssid_to_group_key: dict[str, str] = {}
+    for ssid_key, g in groups.items():
+        for b in g["bssids"]:
+            bl = (b["bssid"] or "").lower()
+            if bl:
+                bssid_to_group_key[bl] = ssid_key
+
+    # Walk clients, building two indexes in the same pass:
+    #   1. group["clients"] — clients linked to each SSID group, via
+    #      probed-SSID match OR via association evidence (a BSSID in
+    #      the client's `associated_bssids` that we've captured as an
+    #      AP for that SSID).
+    #   2. bssid_to_attached — per-BSSID reverse index of clients with
+    #      that BSSID in their `associated_bssids`. Attached to each
+    #      BSSID below so the UI can flag rows with the ★ associated
+    #      badge regardless of whether the client also probed.
     bssid_to_attached: dict[str, list[dict]] = {}
     for r in client_rows:
         try:
@@ -2519,17 +2532,29 @@ async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
             "first_seen": r["first_seen"],
             "last_seen": r["last_seen"],
         }
-        # When the client never named an SSID (broadcast wildcard probes
-        # only), file it under the hidden bucket so the data still
-        # surfaces.
-        targets = [s for s in ssids if s] or [HIDDEN]
+        # Build the set of group keys this client belongs to:
+        # - Each named SSID it probed for (creates a 'wanted' group if
+        #   we've never seen an AP for it).
+        # - Each captured-AP BSSID it's associated with (always lands
+        #   in an existing group; assoc to a never-captured BSSID is
+        #   recorded in bssid_to_attached but doesn't create a group).
+        # - HIDDEN as a fallback when neither path names a network.
+        probed_keys = [s for s in ssids if s]
+        assoc_keys: list[str] = []
+        for b in assoc:
+            gk = bssid_to_group_key.get(b)
+            if gk and gk not in assoc_keys:
+                assoc_keys.append(gk)
+        targets = probed_keys + [k for k in assoc_keys if k not in probed_keys]
+        if not targets:
+            targets = [HIDDEN]
         for target in targets:
             g = groups.get(target)
             if g is None:
-                # The client probed for a network we've never seen the
-                # AP for — keep an entry so the SSID still appears, but
-                # the bssids list stays empty (a "wanted but unfound"
-                # row in the output).
+                # Probed-only path: the client probed for a network we've
+                # never seen the AP for. Keep an entry so the SSID still
+                # appears, with an empty bssids list (a 'wanted but
+                # unfound' row).
                 g = groups.setdefault(target, {
                     "ssid": "" if target == HIDDEN else target,
                     "is_hidden": target == HIDDEN,
@@ -2540,7 +2565,14 @@ async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
                     "best_rssi": None,
                     "last_seen": None,
                 })
-            g["clients"].append(entry)
+            # Dedupe within group — a (location, device) pair should
+            # only show once even if probed + assoc evidence converge.
+            if not any(
+                c["device_id"] == entry["device_id"]
+                and c["location_id"] == entry["location_id"]
+                for c in g["clients"]
+            ):
+                g["clients"].append(entry)
         # Reverse-index for the per-BSSID 'attached devices' list. We
         # dedupe by device_id so a client that hopped between locations
         # only shows once under a given BSSID.
