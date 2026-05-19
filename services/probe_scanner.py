@@ -35,6 +35,11 @@ log = logging.getLogger(__name__)
 
 # Backoff between auto-restarts of the capture if it dies.
 _RESTART_BACKOFF_S = 5.0
+# Per-(client, bssid) dedup window for data-frame dispatch. One event
+# per pair per minute is plenty to keep the orchestrator's associated_bssids
+# list current — every additional frame would just re-confirm the same
+# linkage.
+_DATA_DEDUP_WINDOW_S = 60.0
 
 ProbeCallback = Callable[[dict], Awaitable[None]]
 
@@ -87,6 +92,14 @@ class ProbeScanner:
         # Cleared on each start() so the operator can fix the underlying
         # cause and re-test without editing settings.
         self._disabled_channels: set[int] = set()
+        # Scanner-level dedup for data-frame dispatch. Each data frame
+        # tells us 'client X is talking to BSSID Y' — running the
+        # orchestrator callback on every frame would drown the loop in
+        # tens of thousands of identical-conclusion events per second.
+        # Cap to one dispatch per (client, bssid) per
+        # _DATA_DEDUP_WINDOW_S seconds and prune entries older than the
+        # window on each insert so the map can't grow unbounded.
+        self._recent_data_dispatch: dict[tuple[str, str], float] = {}
 
     @property
     def running(self) -> bool:
@@ -314,12 +327,30 @@ class ProbeScanner:
 
     # ── tshark backend ─────────────────────────────────────────────
     async def _run_tshark(self) -> None:
-        # Capture probe-requests AND association/reassociation requests.
-        # Probes (subtype 4) reveal what networks a client is hunting
-        # for; assoc-req (subtype 0) and reassoc-req (subtype 2) reveal
-        # which AP a client actually connected to. Both are management
-        # frames — low volume, no payload decryption involved, MACs in
-        # plaintext.
+        # Capture every 802.11 frame that names a (client, BSSID) pair —
+        # not just probe/assoc-requests. Matches Kismet's approach
+        # (phy_80211.process_client): the BSSID is in the frame header,
+        # so any management or data frame between a client and an AP
+        # firms up the client-to-AP link without us having to guess.
+        #
+        # Filter (libpcap BPF):
+        #   - Management subtypes that involve a specific client:
+        #     probe-req / assoc-req+resp / reassoc-req+resp / auth /
+        #     deauth / disassoc. Probe-resp + beacon are AP-side
+        #     broadcasts — the active wifi_scanner already captures APs
+        #     so we skip those here.
+        #   - Every data frame (type 2). Direction bits (to-ds / from-ds)
+        #     plus addr3 give us the client + BSSID; dedup'd at dispatch
+        #     so the orchestrator only sees one event per (client, AP)
+        #     per _DATA_DEDUP_WINDOW_S.
+        bpf = (
+            "(type mgt and ("
+            "subtype probe-req or "
+            "subtype assoc-req or subtype assoc-resp or "
+            "subtype reassoc-req or subtype reassoc-resp or "
+            "subtype auth or subtype deauth or subtype disassoc"
+            ")) or type data"
+        )
         cmd = [
             "tshark",
             "-i", self._iface or "",
@@ -332,7 +363,10 @@ class ProbeScanner:
             "-e", "wlan_radio.channel",
             "-e", "wlan.fc.type_subtype",
             "-e", "wlan.bssid",
-            "-f", "type mgt and (subtype probe-req or subtype assoc-req or subtype reassoc-req)",
+            "-e", "wlan.da",
+            "-e", "wlan.fc.tods",
+            "-e", "wlan.fc.fromds",
+            "-f", bpf,
             "-Q",                 # suppress packet-count summary
         ]
         log.info("probe scanner [tshark]: starting %s", " ".join(cmd))
@@ -388,16 +422,17 @@ class ProbeScanner:
         if not line:
             return
         parts = line.split("|")
-        while len(parts) < 6:
+        while len(parts) < 9:
             parts.append("")
-        mac = parts[0].strip().lower()
+        sa = parts[0].strip().lower()
         rssi_s = parts[1].strip()
         ssid = parts[2]
         channel_s = parts[3].strip()
         subtype_s = parts[4].strip()
         bssid = parts[5].strip().lower()
-        if len(mac) != 17:
-            return
+        da = parts[6].strip().lower()
+        tods = parts[7].strip()
+        fromds = parts[8].strip()
         try:
             rssi = int(rssi_s) if rssi_s else None
         except ValueError:
@@ -406,22 +441,67 @@ class ProbeScanner:
             channel = int(channel_s) if channel_s else None
         except ValueError:
             channel = None
-        # wlan.fc.type_subtype is printed as a hex string like '0x0004'.
-        # 0x0004 = probe-req, 0x0000 = assoc-req, 0x0002 = reassoc-req.
         frame_type = _frame_type_from_subtype(subtype_s)
         if frame_type is None:
             return
+        # For data frames, direction bits decide which side is the
+        # client. The orchestrator only cares about the client MAC, so
+        # flip sa / da based on to-ds / from-ds. Adhoc / WDS frames are
+        # skipped — they don't map cleanly to a client-↔-AP association.
+        mac = sa
+        if frame_type == "data":
+            to_ds = tods in ("1", "True", "true")
+            from_ds = fromds in ("1", "True", "true")
+            if to_ds and not from_ds:
+                mac = sa            # client → AP
+            elif from_ds and not to_ds:
+                mac = da            # AP → client; the destination is the client
+            else:
+                return              # adhoc / WDS — skip
+        if len(mac) != 17:
+            return
+        # Scanner-level dedup for data frames: dispatch a given
+        # (client, bssid) pair at most once per window so the
+        # orchestrator's per-frame cost (db reads, alert evaluate)
+        # stays bounded. Management frames are rare enough that the
+        # dedup is intentionally limited to data.
+        if frame_type == "data" and bssid:
+            if not self._allow_data_dispatch(mac, bssid):
+                return
         await self._dispatch(_build_frame(
             mac=mac, rssi=rssi, ssid=ssid, channel=channel,
             frame_type=frame_type, bssid=bssid,
         ))
+
+    def _allow_data_dispatch(self, mac: str, bssid: str) -> bool:
+        """Return True if this (client, bssid) pair hasn't been
+        dispatched within _DATA_DEDUP_WINDOW_S. Also prunes any
+        stale entries so the dict can't grow without bound."""
+        now = time.time()
+        key = (mac, bssid)
+        cutoff = now - _DATA_DEDUP_WINDOW_S
+        # Cheap prune — only run on every Nth call to avoid scanning
+        # the whole dict on every data frame.
+        if len(self._recent_data_dispatch) > 256:
+            stale = [k for k, t in self._recent_data_dispatch.items() if t < cutoff]
+            for k in stale:
+                self._recent_data_dispatch.pop(k, None)
+        prev = self._recent_data_dispatch.get(key)
+        if prev is not None and prev >= cutoff:
+            return False
+        self._recent_data_dispatch[key] = now
+        return True
 
     # ── scapy backend ──────────────────────────────────────────────
     async def _run_scapy(self) -> None:
         try:
             from scapy.all import AsyncSniffer
             from scapy.layers.dot11 import (
-                Dot11ProbeReq, Dot11AssoReq, Dot11ReassoReq, Dot11Elt,
+                Dot11, Dot11Elt,
+                Dot11ProbeReq,
+                Dot11AssoReq, Dot11AssoResp,
+                Dot11ReassoReq, Dot11ReassoResp,
+                Dot11Auth, Dot11Deauth, Dot11Disas,
             )
         except Exception as e:
             self._last_error = f"scapy import failed: {e}"
@@ -432,32 +512,66 @@ class ProbeScanner:
 
         def packet_handler(pkt) -> None:
             try:
+                # Pick the most specific management layer first, then
+                # fall back to a generic data-frame check.
                 if pkt.haslayer(Dot11ProbeReq):
                     frame_type = "probe"
                 elif pkt.haslayer(Dot11AssoReq):
                     frame_type = "assoc"
+                elif pkt.haslayer(Dot11AssoResp):
+                    frame_type = "assoc-resp"
                 elif pkt.haslayer(Dot11ReassoReq):
                     frame_type = "reassoc"
+                elif pkt.haslayer(Dot11ReassoResp):
+                    frame_type = "reassoc-resp"
+                elif pkt.haslayer(Dot11Auth):
+                    frame_type = "auth"
+                elif pkt.haslayer(Dot11Deauth):
+                    frame_type = "deauth"
+                elif pkt.haslayer(Dot11Disas):
+                    frame_type = "disassoc"
+                elif pkt.haslayer(Dot11) and getattr(pkt[Dot11], "type", None) == 2:
+                    frame_type = "data"
                 else:
                     return
-                mac = (pkt.addr2 or "").lower()
+                d11 = pkt[Dot11]
+                fc = getattr(d11, "FCfield", 0) or 0
+                to_ds = bool(fc & 0x1)
+                from_ds = bool(fc & 0x2)
+                # Direction-aware addressing — mirrors Kismet's
+                # distrib_to / distrib_from / distrib_inter logic.
+                # For data frames we need addr1 (RA) when the AP is
+                # transmitting *to* the client.
+                if frame_type == "data":
+                    if to_ds and not from_ds:
+                        mac = (pkt.addr2 or "").lower()        # client → AP
+                        bssid = (pkt.addr1 or "").lower()
+                    elif from_ds and not to_ds:
+                        mac = (pkt.addr1 or "").lower()        # AP → client
+                        bssid = (pkt.addr2 or "").lower()
+                    else:
+                        return    # adhoc / WDS — skip
+                else:
+                    mac = (pkt.addr2 or "").lower()
+                    # addr1 is the receiver; for management it's
+                    # typically the AP (or broadcast for probes).
+                    bssid = (pkt.addr1 or "").lower() if frame_type != "probe" else ""
                 if len(mac) != 17:
                     return
-                # For assoc/reassoc requests, addr1 = AP (BSSID); for
-                # probes addr1 is broadcast which we'll filter out at
-                # dispatch.
-                bssid = (pkt.addr1 or "").lower() if frame_type != "probe" else ""
                 ssid = ""
                 # Walk the Information Elements; ID 0 is the SSID.
-                elt = pkt.getlayer(Dot11Elt)
-                while elt is not None:
-                    if getattr(elt, "ID", None) == 0:
-                        try:
-                            ssid = (elt.info or b"").decode("utf-8", errors="replace")
-                        except Exception:
-                            ssid = ""
-                        break
-                    elt = elt.payload.getlayer(Dot11Elt) if hasattr(elt, "payload") else None
+                # Data frames don't carry IEs so we just skip the walk
+                # for them.
+                if frame_type != "data":
+                    elt = pkt.getlayer(Dot11Elt)
+                    while elt is not None:
+                        if getattr(elt, "ID", None) == 0:
+                            try:
+                                ssid = (elt.info or b"").decode("utf-8", errors="replace")
+                            except Exception:
+                                ssid = ""
+                            break
+                        elt = elt.payload.getlayer(Dot11Elt) if hasattr(elt, "payload") else None
                 rssi = getattr(pkt, "dBm_AntSignal", None)
                 if rssi is not None:
                     try:
@@ -471,6 +585,8 @@ class ProbeScanner:
                         channel = _freq_to_channel(int(ch_freq))
                     except (TypeError, ValueError):
                         channel = None
+                if frame_type == "data" and bssid and not self._allow_data_dispatch(mac, bssid):
+                    return
                 frame = _build_frame(
                     mac=mac, rssi=rssi, ssid=ssid, channel=channel,
                     frame_type=frame_type, bssid=bssid,
@@ -486,9 +602,16 @@ class ProbeScanner:
             prn=packet_handler,
             store=False,
             monitor=True,
-            # Capture probes AND assoc/reassoc requests so we can record
-            # which AP a wifi_client actually connected to.
-            filter="type mgt and (subtype probereq or subtype assocreq or subtype reassocreq)",
+            # Same BPF as the tshark path — every client-side mgmt
+            # subtype plus all data frames.
+            filter=(
+                "(type mgt and ("
+                "subtype probereq or "
+                "subtype assocreq or subtype assocresp or "
+                "subtype reassocreq or subtype reassocresp or "
+                "subtype auth or subtype deauth or subtype disassoc"
+                ")) or type data"
+            ),
         )
         try:
             sniffer.start()
@@ -541,10 +664,10 @@ def _build_frame(
 
 
 def _frame_type_from_subtype(subtype_s: str) -> Optional[str]:
-    """Map tshark's wlan.fc.type_subtype hex output to the frame_type
-    label we dispatch. Anything outside probe/assoc/reassoc is dropped
-    by the caller (the BPF filter already restricts capture to these,
-    but a defensive check costs nothing)."""
+    """Map tshark's wlan.fc.type_subtype hex string to a frame_type
+    label. Covers the management subtypes the BPF filter admits, plus
+    'data' for every type-2 subtype (with or without QoS / null
+    variants). Unknown subtypes return None and the caller drops them."""
     s = (subtype_s or "").strip().lower()
     if not s:
         return None
@@ -552,12 +675,29 @@ def _frame_type_from_subtype(subtype_s: str) -> Optional[str]:
         v = int(s, 16) if s.startswith("0x") else int(s)
     except ValueError:
         return None
-    if v == 0x04:
-        return "probe"
+    # Management subtypes (type bits = 0 → high nibble of the byte is 0).
     if v == 0x00:
-        return "assoc"
+        return "assoc"          # association request
+    if v == 0x01:
+        return "assoc-resp"     # association response
     if v == 0x02:
-        return "reassoc"
+        return "reassoc"        # reassociation request
+    if v == 0x03:
+        return "reassoc-resp"   # reassociation response
+    if v == 0x04:
+        return "probe"          # probe request
+    if v == 0x0a:
+        return "disassoc"       # disassociation
+    if v == 0x0b:
+        return "auth"           # authentication
+    if v == 0x0c:
+        return "deauth"         # deauthentication
+    # Data frames span 0x20..0x2f (subtypes 0..15 of type=2). The
+    # high nibble (>>4) is the type field — we only care that it's 2
+    # (data), since direction + addr3 give us the (client, BSSID) pair
+    # regardless of subtype.
+    if (v >> 4) == 0x2:
+        return "data"
     return None
 
 

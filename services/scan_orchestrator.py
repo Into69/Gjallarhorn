@@ -476,11 +476,23 @@ class ScanOrchestrator:
         frame_type = probe.get("frame_type") or "probe"
         new_bssid = (probe.get("bssid") or "").strip().lower()
 
-        # Merge with any existing details so the SSID list and channels
-        # accumulate across observations of the same client. associated_bssids
-        # is the AP MAC(s) the client has sent association / reassociation
-        # requests to — strong evidence of an actual connection, where the
-        # probed-SSIDs list is only "wanted to find this network".
+        # Frame-type buckets:
+        #   "probe"               — client hunting for an SSID; accumulate
+        #                           into ssids[].
+        #   association frames    — assoc/reassoc-req/resp, auth, deauth,
+        #                           disassoc. Any of these between a client
+        #                           and a BSSID is direct evidence of a
+        #                           client-↔-AP link.
+        #   "data"                — definitive evidence of an active
+        #                           association. Scanner-side dedup caps
+        #                           dispatch at one per (client, bssid)
+        #                           per ~60s; we additionally skip the
+        #                           observation insert so volume stays
+        #                           bounded.
+        ASSOC_FRAME_TYPES = {
+            "assoc", "reassoc", "assoc-resp", "reassoc-resp",
+            "auth", "deauth", "disassoc",
+        }
         prior = await db.get_device_details(loc_id, "wifi_client", mac) or {}
         ssids = list(prior.get("ssids") or [])
         if new_ssid and new_ssid not in ssids:
@@ -490,7 +502,7 @@ class ScanOrchestrator:
             channels.append(channel)
         associated_bssids = list(prior.get("associated_bssids") or [])
         if (
-            frame_type in ("assoc", "reassoc")
+            (frame_type in ASSOC_FRAME_TYPES or frame_type == "data")
             and new_bssid
             and new_bssid not in associated_bssids
         ):
@@ -515,16 +527,23 @@ class ScanOrchestrator:
                 location_id=loc_id, kind="wifi_client", device_id=mac,
                 rssi=rssi, details=details,
             )
-            await db.insert_observation(
-                location_id=loc_id, kind="wifi_client", device_id=mac,
-                rssi=rssi, lat=fix.lat, lon=fix.lon,
-                raw={
-                    **details,
-                    "ssid": new_ssid, "channel": channel,
-                    "frame_type": frame_type,
-                    "bssid": new_bssid or None,
-                },
-            )
+            # Skip the per-frame observation row for data frames —
+            # they're high-volume and every dispatch carries the same
+            # 'X is associated with Y' conclusion as the prior one.
+            # The device row's last_seen / best_rssi still get the
+            # update via upsert_device above, which is what we
+            # actually want.
+            if frame_type != "data":
+                await db.insert_observation(
+                    location_id=loc_id, kind="wifi_client", device_id=mac,
+                    rssi=rssi, lat=fix.lat, lon=fix.lon,
+                    raw={
+                        **details,
+                        "ssid": new_ssid, "channel": channel,
+                        "frame_type": frame_type,
+                        "bssid": new_bssid or None,
+                    },
+                )
         else:
             is_new = False
         # `_last_ssid` is the SSID captured in *this* probe (not the
