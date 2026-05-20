@@ -1099,25 +1099,43 @@ body.stealth-mode .mission-status-grid dd { visibility: hidden; }
 
 /* ── About tab ────────────────────────────────────────────
    Hero banner + a responsive card grid: two columns on wide
-   viewports, one column on phones. Cards use the same panel
-   styling the map sidebar cards do for visual continuity. */
+   viewports, one column on phones. Each card category gets a
+   distinct left-rail accent so the page reads as discrete
+   thematic blocks rather than a wall of panels. */
 .about-page {
-  max-width: 980px;
+  max-width: 1040px;
   margin: 0 auto;
-  display: flex; flex-direction: column; gap: 16px;
+  display: flex; flex-direction: column; gap: 18px;
 }
 .about-hero {
-  background: linear-gradient(180deg, #1a1f29 0%, #15191f 100%);
+  background:
+    radial-gradient(800px 220px at 12% -40%, rgba(184,163,255,0.10), transparent 60%),
+    linear-gradient(180deg, #1a1f29 0%, #15191f 100%);
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
-  border-radius: 12px;
-  padding: 18px 22px;
+  border-radius: 14px;
+  padding: 22px 24px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  flex-wrap: wrap;
 }
+.about-hero-text { display: flex; flex-direction: column; gap: 4px; }
 .about-hero h2 {
-  margin: 0 0 4px 0;
-  font-size: 24px;
-  letter-spacing: 1.5px;
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: 2px;
   color: var(--accent);
+}
+.about-hero-badge {
+  align-self: flex-start;
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: rgba(184, 163, 255, 0.10);
+  border: 1px solid #4a3f6a;
+  border-radius: 999px;
+  padding: 4px 10px;
+  white-space: nowrap;
 }
 .about-tagline {
   margin: 0;
@@ -1126,46 +1144,101 @@ body.stealth-mode .mission-status-grid dd { visibility: hidden; }
 }
 .about-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 14px;
+  align-items: start;
 }
 .about-card {
   background: var(--panel);
   border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
   border-radius: 10px;
-  padding: 14px 16px;
+  padding: 14px 18px;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
+  transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+}
+.about-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
 }
 .about-card-wide { grid-column: 1 / -1; }
+.about-card .section-h {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--fg);
+}
+.about-h-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+}
 .about-card p { margin: 0 0 8px; }
 .about-card p:last-child { margin-bottom: 0; }
+.about-card p.small { font-size: 12px; }
 .about-card dl {
   margin: 0;
   display: grid;
   grid-template-columns: max-content 1fr;
   column-gap: 14px;
-  row-gap: 4px;
+  row-gap: 5px;
 }
 .about-card dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; padding-top: 3px; }
 .about-card dd { margin: 0; word-break: break-all; }
+
+/* Per-category accent rails so the page reads as thematic blocks. */
+.about-card-narrative   { border-left-color: var(--accent); }
+.about-card-capabilities{ border-left-color: var(--accent); }
+.about-card-build       { border-left-color: #4a8aff; }
+.about-card-runtime     { border-left-color: #4a8aff; }
+.about-card-database    { border-left-color: #f6b042; }
+.about-card-privacy     { border-left-color: #6bdc8a; }
+.about-card-credits     { border-left-color: #b8a3ff; }
+.about-card-narrative:hover    { border-color: var(--accent); border-left-color: var(--accent); }
+.about-card-capabilities:hover { border-color: var(--accent); border-left-color: var(--accent); }
+.about-card-build:hover        { border-color: #4a8aff; border-left-color: #4a8aff; }
+.about-card-runtime:hover      { border-color: #4a8aff; border-left-color: #4a8aff; }
+.about-card-database:hover     { border-color: #f6b042; border-left-color: #f6b042; }
+.about-card-privacy:hover      { border-color: #6bdc8a; border-left-color: #6bdc8a; }
+.about-card-credits:hover      { border-color: #b8a3ff; border-left-color: #b8a3ff; }
+
 .about-features {
   margin: 4px 0 0;
   padding-left: 18px;
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column; gap: 6px;
 }
 .about-features li { color: var(--fg); }
 .about-features li b { color: var(--accent); }
+.about-card-privacy .about-features li b { color: #6bdc8a; }
+.about-card-credits .about-features li b { color: #b8a3ff; }
 .about-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
+  margin-bottom: 10px;
 }
 .about-stats > div {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 10px 12px;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+.about-stats > div:hover {
+  border-color: #f6b042;
+  transform: translateY(-1px);
 }
 .about-stats dt {
   font-size: 10px;
@@ -1175,11 +1248,12 @@ body.stealth-mode .mission-status-grid dd { visibility: hidden; }
   padding-top: 0;
 }
 .about-stats dd {
-  margin: 2px 0 0;
+  margin: 4px 0 0;
   font-family: ui-monospace, "JetBrains Mono", Consolas, monospace;
-  font-size: 18px;
-  color: var(--fg);
+  font-size: 20px;
+  color: #f6b042;
   font-variant-numeric: tabular-nums;
+  line-height: 1.1;
 }
 
 /* Leaflet popup contents shown when a location bubble is clicked.

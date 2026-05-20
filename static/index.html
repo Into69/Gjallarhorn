@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260519j" />
+  <link rel="stylesheet" href="/static/style.css?v=20260520a" />
 </head>
 <body>
   <header>
@@ -1230,43 +1230,47 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
     <section id="tab-about" class="tab">
       <div class="about-page">
         <header class="about-hero">
-          <h2 id="about-app">Gjallarhorn</h2>
-          <p id="about-tagline" class="about-tagline">…</p>
+          <div class="about-hero-text">
+            <h2 id="about-app">Gjallarhorn</h2>
+            <p id="about-tagline" class="about-tagline">…</p>
+          </div>
+          <span class="about-hero-badge" title="Heimdall's watchman horn — Old Norse">⚔ sentinel</span>
         </header>
 
         <div class="about-grid">
-          <section class="about-card">
-            <h3 class="section-h">What it does</h3>
+          <section class="about-card about-card-wide about-card-narrative">
+            <h3 class="section-h"><span class="about-h-icon">◈</span> What it does</h3>
             <p>
-              Gjallarhorn is a roaming sensor that catalogues every Wi-Fi
-              and Bluetooth device nearby, clusters sightings into the
-              locations you visit, and raises alerts when a device looks
-              like it's following you between them.
+              Gjallarhorn is a roaming RF sensor. It catalogues every Wi-Fi
+              and Bluetooth device in range, clusters sightings into the
+              physical locations you visit, and surfaces patterns —
+              repeat appearances, sustained presence, cross-location
+              co-travel — that suggest a device is shadowing you.
             </p>
-            <p>
-              Gjallarhorn was the watchman's horn in Norse myth, blown by
-              Heimdall to warn the gods of approaching threats. The intent
-              here is the same — a quiet sentinel that watches the RF
-              spectrum and sounds the alarm when the heuristics flag a
-              follower.
+            <p class="muted small">
+              The name is Heimdall's horn from Norse myth, blown to warn
+              the gods of approaching threats. The same intent applies:
+              a quiet watchman on the RF spectrum that sounds the alarm
+              when the heuristics see a pattern worth flagging.
             </p>
           </section>
 
-          <section class="about-card">
-            <h3 class="section-h">Capabilities</h3>
+          <section class="about-card about-card-capabilities">
+            <h3 class="section-h"><span class="about-h-icon">⚙</span> Capabilities</h3>
             <ul class="about-features">
-              <li><b>Wi-Fi AP scan</b> — active scan via the OS, BSSID / vendor / encryption.</li>
-              <li><b>BLE</b> — bleak-driven advertising capture, split by public / random address.</li>
-              <li><b>Bluetooth Classic</b> — optional BR/EDR inquiry through BlueZ, with Class-of-Device decoding.</li>
-              <li><b>Probe-request capture</b> — passive Wi-Fi client detection via monitor-mode.</li>
-              <li><b>GPS clustering</b> — gpsd fix stream resolves into location bubbles, auto or drawn.</li>
-              <li><b>Alerts</b> — value, per-location, and follower-detection rule types with Discord delivery.</li>
-              <li><b>Reports</b> — PDF export with maps, recurrence tables, suspect callouts.</li>
+              <li><b>Wi-Fi 802.11 capture</b> — active AP scan (iw / nmcli) plus passive client tracking on a monitor-mode interface. Probe-reqs, assoc / reassoc / auth, and data frames all contribute — clients linked to an AP surface even when they aren't sending directed probes.</li>
+              <li><b>Bluetooth</b> — BLE advertising capture via bleak; optional BR/EDR inquiry via BlueZ with Class-of-Device decoding. Dual-mode devices with the same MAC merge into a single row carrying both transports' evidence.</li>
+              <li><b>GPS clustering</b> — gpsd fix stream resolves into auto-clustered location bubbles, with manually drawn geofences and merge-by-overlap.</li>
+              <li><b>Missions</b> — discrete recording sessions with lifecycle, history, live activity feed, and on-map pill.</li>
+              <li><b>Alert rules</b> — value-based, follower-detection (cross-location, persistent companion, cross-kind co-travel), arrival-after-gap, absence-gap, sustained presence flip-flop (with alias groups for multi-MAC devices), and Wi-Fi association (probed or linked). Per-rule latching, Discord delivery, audible alarm, per-row dismissal that persists across restart.</li>
+              <li><b>Reports</b> — PDF export with overview maps, per-location detail pages, recurrence tables, suspected-follower callouts, and contextual mini-maps for each summary finding.</li>
+              <li><b>Sensor self-identification</b> — adapter MACs read from sysfs at boot and treated as implicitly whitelisted; surfaced in the device lists with a Sensor badge.</li>
+              <li><b>Whitelist + baseline</b> — permanent list plus session-scoped baseline list, both case-insensitive, with bulk and per-row controls.</li>
             </ul>
           </section>
 
-          <section class="about-card">
-            <h3 class="section-h">Build</h3>
+          <section class="about-card about-card-build">
+            <h3 class="section-h"><span class="about-h-icon">⌘</span> Build</h3>
             <dl id="about-build">
               <dt>Branch</dt><dd id="about-branch">—</dd>
               <dt>Commit</dt><dd id="about-commit" class="mono">—</dd>
@@ -1276,8 +1280,8 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             </dl>
           </section>
 
-          <section class="about-card">
-            <h3 class="section-h">Runtime</h3>
+          <section class="about-card about-card-runtime">
+            <h3 class="section-h"><span class="about-h-icon">⏱</span> Runtime</h3>
             <dl>
               <dt>Uptime</dt><dd id="about-uptime">—</dd>
               <dt>Server time</dt><dd id="about-server-time" class="mono">—</dd>
@@ -1286,8 +1290,8 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             </dl>
           </section>
 
-          <section class="about-card about-card-wide">
-            <h3 class="section-h">Database</h3>
+          <section class="about-card about-card-wide about-card-database">
+            <h3 class="section-h"><span class="about-h-icon">▤</span> Database</h3>
             <dl class="about-stats">
               <div><dt>Locations</dt><dd id="about-stat-locations">—</dd></div>
               <div><dt>Devices total</dt><dd id="about-stat-devices">—</dd></div>
@@ -1301,6 +1305,31 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
               <div><dt>Whitelist entries</dt><dd id="about-stat-wl">—</dd></div>
             </dl>
             <p class="muted">DB file: <span id="about-db-path" class="mono">—</span> (<span id="about-db-size">—</span>)</p>
+          </section>
+
+          <section class="about-card about-card-privacy">
+            <h3 class="section-h"><span class="about-h-icon">⌬</span> Privacy &amp; data handling</h3>
+            <ul class="about-features">
+              <li><b>Local only.</b> Every sighting, location, alert, and report lives in a single SQLite file on this host. There is no cloud sync and no telemetry endpoint.</li>
+              <li><b>Optional GPS.</b> Sensor runs without gpsd; without a fix, locations are skipped and devices land in the unassigned bucket. Coordinates are never sent off-host.</li>
+              <li><b>Optional Discord.</b> A webhook URL configured in Settings sends alert embeds to one channel. Leaving it blank disables network egress entirely.</li>
+              <li><b>Whitelist is yours.</b> Devices you whitelist are excluded from alerts and PDF reports. Sensor adapters are auto-whitelisted from sysfs and never alert on themselves.</li>
+              <li><b>Audit trail.</b> The Logs tab shows the in-memory log stream live — nothing leaves the host.</li>
+            </ul>
+          </section>
+
+          <section class="about-card about-card-credits">
+            <h3 class="section-h"><span class="about-h-icon">✦</span> Built with</h3>
+            <ul class="about-features">
+              <li><b>FastAPI</b> + <b>uvicorn</b> — HTTP + async lifecycle.</li>
+              <li><b>aiosqlite</b> — SQLite with WAL journal mode.</li>
+              <li><b>bleak</b> — BLE advertising / BlueZ Classic inquiry.</li>
+              <li><b>scapy</b> &amp; <b>tshark</b> — 802.11 frame capture backends for the probe scanner.</li>
+              <li><b>gpsd-py3</b> — GPS fix stream parsing.</li>
+              <li><b>ReportLab</b> — PDF report generation.</li>
+              <li><b>Leaflet</b> + OpenStreetMap tiles — the in-app map and report mini-maps.</li>
+              <li><b>IEEE OUI registry</b> — vendor lookup data, cached locally.</li>
+            </ul>
           </section>
         </div>
       </div>
@@ -1325,6 +1354,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260519j"></script>
+  <script src="/static/app.js?v=20260520a"></script>
 </body>
 </html>
