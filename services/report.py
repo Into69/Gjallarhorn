@@ -318,12 +318,20 @@ def _most_active_location(locations: list[dict]) -> dict | None:
 
 
 def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dict]],
-                      common: list[dict]) -> list[str]:
-    """Generate up to ~5 bullet-points highlighting noteworthy patterns.
+                      common: list[dict]) -> list[dict]:
+    """Generate up to ~5 noteworthy-pattern findings. Each entry is a
+    dict {"text": <inline-html bullet>, "map_points": [(lat,lon,hex)]
+    | None, "map_zoom": int | None} so the renderer can drop a
+    contextual mini-map immediately below the relevant sentence
+    (rather than appending it once at the end of the section).
     Cheap derivations only — no extra DB calls."""
-    out: list[str] = []
+    out: list[dict] = []
     if not locations:
         return out
+
+    # Index locations by id for quick coord lookups when building
+    # the mini-maps below.
+    loc_by_id: dict[int, dict] = {l["id"]: l for l in locations if l.get("id") is not None}
 
     # Most active location (highest combined unique-device count)
     top_loc = _most_active_location(locations)
@@ -334,40 +342,77 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
             + (top_loc.get("wifi_client_count") or 0)
         )
         label = top_loc.get("label") or f"Loc {top_loc['id']}"
-        out.append(
-            f"<b>Most active location:</b> {label} — {top_loc_total} unique devices."
-        )
+        map_points = None
+        if top_loc.get("lat") is not None and top_loc.get("lon") is not None:
+            map_points = [(top_loc["lat"], top_loc["lon"], "#ff6b6b")]
+        out.append({
+            "text": f"<b>Most active location:</b> {label} — {top_loc_total} unique devices.",
+            "map_points": map_points,
+            "map_zoom": 16,
+        })
 
-    # Strongest signal across the whole dataset
+    # Strongest signal across the whole dataset — capture which
+    # location it was seen at so we can attribute + map it.
     strongest = None
-    for devs in per_loc_devices.values():
+    strongest_loc_id: int | None = None
+    for loc_id, devs in per_loc_devices.items():
         for d in devs:
             r = d.get("best_rssi")
             if r is None:
                 continue
             if strongest is None or r > strongest["best_rssi"]:
                 strongest = d
+                strongest_loc_id = loc_id
     if strongest is not None:
         det = strongest.get("details") or {}
         name = det.get("ssid") or det.get("name") or strongest.get("device_id")
-        out.append(
-            f"<b>Strongest signal:</b> {strongest.get('best_rssi')} dBm — "
-            f"<font face='Courier'>{strongest.get('device_id')}</font>"
-            f"{f' ({name})' if name and name != strongest.get('device_id') else ''}."
+        loc = loc_by_id.get(strongest_loc_id) if strongest_loc_id is not None else None
+        loc_label = (loc.get("label") if loc else None) or (
+            f"Loc {strongest_loc_id}" if strongest_loc_id is not None else "(unknown)"
         )
+        map_points = None
+        if loc is not None and loc.get("lat") is not None and loc.get("lon") is not None:
+            map_points = [(loc["lat"], loc["lon"], "#ff6b6b")]
+        out.append({
+            "text": (
+                f"<b>Strongest signal:</b> {strongest.get('best_rssi')} dBm — "
+                f"<font face='Courier'>{strongest.get('device_id')}</font>"
+                f"{f' ({name})' if name and name != strongest.get('device_id') else ''}"
+                f" at <i>{loc_label}</i>."
+            ),
+            "map_points": map_points,
+            "map_zoom": 16,
+        })
 
-    # Top recurring device
+    # Top recurring device — render every location the device was
+    # observed at on a single overview map so the spread is visible.
     if common:
         head = common[0]
         det = head.get("details") or {}
         name = det.get("ssid") or det.get("name") or ""
         n = head.get("n_locations") or 0
         if n >= 2:
-            out.append(
-                f"<b>Most-traveled device:</b> "
-                f"<font face='Courier'>{head.get('device_id')}</font>"
-                f"{f' ({name})' if name else ''} — seen at {n} locations."
-            )
+            map_points: list[tuple[float, float, str]] = []
+            raw_loc_ids = head.get("location_ids") or ""
+            for tok in str(raw_loc_ids).split(","):
+                tok = tok.strip()
+                if not tok.isdigit():
+                    continue
+                loc = loc_by_id.get(int(tok))
+                if loc and loc.get("lat") is not None and loc.get("lon") is not None:
+                    map_points.append((loc["lat"], loc["lon"], "#ff6b6b"))
+            out.append({
+                "text": (
+                    f"<b>Most-traveled device:</b> "
+                    f"<font face='Courier'>{head.get('device_id')}</font>"
+                    f"{f' ({name})' if name else ''} — seen at {n} locations."
+                ),
+                # auto-zoom (None) so all the markers fit, even when
+                # they span a city — the strongest/most-active maps
+                # are tight (zoom=16), this one wants the wider view.
+                "map_points": map_points or None,
+                "map_zoom": None,
+            })
 
     # Per-kind totals as a one-liner
     total_wifi = sum(int(l.get("wifi_count") or 0) for l in locations)
@@ -375,11 +420,15 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
     total_bt_classic = sum(int(l.get("bt_classic_count") or 0) for l in locations)
     total_cl = sum(int(l.get("wifi_client_count") or 0) for l in locations)
     if total_wifi or total_bt or total_bt_classic or total_cl:
-        out.append(
-            f"<b>By kind:</b> {total_wifi} Wi-Fi APs, {total_bt} BLE devices, "
-            f"{total_bt_classic} Bluetooth Classic, "
-            f"{total_cl} Wi-Fi clients (passive probe captures)."
-        )
+        out.append({
+            "text": (
+                f"<b>By kind:</b> {total_wifi} Wi-Fi APs, {total_bt} BLE devices, "
+                f"{total_bt_classic} Bluetooth Classic, "
+                f"{total_cl} Wi-Fi clients (passive probe captures)."
+            ),
+            "map_points": None,
+            "map_zoom": None,
+        })
 
     return out
 
@@ -644,26 +693,20 @@ async def build_report_pdf(*, group_bssids: bool = True,
     ))
     flow.append(Spacer(1, 8))
     findings = _summary_findings(locations, per_loc_devices, common)
-    if findings:
-        for line in findings:
-            flow.append(Paragraph(f"• {line}", s["body"]))
-
-    # Visual companion to the "Most active location" finding — a small
-    # mini-map zoomed in on that location. Falls back silently if the
-    # location has no coords or the tile renderer fails.
-    top_loc = _most_active_location(locations)
-    if top_loc is not None and top_loc.get("lat") is not None and top_loc.get("lon") is not None:
-        flow.append(Spacer(1, 8))
-        loc_label = top_loc.get("label") or f"Loc {top_loc['id']}"
-        flow.append(Paragraph(
-            f"<i>Most active location: <b>{_h(loc_label)}</b></i>",
-            s["caption"],
-        ))
-        flow.append(await _render_map_image(
-            [(top_loc["lat"], top_loc["lon"], "#ff6b6b")],
-            width_px=560, height_px=320, zoom=16,
-            target_inches=4.0,
-        ))
+    for f in findings:
+        flow.append(Paragraph(f"• {f['text']}", s["body"]))
+        pts = f.get("map_points")
+        if pts:
+            # Drop the mini-map immediately below the finding so the
+            # visual stays glued to the sentence it illustrates. The
+            # most-traveled map uses auto-zoom (map_zoom=None) to fit
+            # every marker; the per-location maps stay tight at 16.
+            flow.append(Spacer(1, 4))
+            flow.append(await _render_map_image(
+                pts, width_px=560, height_px=320,
+                zoom=f.get("map_zoom"), target_inches=4.0,
+            ))
+            flow.append(Spacer(1, 6))
     flow.append(Spacer(1, 16))
 
     _step("Picking suspected followers")
