@@ -22,6 +22,7 @@ from services.scan_orchestrator import ScanOrchestrator
 from services.location_manager import location_manager
 from services.oui import oui_service
 from services.alert_service import alert_service
+from services.sensor_identity import sensor_identity
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 for _noisy in ("uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"):
@@ -51,6 +52,9 @@ async def lifespan(app: FastAPI):
     global gps, orchestrator
     await db.init_db()
     s = await settings_store.load()
+    # Resolve the host's own scanner MACs so they get treated as
+    # implicitly-whitelisted devices and tagged "Sensor" in the UI.
+    sensor_identity.refresh(s)
     gps = GPSService(host=s.gpsd_host, port=s.gpsd_port, poll_s=s.gps_poll_interval_s)
     await gps.start()
     await oui_service.ensure_loaded()
@@ -105,7 +109,19 @@ async def api_put_settings(payload: dict) -> AppSettings:
         gps.host = new.gpsd_host
         gps.port = new.gpsd_port
         gps.poll_s = new.gps_poll_interval_s
+    # Adapters may have moved — re-resolve sensor MACs so the new
+    # interface's hardware address gets the implicit whitelist.
+    sensor_identity.refresh(new)
     return new
+
+
+@app.get("/api/sensors/identity")
+async def api_sensor_identity():
+    """Return the MAC addresses of the configured scanner adapters.
+    Each entry: {mac, label, iface}. The frontend uses this to tag
+    "Sensor" rows on the Devices / WiFi-AP tabs; alert and report
+    filters consult the same registry server-side."""
+    return {"sensors": sensor_identity.entries()}
 
 
 @app.post("/api/settings/notifications/discord/test")

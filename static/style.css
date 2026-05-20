@@ -2362,6 +2362,23 @@ select option:disabled { color: var(--muted); }
   letter-spacing: 0.4px;
 }
 
+/* Sensor self-identification — host's own scanner adapter MACs. Green
+   so they read as "this is mine" rather than "alert," and distinct
+   from the whitelist ★ which is a curated user list. */
+.sensor-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  background: rgba(107, 220, 138, 0.10);
+  border: 1px solid #2f5a3a;
+  border-radius: 999px;
+  font-size: 10px;
+  color: #6bdc8a;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+tr.sensor-device { opacity: 0.85; }
+
 /* Cross-MAC linkage badge for BLE rows whose advertising-data fingerprint
    matches one or more other rows. Distinct color so it doesn't read as a
    multi-BSSID grouping (which uses the accent color). */

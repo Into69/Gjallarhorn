@@ -31,6 +31,8 @@ import shutil
 import time
 from typing import Awaitable, Callable, Optional
 
+from services.wifi_scanner import normalize_ssid
+
 log = logging.getLogger(__name__)
 
 # Backoff between auto-restarts of the capture if it dies.
@@ -649,13 +651,17 @@ def _build_frame(
     """Build the dispatch dict for any wifi-client frame the scanner
     cares about. frame_type is one of probe / assoc / reassoc;
     callers branch on it. bssid is meaningful only for assoc/reassoc;
-    probes broadcast to ff:ff:ff:ff:ff:ff which we treat as None."""
+    probes broadcast to ff:ff:ff:ff:ff:ff which we treat as None.
+    Any all-NUL or '\\x00'-escape-only SSID — the way some APs and
+    clients encode 'no SSID' instead of a zero-length IE — gets
+    normalized to "" so the downstream pipeline treats it as a
+    wildcard / hidden probe."""
     if bssid in ("", "ff:ff:ff:ff:ff:ff"):
         bssid = ""
     return {
         "mac": mac,
         "rssi": rssi,
-        "ssid": ssid,
+        "ssid": normalize_ssid(ssid),
         "channel": channel,
         "frame_type": frame_type,
         "bssid": bssid,

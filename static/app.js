@@ -783,21 +783,29 @@ function renderDeviceRow(d) {
   // a list of networks it's been searching for. Show those instead.
   let nameOrSsid;
   if (d.kind === "wifi_client" && Array.isArray(det.ssids)) {
-    const named = det.ssids.filter(Boolean);
+    const named = det.ssids.map(normalizeSsid).filter(Boolean);
     nameOrSsid = named.length
       ? named.slice(0, 3).join(", ") + (named.length > 3 ? `, +${named.length - 3}` : "")
       : "(wildcard)";
   } else if (d._merged_ssids) {
-    // Grouped row: show all distinct SSIDs that the merged BSSIDs broadcast.
     nameOrSsid = d._merged_ssids.join(", ");
   } else {
-    nameOrSsid = det.ssid ?? det.name ?? "";
+    nameOrSsid = normalizeSsid(det.ssid) || det.name || "";
   }
   const tr = document.createElement("tr");
   // Mark merged rows visually so it's obvious they represent multiple BSSIDs.
   if (d._merged_count > 1) tr.classList.add("merged-ap");
   const wl = isWhitelisted(d.kind, d.device_id);
   if (wl) tr.classList.add("whitelisted");
+  // Sensor self-identification — the host's own scanner adapter MACs
+  // are treated as implicitly whitelisted server-side, and surfaced
+  // here as a distinct "Sensor" badge so the operator can tell their
+  // own gear apart from a real whitelisted device.
+  const sensorTip = sensorLabel(d.device_id);
+  if (sensorTip) tr.classList.add("sensor-device");
+  const sensorBadge = sensorTip
+    ? ` <span class="sensor-tag" title="${escapeAttr(sensorTip)} — this is the host's own adapter, treated as whitelisted">Sensor</span>`
+    : "";
   // Known-tracker classification (AirTag, Tile, Samsung SmartTag) — surfaced
   // as a red-bordered badge so they pop in the device list.
   const trackerLabel = {
@@ -834,8 +842,8 @@ function renderDeviceRow(d) {
     linkBadge = ` <span class="${cls}" title="${escapeAttr(tooltip)}">${text}</span>`;
   }
   const idCell = d._merged_count > 1
-    ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>${trackerBadge}${linkBadge}`
-    : `<span class="mono">${escapeHtml(d.device_id)}</span>${trackerBadge}${linkBadge}`;
+    ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>${sensorBadge}${trackerBadge}${linkBadge}`
+    : `<span class="mono">${escapeHtml(d.device_id)}</span>${sensorBadge}${trackerBadge}${linkBadge}`;
   const wlBtn = wl
     ? `<button type="button" class="icon-btn dev-wl active" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelisted — click to remove from whitelist" aria-label="Remove from whitelist">★</button>`
     : `<button type="button" class="icon-btn dev-wl" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelist this device (silences alerts and excludes from reports)" aria-label="Add to whitelist">☆</button>`;
@@ -928,7 +936,8 @@ function groupWifiByApPrefix(devices) {
     // Use the lowest BSSID as the canonical id so the grouping is stable.
     if (d.device_id < g.device_id) g.device_id = d.device_id;
     const det = d.details || {};
-    if (det.ssid && !g._merged_ssids.includes(det.ssid)) g._merged_ssids.push(det.ssid);
+    const ssidClean = normalizeSsid(det.ssid);
+    if (ssidClean && !g._merged_ssids.includes(ssidClean)) g._merged_ssids.push(ssidClean);
     if (det.vendor && !g._merged_vendors.includes(det.vendor)) g._merged_vendors.push(det.vendor);
     if (!g.details.vendor && det.vendor) g.details.vendor = det.vendor;
   }
@@ -1706,6 +1715,9 @@ $("#settings-form").addEventListener("submit", async (e) => {
     const updated = await api("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
     $("#save-status").textContent = "saved";
     await applyMapProvider(updated.map_provider);
+    // Adapters may have moved — pull the new sensor MACs so the Sensor
+    // badge tracks the change without a page reload.
+    refreshSensorIdentity();
     // Re-snapshot so the diff badges reset — every field is now in the
     // saved state, so nothing is "unsaved" anymore.
     _snapshotSettings();
@@ -2536,15 +2548,32 @@ function renderWapGroup(g) {
           const assocBadge = isAssoc
             ? ` <span class="wap-badge assoc" title="Captured an 802.11 mgmt or data frame between this client and this BSSID — best-effort evidence of an actual association.">★ associated</span>`
             : "";
+          const sensorTipC = sensorLabel(c.device_id);
+          const sensorBadgeC = sensorTipC
+            ? ` <span class="sensor-tag" title="${escapeAttr(sensorTipC)} — host's own adapter">Sensor</span>`
+            : "";
+          // Whitelist toggle. Sensor adapters are already implicitly
+          // whitelisted server-side, so the button stays static there
+          // (no curated entry to add or remove).
+          let wlCell;
+          if (sensorTipC) {
+            wlCell = `<button type="button" class="icon-btn" disabled title="Already implicitly whitelisted as a sensor adapter" aria-label="Sensor (auto-whitelisted)">★</button>`;
+          } else {
+            const cWl = isWhitelisted("wifi_client", c.device_id);
+            wlCell = cWl
+              ? `<button type="button" class="icon-btn wap-wl active" data-kind="wifi_client" data-id="${escapeAttr(c.device_id)}" title="Whitelisted — click to remove from whitelist" aria-label="Remove from whitelist">★</button>`
+              : `<button type="button" class="icon-btn wap-wl" data-kind="wifi_client" data-id="${escapeAttr(c.device_id)}" title="Whitelist this device (silences alerts and excludes from reports)" aria-label="Add to whitelist">☆</button>`;
+          }
           return `
             <tr>
-              <td class="mono">${escapeHtml(c.device_id)}${c.randomized ? ' <span class="wap-badge rand">rand</span>' : ""}${assocBadge}</td>
+              <td class="mono">${escapeHtml(c.device_id)}${c.randomized ? ' <span class="wap-badge rand">rand</span>' : ""}${assocBadge}${sensorBadgeC}</td>
               <td>${escapeHtml(c.vendor || "")}</td>
               <td>${(c.channels || []).join(", ")}</td>
               <td>${c.best_rssi != null ? c.best_rssi + " dBm" : ""}</td>
               <td>${c.seen_count ?? ""}</td>
               <td class="mono">${escapeHtml(formatTime(c.last_seen))}</td>
               <td>${escapeHtml(probed)}${more ? `<span class="muted">${escapeHtml(more)}</span>` : ""}</td>
+              <td>${wlCell}</td>
             </tr>`;
         };
         const probedSubRows = matched.map(c => renderClientRow(c, false)).join("");
@@ -2553,6 +2582,7 @@ function renderWapGroup(g) {
           <thead><tr>
             <th>MAC</th><th>Vendor</th><th>Channels</th><th>Best RSSI</th>
             <th>Probes</th><th>Last seen</th><th>Other SSIDs probed</th>
+            <th title="Whitelist toggle — silences alerts and excludes from reports">WL</th>
           </tr></thead>`;
         const probedSection = probedCount > 0 ? `
           <h5 class="wap-h wap-h-sub">Linked clients <span class="muted small">(${probedCount} at this BSSID's location — ★ marks frame-exchange evidence)</span></h5>
@@ -2593,6 +2623,16 @@ function renderWapGroup(g) {
     ? g.clients.map(c => {
         const probed = (c.ssids || []).filter(s => s).slice(0, 6).join(", ");
         const more = (c.ssids || []).filter(s => s).length > 6 ? ` (+${(c.ssids || []).filter(s => s).length - 6})` : "";
+        const sensorTipC2 = sensorLabel(c.device_id);
+        let wlCell2;
+        if (sensorTipC2) {
+          wlCell2 = `<button type="button" class="icon-btn" disabled title="Already implicitly whitelisted as a sensor adapter" aria-label="Sensor (auto-whitelisted)">★</button>`;
+        } else {
+          const cWl2 = isWhitelisted("wifi_client", c.device_id);
+          wlCell2 = cWl2
+            ? `<button type="button" class="icon-btn wap-wl active" data-kind="wifi_client" data-id="${escapeAttr(c.device_id)}" title="Whitelisted — click to remove from whitelist" aria-label="Remove from whitelist">★</button>`
+            : `<button type="button" class="icon-btn wap-wl" data-kind="wifi_client" data-id="${escapeAttr(c.device_id)}" title="Whitelist this device (silences alerts and excludes from reports)" aria-label="Add to whitelist">☆</button>`;
+        }
         return `
         <tr>
           <td class="mono">${escapeHtml(c.device_id)}${c.randomized ? ' <span class="wap-badge rand">rand</span>' : ""}</td>
@@ -2602,9 +2642,10 @@ function renderWapGroup(g) {
           <td>${c.seen_count ?? ""}</td>
           <td class="mono">${escapeHtml(formatTime(c.last_seen))}</td>
           <td>${escapeHtml(probed)}${more ? `<span class="muted">${escapeHtml(more)}</span>` : ""}</td>
+          <td>${wlCell2}</td>
         </tr>`;
       }).join("")
-    : `<tr><td colspan="7" class="muted">No clients have been linked to this network.</td></tr>`;
+    : `<tr><td colspan="8" class="muted">No clients have been linked to this network.</td></tr>`;
 
   return `
     <details class="wap-group"${opened} data-ssid="${escapeAttr(g.ssid)}">
@@ -2634,6 +2675,7 @@ function renderWapGroup(g) {
           <thead><tr>
             <th>MAC</th><th>Vendor</th><th>Channels</th><th>Best RSSI</th>
             <th>Probes</th><th>Last seen</th><th>Other SSIDs probed</th>
+            <th title="Whitelist toggle — silences alerts and excludes from reports">WL</th>
           </tr></thead>
           <tbody>${clientRows}</tbody>
         </table>
@@ -2647,7 +2689,27 @@ $("#wap-location")?.addEventListener("change", refreshWifiAps);
 // Delegated click on the AP table: toggle the per-BSSID 'clients probing
 // here' detail row. Skip clicks on interactive children (links, buttons,
 // inputs) so the row click doesn't fight any future row-level controls.
-$("#wap-list")?.addEventListener("click", (ev) => {
+$("#wap-list")?.addEventListener("click", async (ev) => {
+  // Whitelist toggle on a linked-client row. Reuses quickWhitelistToggle
+  // so the add/delete plumbing (cache lookup + confirm-on-remove) lives
+  // in one place; we just follow up with a re-render of the WiFi AP tab
+  // so every row reflecting this MAC flips its star together.
+  const wlBtn = ev.target.closest(".wap-wl");
+  if (wlBtn && !wlBtn.disabled) {
+    ev.stopPropagation();
+    const kind = wlBtn.dataset.kind;
+    const deviceId = wlBtn.dataset.id;
+    if (!kind || !deviceId) return;
+    wlBtn.disabled = true;
+    try {
+      await quickWhitelistToggle(kind, deviceId);
+      renderWifiAps();
+    } catch (err) {
+      alert("Whitelist toggle failed: " + err.message);
+      wlBtn.disabled = false;
+    }
+    return;
+  }
   const row = ev.target.closest(".wap-bssid-row.expandable");
   if (!row || !row.parentNode) return;
   if (ev.target.closest("a, button, input, select, .wap-bssid-clients")) return;
@@ -2956,7 +3018,7 @@ $("#alerts-filter-reset").addEventListener("click", () => {
 
 function renderAlertEvent(e) {
   const det = e.details || {};
-  const label = det.ssid || det.name || "";
+  const label = normalizeSsid(det.ssid) || det.name || "";
   const vendor = det.vendor ? ` · ${escapeHtml(det.vendor)}` : "";
   const where = e.location_id != null ? `loc #${e.location_id}` : "no loc";
   // Whitelist toggle: alerts only fire on non-whitelisted devices, so the
@@ -3195,7 +3257,7 @@ function showAlertOnMap(e) {
   // any location bubble, so the popup shows even if the marker isn't on
   // screen and doesn't drag the user's eye away from what they were looking at.
   const det = e.details || {};
-  const label = det.ssid || det.name || "";
+  const label = normalizeSsid(det.ssid) || det.name || "";
   const vendor = det.vendor || "";
 
   const toast = document.createElement("div");
@@ -3669,6 +3731,32 @@ function buildWhitelistMatcher(entries) {
   };
 }
 let isWhitelisted = (_k, _d) => false;
+
+// Runtime sensor-MAC registry, mirrored from /api/sensors/identity.
+// Lower-cased keys for case-insensitive lookup; value is the friendly
+// label ("WiFi scanner", "Bluetooth scanner", etc.) shown in the badge
+// tooltip. Built up by refreshSensorIdentity() at boot and after any
+// settings change that touches the adapter fields.
+let _sensorIdentity = new Map();
+function isSensor(deviceId) {
+  return _sensorIdentity.has((deviceId || "").toLowerCase());
+}
+function sensorLabel(deviceId) {
+  return _sensorIdentity.get((deviceId || "").toLowerCase()) || null;
+}
+async function refreshSensorIdentity() {
+  try {
+    const r = await api("/api/sensors/identity");
+    const next = new Map();
+    for (const e of (r.sensors || [])) {
+      if (e && e.mac) next.set(e.mac.toLowerCase(), e.label || "Sensor");
+    }
+    _sensorIdentity = next;
+  } catch {
+    // Non-fatal — keep the previous map so a transient failure doesn't
+    // wipe the badge from every row.
+  }
+}
 
 async function refreshTempWhitelist() {
   const panel = $("#wl-temp-panel");
@@ -4688,7 +4776,7 @@ async function showDeviceTimeline(kind, deviceId) {
 
 function renderDeviceTimeline(data) {
   const det = data.details || {};
-  const name = det.ssid || det.name || "";
+  const name = normalizeSsid(det.ssid) || det.name || "";
   const vendor = det.vendor || "";
   const sparkline = renderRssiSparkline(data.observations || []);
   const locsRows = (data.locations || []).map(l => `
@@ -5566,6 +5654,23 @@ function formatUptime(seconds) {
 }
 
 // ---------- utils ----------
+// Mirror of services/wifi_scanner.normalize_ssid — collapses all-NUL
+// or '\x00'-escape-padded SSIDs to empty so legacy rows captured
+// before server-side normalization render as hidden in the UI.
+function normalizeSsid(s) {
+  if (!s) return "";
+  const raw = String(s).trim();
+  if (!raw) return "";
+  if (raw.includes("\\x00")) {
+    const stripped = raw.replace(/\\x00/g, "").trim();
+    return stripped || "";
+  }
+  if (raw.includes("\x00")) {
+    const stripped = raw.replace(/\x00/g, "").trim();
+    return stripped || "";
+  }
+  return raw;
+}
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -5687,6 +5792,7 @@ function _initFieldTooltips() {
   setupMapToggleIcons();
   refreshWhitelist();
   refreshTempWhitelist();
+  refreshSensorIdentity();
   startLogsPolling();
   setInterval(pollGps, 1500);
   // Mission pill on the map: full refresh every 10s, elapsed-text tick

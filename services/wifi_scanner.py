@@ -34,6 +34,38 @@ def _band_from_freq(freq_mhz: int) -> str:
     return "6GHz"
 
 
+def normalize_ssid(s: str | None) -> str:
+    """Collapse SSIDs that carry no real name into the empty-string
+    'hidden' form. Some APs advertise their hidden state as N null
+    bytes instead of a zero-length SSID IE — iw renders those as a
+    literal '\\x00\\x00...' escape sequence, while tshark / scapy
+    may pass through actual NUL bytes. Whitespace-only SSIDs get
+    the same treatment. Non-empty SSIDs with embedded NULs keep
+    their printable prefix (some APs zero-pad the IE tail).
+
+    Returns "" for hidden, otherwise the cleaned SSID string."""
+    if not s:
+        return ""
+    raw = s.strip()
+    if not raw:
+        return ""
+    # iw escape form: a string that's entirely '\x00' tokens.
+    if "\\x00" in raw:
+        stripped_escapes = raw.replace("\\x00", "").strip()
+        if not stripped_escapes:
+            return ""
+        # Trim leading / trailing escape padding but keep middle content
+        # if it happens to be the actual SSID (rare; usually all-or-nothing).
+        return stripped_escapes
+    # Raw NUL bytes: same logic.
+    if "\x00" in raw:
+        stripped_nuls = raw.replace("\x00", "").strip()
+        if not stripped_nuls:
+            return ""
+        return stripped_nuls
+    return raw
+
+
 async def list_wifi_interfaces() -> list[str]:
     """Return only the interface names (compat shim)."""
     return [info["name"] for info in await list_wifi_interface_info()]
@@ -288,7 +320,7 @@ async def _scan_with_nmcli(interface: str) -> list[WifiDevice]:
             enc = "OPEN"
         devices.append(WifiDevice(
             bssid=bssid,
-            ssid=ssid or "<hidden>",
+            ssid=normalize_ssid(ssid) or "<hidden>",
             rssi=rssi,
             frequency_mhz=freq_mhz,
             channel=channel,
@@ -344,6 +376,11 @@ def _parse_iw_scan(text: str) -> Iterable[WifiDevice]:
             return m.group(1).strip() if m else None
 
         ssid = first(r"^\s*SSID:\s*(.*)$", re.MULTILINE)
+        # All-NUL or '\x00'-escape-only SSIDs are hidden APs advertising
+        # via padding instead of a zero-length IE. normalize_ssid maps
+        # both forms back to "" so the rest of the pipeline (grouping,
+        # rendering) handles them like a regular hidden AP.
+        ssid = normalize_ssid(ssid)
         if ssid == "":
             ssid = "<hidden>"
         rssi_s = first(r"signal:\s*(-?\d+\.?\d*)\s*dBm")

@@ -2742,6 +2742,11 @@ async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
         async with db.execute(sql_clients, args) as cur:
             client_rows = [dict(r) for r in await cur.fetchall()]
 
+    # Normalize all-NUL or '\x00'-padded SSIDs so legacy rows captured
+    # before the scanner started normalizing get bucketed under
+    # (hidden) like the new ones.
+    from services.wifi_scanner import normalize_ssid
+
     HIDDEN = "(hidden)"
     groups: dict[str, dict] = {}
 
@@ -2750,7 +2755,7 @@ async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
             det = json.loads(r.pop("details_json") or "{}")
         except (TypeError, ValueError):
             det = {}
-        raw_ssid = (det.get("ssid") or "").strip()
+        raw_ssid = normalize_ssid(det.get("ssid"))
         ssid = raw_ssid or HIDDEN
         g = groups.setdefault(ssid, {
             "ssid": raw_ssid,
@@ -2816,7 +2821,15 @@ async def wifi_aps_grouped(location_id: int | None = None) -> list[dict]:
             det = json.loads(r.pop("details_json") or "{}")
         except (TypeError, ValueError):
             det = {}
-        ssids = [s for s in (det.get("ssids") or []) if isinstance(s, str)]
+        # Normalize each historical ssid so all-NUL / '\x00'-padded
+        # entries collapse to "" and the client no longer claims to
+        # have probed for a named hidden network.
+        ssids = [
+            normalize_ssid(s)
+            for s in (det.get("ssids") or [])
+            if isinstance(s, str)
+        ]
+        ssids = [s for s in ssids if s]
         assoc = [
             s.lower() for s in (det.get("associated_bssids") or [])
             if isinstance(s, str) and s

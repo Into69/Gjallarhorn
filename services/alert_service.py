@@ -131,6 +131,13 @@ class AlertService:
         return n
 
     def is_whitelisted(self, kind: str, device_id_l: str) -> bool:
+        # Treat the host's own scanner MACs as implicitly whitelisted so
+        # the adapter doesn't fire alerts on itself when it appears in
+        # its own scan. Kept out of the user's whitelist table on
+        # purpose — the user shouldn't have to curate their own gear.
+        from services.sensor_identity import sensor_identity
+        if sensor_identity.is_sensor(device_id_l):
+            return True
         for k, target in self._whitelist:
             if k != kind or not target:
                 continue

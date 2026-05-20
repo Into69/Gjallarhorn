@@ -252,10 +252,15 @@ _KIND_COLORS = {"wifi": "#1f78b4", "bluetooth": "#8b5cf6"}
 
 def _whitelist_matcher(entries: list[dict]):
     """Build a fast (kind, device_id_lower) -> bool matcher from whitelist
-    entries, with prefix matching."""
+    entries, with prefix matching. Also honors the runtime sensor-MAC
+    registry so the host's own scanner adapters are excluded from
+    reports regardless of whether the user added them to the whitelist."""
+    from services.sensor_identity import sensor_identity
     norm = [(e["kind"], (e["device_id"] or "").lower()) for e in entries]
     def match(kind: str, device_id: str) -> bool:
         d = (device_id or "").lower()
+        if sensor_identity.is_sensor(d):
+            return True
         for k, target in norm:
             if k != kind or not target:
                 continue
