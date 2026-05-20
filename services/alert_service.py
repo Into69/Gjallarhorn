@@ -535,18 +535,24 @@ class AlertService:
             # Latch: a (rule, device) pair only fires once per latch
             # cycle. Persists in alert_events.cleared so latches survive
             # restarts. The user clears via /api/alerts/clear or the
-            # per-row button in the live feed. Rules with latch=0 skip
-            # this entirely and fire every time the conditions match —
-            # useful for things you want pinged on regardless of state.
-            # sustained_presence runs its own flip-flop state machine
-            # (_presence_state) so the regular latch would just duplicate
-            # — we already only got here on a state transition.
+            # per-row button in the live feed. sustained_presence runs
+            # its own flip-flop state machine (_presence_state) so the
+            # regular latch would just duplicate — we already only got
+            # here on a state transition.
+            #
+            # An in-memory latch suppresses the rule REGARDLESS of its
+            # rule.latch flag — that's how per-row delete on a
+            # non-latching rule keeps it from re-firing on the next
+            # scan tick (the delete endpoint stamps the pair into
+            # _latched). rule.latch only controls whether an *organic*
+            # fire auto-latches; once a pair is latched, it stays
+            # suppressed until the operator clicks 🔓.
             key = (rule["id"], device_id_l)
             if mt != "sustained_presence":
+                if key in self._latched:
+                    continue
                 latch_enabled = int(rule.get("latch", 1) or 0) == 1
                 if latch_enabled:
-                    if key in self._latched:
-                        continue
                     self._latched.add(key)
 
             event_id = await db.insert_alert_event(

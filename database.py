@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS alert_events (
     device_id TEXT NOT NULL,
     rssi INTEGER,
     details_json TEXT NOT NULL,
-    cleared INTEGER NOT NULL DEFAULT 0,    -- 0 = latched (suppresses re-fire); 1 = acknowledged
+    cleared INTEGER NOT NULL DEFAULT 0,    -- 0 = latched (suppresses re-fire); 1 = acknowledged (allows re-fire); 2 = dismissed (hidden from feed, suppresses re-fire — set by per-row trash)
     FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE CASCADE
 );
 
@@ -1634,14 +1634,18 @@ async def insert_alert_event(
 
 
 async def list_alert_events(limit: int = 100, since_id: int | None = None) -> list[dict]:
+    # Filter out cleared=2 ('dismissed') rows so per-row trash truly
+    # hides them from the live feed. They still exist in the DB to
+    # back the latch across restart — list_latched_pairs picks them up.
     sql = (
         "SELECT e.*, r.name AS rule_name, r.match_type AS rule_match_type, "
         "       r.audible AS rule_audible, r.latch AS rule_latch "
         "FROM alert_events e LEFT JOIN alert_rules r ON r.id = e.rule_id "
+        "WHERE e.cleared <> 2 "
     )
     args: list = []
     if since_id is not None:
-        sql += "WHERE e.id > ? "
+        sql += "AND e.id > ? "
         args.append(since_id)
     sql += "ORDER BY e.id DESC LIMIT ?"
     args.append(limit)
@@ -1935,22 +1939,32 @@ async def purge_old_data(
 
 async def list_latched_pairs() -> list[tuple[int, str]]:
     """Every (rule_id, device_id_lower) pair with at least one alert_event
-    row that hasn't been cleared. AlertService loads this on startup so
-    latches survive a process restart."""
+    row that's still suppressing — cleared=0 (active latch) OR cleared=2
+    (per-row trash dismissed it from the feed but kept the latch alive).
+    AlertService loads this on startup so latches survive a process
+    restart."""
     async with _connect() as db:
         async with db.execute(
             "SELECT DISTINCT rule_id, lower(device_id) "
-            "FROM alert_events WHERE cleared=0"
+            "FROM alert_events WHERE cleared <> 1"
         ) as cur:
             return [(int(r[0]), r[1]) for r in await cur.fetchall()]
 
 
 async def delete_alert_event(event_id: int) -> dict | None:
-    """Delete a single alert_events row by id. Returns metadata about
-    the row (rule_id, lowercased device_id, prior cleared flag, and
-    the count of still-uncleared events left for the (rule, device)
-    pair) so the caller can decide whether to drop the in-memory latch.
-    Returns None if no row matched."""
+    """Per-row 'trash' for the live feed. Behavior depends on the row's
+    prior cleared state so the user's mental model — 'this should stay
+    gone' — holds across rule types and restarts:
+
+      - cleared=0 (active latch): UPDATE cleared=2 so the row is hidden
+        from the feed but the latch persists. Survives restart because
+        list_latched_pairs includes cleared=2.
+      - cleared=1 (already acknowledged): hard DELETE — the latch is
+        already gone, the user is just tidying history.
+      - cleared=2: idempotent no-op (the row's already dismissed).
+
+    Returns the metadata the caller needs to update the in-memory latch
+    set, or None if no row matched."""
     async with _connect() as db:
         async with db.execute(
             "SELECT rule_id, lower(device_id), cleared "
@@ -1960,30 +1974,36 @@ async def delete_alert_event(event_id: int) -> dict | None:
             row = await cur.fetchone()
         if not row:
             return None
-        rule_id, device_id_l, was_cleared = int(row[0]), row[1], int(row[2])
-        await db.execute("DELETE FROM alert_events WHERE id=?", (event_id,))
+        rule_id, device_id_l, prior_cleared = int(row[0]), row[1], int(row[2])
+        if prior_cleared == 1:
+            await db.execute("DELETE FROM alert_events WHERE id=?", (event_id,))
+        else:
+            await db.execute(
+                "UPDATE alert_events SET cleared=2 WHERE id=?", (event_id,)
+            )
         await db.commit()
-        async with db.execute(
-            "SELECT COUNT(*) FROM alert_events "
-            "WHERE rule_id=? AND lower(device_id)=? AND cleared=0",
-            (rule_id, device_id_l),
-        ) as cur:
-            remaining = int((await cur.fetchone())[0])
     return {
         "rule_id": rule_id,
         "device_id_l": device_id_l,
-        "was_cleared": bool(was_cleared),
-        "uncleared_remaining": remaining,
+        "prior_cleared": prior_cleared,
+        # True when the post-state should keep the in-memory latch alive
+        # (cleared=2 still suppresses; cleared=1 → DELETE means the row
+        # was already non-suppressing, so the caller shouldn't add).
+        "suppresses": prior_cleared != 1,
     }
 
 
 async def clear_alert_pair(rule_id: int, device_id: str) -> int:
-    """Mark every event for (rule_id, device_id_lower) as cleared. Caller
-    is responsible for removing the matching latch from AlertService."""
+    """Mark every still-suppressing event for (rule_id, device_id_lower)
+    as cleared=1. Hits both active latches (cleared=0) and dismissed
+    rows (cleared=2) so the 🔓 button is a single 're-arm this device'
+    action regardless of how the row got into a suppressing state.
+    Caller is responsible for removing the matching latch from
+    AlertService._latched."""
     async with _connect() as db:
         cur = await db.execute(
             "UPDATE alert_events SET cleared=1 "
-            "WHERE rule_id=? AND lower(device_id)=? AND cleared=0",
+            "WHERE rule_id=? AND lower(device_id)=? AND cleared <> 1",
             (rule_id, (device_id or "").lower()),
         )
         await db.commit()
@@ -1991,11 +2011,12 @@ async def clear_alert_pair(rule_id: int, device_id: str) -> int:
 
 
 async def clear_all_latches() -> int:
-    """Mark every still-latched event as cleared without deleting any
-    history. Returns the number of rows updated."""
+    """Mark every still-suppressing event (cleared=0 or cleared=2) as
+    cleared=1 without deleting any history. Returns the number of rows
+    updated."""
     async with _connect() as db:
         cur = await db.execute(
-            "UPDATE alert_events SET cleared=1 WHERE cleared=0"
+            "UPDATE alert_events SET cleared=1 WHERE cleared <> 1"
         )
         await db.commit()
         return cur.rowcount or 0

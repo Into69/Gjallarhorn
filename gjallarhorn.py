@@ -1439,7 +1439,19 @@ async def api_delete_rule(rule_id: int):
 
 @app.get("/api/alerts/events")
 async def api_list_events(limit: int = 100, since_id: Optional[int] = None):
-    return {"events": await db.list_alert_events(limit=limit, since_id=since_id)}
+    """List alert events for the live feed. Annotates each row with
+    `latched_runtime` — True when the (rule, device) pair is currently
+    suppressing future fires (either organic latch=1 latching or a
+    persisted dismissal from the per-row trash). The frontend uses
+    this to decide whether to show the 🔒 / 🔓 affordance, since
+    non-latching rules can land in a suppressed state too once the
+    user trashes one of their events."""
+    events = await db.list_alert_events(limit=limit, since_id=since_id)
+    latched = alert_service._latched  # type: ignore[attr-defined]
+    for e in events:
+        key = (e.get("rule_id"), (e.get("device_id") or "").lower())
+        e["latched_runtime"] = key in latched
+    return {"events": events}
 
 
 @app.delete("/api/alerts/events")
@@ -1453,15 +1465,20 @@ async def api_clear_events():
 
 @app.delete("/api/alerts/events/{event_id}")
 async def api_delete_event(event_id: int):
-    """Delete a single alert_events row. Used by the live-feed per-row
-    trash icon. The in-memory latch is preserved so the same rule
-    doesn't immediately re-fire on the next scan tick — otherwise the
-    just-deleted alert would reappear within seconds. To re-arm the
-    rule, use the 🔓 Clear button (or wait for the next restart, since
-    a deleted row can't restore the latch from DB)."""
+    """Hide a single alert_events row from the live feed. Used by the
+    per-row trash icon. The DB layer flips the row to cleared=2
+    ('dismissed') instead of a hard delete so the latch persists across
+    restarts; in-memory _latched is updated to match. The post-state
+    suppresses re-fires for both latching and non-latching rules — the
+    latter would otherwise create a fresh alert on the next scan tick
+    that looked just like the deleted one. The 🔓 button re-arms."""
     result = await db.delete_alert_event(event_id)
     if result is None:
         raise HTTPException(404, "alert event not found")
+    if result.get("suppresses"):
+        alert_service._latched.add(
+            (result["rule_id"], result["device_id_l"])
+        )
     return {"ok": True}
 
 

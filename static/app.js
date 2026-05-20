@@ -3029,26 +3029,30 @@ function renderAlertEvent(e) {
   const wlBtn = wl
     ? `<button type="button" class="icon-btn alert-wl active" disabled title="Whitelisted — future alerts on this device are suppressed" aria-label="Already whitelisted">★</button>`
     : `<button type="button" class="icon-btn alert-wl" data-kind="${escapeAttr(e.device_kind)}" data-id="${escapeAttr(e.device_id)}" title="Whitelist this device — silences future alerts and excludes it from PDF reports" aria-label="Whitelist device">☆</button>`;
-  // Latch state only applies when the rule itself latches. Rules with
-  // latch=0 fire on every match — the alert_events row gets cleared=0
-  // because nothing flipped it, but there's no actual latch to hold or
-  // release. Hide the badge and unlatch button entirely for those.
-  // rule_latch defaults to 1 for legacy events that pre-date the column.
+  // Latch state. latched_runtime is the server's authoritative answer
+  // for "is the (rule, device) pair currently suppressing future
+  // fires?" — true when the pair is in alert_service._latched, which
+  // covers both organic latch=1 latching AND per-row dismissals (the
+  // trash icon adds non-latching pairs too so they don't re-fire on
+  // the next scan tick). cleared=1 means the user explicitly released
+  // the latch via 🔓 and the rule is free to fire again. Render the
+  // 🔓 button only when the pair is actively latched.
   const ruleLatches = (e.rule_latch ?? 1) !== 0;
-  const latched = ruleLatches
-    && (e.cleared === 0 || e.cleared === false || e.cleared == null);
+  const latched = e.latched_runtime === true;
   let latchBadge = "";
   let latchBtn = "";
-  if (ruleLatches) {
-    latchBadge = latched
-      ? `<span class="latch-tag" title="Latched — this rule won't fire again on this device until cleared">🔒 latched</span>`
-      : `<span class="latch-tag cleared" title="Acknowledged">cleared</span>`;
-    if (latched) {
-      latchBtn = `<button type="button" class="icon-btn alert-clear" data-rule="${escapeAttr(e.rule_id)}" data-id="${escapeAttr(e.device_id)}" title="Clear the latch so future matches fire again" aria-label="Clear latch">🔓</button>`;
-    }
+  if (latched) {
+    latchBadge = `<span class="latch-tag" title="Suppressing — this rule won't fire again on this device until cleared">🔒 latched</span>`;
+    latchBtn = `<button type="button" class="icon-btn alert-clear" data-rule="${escapeAttr(e.rule_id)}" data-id="${escapeAttr(e.device_id)}" title="Clear the latch so future matches fire again" aria-label="Clear latch">🔓</button>`;
+  } else if (ruleLatches && (e.cleared === 1 || e.cleared === true)) {
+    // Cleared latching row — show 'cleared' so the user knows the
+    // rule will fire again. Non-latching rules skip this badge since
+    // their default state is 'will fire again' and the noise isn't
+    // useful.
+    latchBadge = `<span class="latch-tag cleared" title="Acknowledged">cleared</span>`;
   }
   return `
-    <div class="alert-item kind-${escapeHtml(e.device_kind)} ${ruleLatches && !latched ? "alert-cleared" : ""}">
+    <div class="alert-item kind-${escapeHtml(e.device_kind)} ${!latched && ruleLatches ? "alert-cleared" : ""}">
       <div>
         <span class="alert-rule">${escapeHtml(e.rule_name || "rule " + e.rule_id)}</span>
         <span class="muted"> matched </span>
@@ -3108,11 +3112,15 @@ $("#alerts-list")?.addEventListener("click", async (ev) => {
         body: JSON.stringify({ rule_id: ruleId, device_id: deviceId }),
       });
       // Reflect locally so re-render flips the badge without a round-trip
-      // to /api/alerts/events first.
+      // to /api/alerts/events first. Server cleared the latch on both
+      // the in-memory set and the DB cleared column, so the row's
+      // latched_runtime flips to false and cleared rises to 1.
+      const did = deviceId.toLowerCase();
       for (const e of alertsCache) {
         if (e.rule_id === ruleId &&
-            (e.device_id || "").toLowerCase() === deviceId.toLowerCase()) {
+            (e.device_id || "").toLowerCase() === did) {
           e.cleared = 1;
+          e.latched_runtime = false;
         }
       }
       renderFilteredAlerts();
@@ -3132,10 +3140,23 @@ $("#alerts-list")?.addEventListener("click", async (ev) => {
     delBtn.disabled = true;
     try {
       await api(`/api/alerts/events/${eventId}`, { method: "DELETE" });
-      // Drop from local cache and re-render so the row disappears
-      // without waiting for the next poll.
+      // Drop the dismissed row from the local cache and flip the
+      // remaining rows of the same (rule, device) pair to latched
+      // so their 🔒 badge appears without waiting for the next poll.
+      // The server stamped this pair into _latched as part of the
+      // delete, suppressing any future fires.
+      const dismissed = alertsCache.find(x => x.id === eventId);
       const idx = alertsCache.findIndex(x => x.id === eventId);
       if (idx >= 0) alertsCache.splice(idx, 1);
+      if (dismissed) {
+        const did = (dismissed.device_id || "").toLowerCase();
+        for (const e of alertsCache) {
+          if (e.rule_id === dismissed.rule_id &&
+              (e.device_id || "").toLowerCase() === did) {
+            e.latched_runtime = true;
+          }
+        }
+      }
       renderFilteredAlerts();
     } catch (err) {
       alert("Delete failed: " + err.message);
@@ -3148,7 +3169,7 @@ $("#alerts-unlatch-all")?.addEventListener("click", async () => {
   if (!confirm("Clear every active alarm latch?\n\nHistory is kept; rules can fire again on those devices.")) return;
   try {
     await api("/api/alerts/clear-all", { method: "POST" });
-    for (const e of alertsCache) e.cleared = 1;
+    for (const e of alertsCache) { e.cleared = 1; e.latched_runtime = false; }
     renderFilteredAlerts();
   } catch (err) {
     alert("Unlatch failed: " + err.message);
