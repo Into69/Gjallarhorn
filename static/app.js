@@ -5732,12 +5732,18 @@ function _initFieldTooltips() {
   const place = () => {
     if (!activeEl) return;
     const r = activeEl.getBoundingClientRect();
-    // Measure after content is set so the size is accurate.
     const tw = tip.offsetWidth;
     const th = tip.offsetHeight;
-    // Prefer above the field; flip below if there isn't room.
-    const above = r.top - th - 8 >= 6;
-    const top = above ? r.top - th - 8 : Math.min(r.bottom + 8, window.innerHeight - th - 6);
+    // Pick whichever side has more room; on a tie or both-fit prefer
+    // above. No clamping into the input — overflowing the viewport
+    // is preferable to obscuring the field the operator is trying to
+    // read or type into.
+    const spaceAbove = r.top - 6;
+    const spaceBelow = window.innerHeight - r.bottom - 6;
+    const fitsAbove = spaceAbove >= th + 8;
+    const fitsBelow = spaceBelow >= th + 8;
+    const above = fitsAbove || (!fitsBelow && spaceAbove >= spaceBelow);
+    const top = above ? r.top - th - 8 : r.bottom + 8;
     const left = Math.max(6, Math.min(r.left, window.innerWidth - tw - 6));
     tip.style.top = `${top}px`;
     tip.style.left = `${left}px`;
@@ -5745,6 +5751,11 @@ function _initFieldTooltips() {
   const show = (el) => {
     const text = el.dataset.help;
     if (!text) return;
+    // Don't show on a field the operator is actively interacting with —
+    // the tooltip would just sit on top of their typed text. Hover
+    // exists for discovery; once they've focused a field, get out of
+    // their way until they take focus elsewhere.
+    if (document.activeElement === el) return;
     activeEl = el;
     tip.textContent = text;
     tip.hidden = false;
@@ -5763,16 +5774,13 @@ function _initFieldTooltips() {
   document.addEventListener("mouseout", (e) => {
     const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
     if (!el) return;
-    // Ignore mouseouts that just move between child nodes inside the
-    // same input.
     if (el.contains(e.relatedTarget)) return;
-    if (activeEl === el && document.activeElement !== el) hide();
+    if (activeEl === el) hide();
   });
+  // Focus on a field dismisses any hover tooltip — typing should never
+  // fight a popup for screen real estate. We deliberately do NOT
+  // re-show on focusin: the user is now using the field, not exploring.
   document.addEventListener("focusin", (e) => {
-    const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
-    if (el && el.dataset.help) show(el);
-  });
-  document.addEventListener("focusout", (e) => {
     const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
     if (el && activeEl === el) hide();
   });
