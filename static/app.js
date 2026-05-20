@@ -5729,6 +5729,12 @@ function _initFieldTooltips() {
   tip.hidden = true;
   document.body.appendChild(tip);
   let activeEl = null;
+  let pendingEl = null;
+  let showTimer = null;
+  // Hover delay before the popup appears — long enough that a mouse
+  // passing through to reach the table below doesn't flash the help,
+  // short enough that a deliberate hover still gets it.
+  const HOVER_DELAY_MS = 600;
   const place = () => {
     if (!activeEl) return;
     const r = activeEl.getBoundingClientRect();
@@ -5748,20 +5754,45 @@ function _initFieldTooltips() {
     tip.style.top = `${top}px`;
     tip.style.left = `${left}px`;
   };
-  const show = (el) => {
+  const cancelPending = () => {
+    if (showTimer != null) {
+      clearTimeout(showTimer);
+      showTimer = null;
+    }
+    pendingEl = null;
+  };
+  const _shouldSkip = (el) => {
+    // Active interaction beats hover help — don't pop over a field
+    // the operator is currently focused in.
+    if (document.activeElement === el) return true;
+    // If the field already has content, the operator knows what it's
+    // for; the help is only useful at discovery time and would just
+    // sit on top of their typed text. Skip search inputs in any state
+    // since they're the noisiest case for "tooltip blocks the table
+    // results below."
+    if ((el.value ?? "").length > 0) return true;
+    if (el.type === "search") return true;
+    return false;
+  };
+  const requestShow = (el) => {
     const text = el.dataset.help;
     if (!text) return;
-    // Don't show on a field the operator is actively interacting with —
-    // the tooltip would just sit on top of their typed text. Hover
-    // exists for discovery; once they've focused a field, get out of
-    // their way until they take focus elsewhere.
-    if (document.activeElement === el) return;
-    activeEl = el;
-    tip.textContent = text;
-    tip.hidden = false;
-    place();
+    if (_shouldSkip(el)) return;
+    cancelPending();
+    pendingEl = el;
+    showTimer = setTimeout(() => {
+      showTimer = null;
+      if (pendingEl !== el) return;
+      if (_shouldSkip(el)) { pendingEl = null; return; }
+      activeEl = el;
+      pendingEl = null;
+      tip.textContent = text;
+      tip.hidden = false;
+      place();
+    }, HOVER_DELAY_MS);
   };
   const hide = () => {
+    cancelPending();
     activeEl = null;
     tip.hidden = true;
   };
@@ -5769,12 +5800,13 @@ function _initFieldTooltips() {
   // still get tooltips without re-binding.
   document.addEventListener("mouseover", (e) => {
     const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
-    if (el && el.dataset.help) show(el);
+    if (el && el.dataset.help) requestShow(el);
   });
   document.addEventListener("mouseout", (e) => {
     const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
     if (!el) return;
     if (el.contains(e.relatedTarget)) return;
+    if (pendingEl === el) cancelPending();
     if (activeEl === el) hide();
   });
   // Focus on a field dismisses any hover tooltip — typing should never
@@ -5782,7 +5814,14 @@ function _initFieldTooltips() {
   // re-show on focusin: the user is now using the field, not exploring.
   document.addEventListener("focusin", (e) => {
     const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
-    if (el && activeEl === el) hide();
+    if (el && (activeEl === el || pendingEl === el)) hide();
+  });
+  // Once the operator starts typing, even by paste, drop the popup
+  // immediately. Catches the edge where they typed before the hover
+  // delay elapsed.
+  document.addEventListener("input", (e) => {
+    const el = e.target.closest?.(_TIP_INPUT_SELECTOR);
+    if (el && (activeEl === el || pendingEl === el)) hide();
   });
   // Keep position correct when the page scrolls / resizes while
   // a tooltip is visible.
