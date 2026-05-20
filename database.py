@@ -2104,6 +2104,36 @@ async def count_alert_events_for_rule_device(
             return int(row[0]) if row else 0
 
 
+async def bssids_for_ssid_at_location(
+    location_id: int, ssid: str,
+) -> set[str]:
+    """Return the lowercased BSSIDs at this location whose AP advertises
+    `ssid`. Used by the wifi_association alert rule so a client that's
+    observed exchanging frames with one of those BSSIDs (via its
+    `associated_bssids`) fires the rule even when it never sends a
+    directed probe-req for the SSID. Empty when the SSID has no
+    captured APs at the location or when ssid is blank."""
+    if not ssid or location_id is None:
+        return set()
+    from services.wifi_scanner import normalize_ssid
+    out: set[str] = set()
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT device_id, details_json FROM devices "
+            "WHERE kind='wifi' AND location_id=?",
+            (location_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+    for did, raw in rows:
+        try:
+            det = json.loads(raw or "{}")
+        except (TypeError, ValueError):
+            continue
+        if normalize_ssid(det.get("ssid")) == ssid:
+            out.add((did or "").lower())
+    return out
+
+
 async def stay_start_at_location(
     kind: str, device_id: str, location_id: int, max_gap_seconds: float,
 ) -> str | None:

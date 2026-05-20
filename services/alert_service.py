@@ -460,15 +460,19 @@ class AlertService:
                         pass
                 continue
             elif mt == "wifi_association":
-                # "A wifi device probed for an access point" — fires only
-                # on wifi_client sightings whose *current* probe (the SSID
-                # captured this scan, stashed in details._last_ssid by
-                # _on_probe) matches the rule's target SSID, optionally
-                # narrowed to a specific client MAC / OUI prefix.
-                #
-                # match_value: 'client@ssid'. Either side may be blank to
-                # mean "any". The @ delimiter is mandatory so the form
-                # round-trips cleanly even when one side is empty.
+                # "A wifi client touched an access point." Fires on
+                # either of two evidence flavors:
+                #   probed — this scan captured a directed probe-req for
+                #            the target SSID (details._last_ssid).
+                #   linked — the client's `associated_bssids` already
+                #            contains a BSSID we've captured for the
+                #            target SSID at the current location, meaning
+                #            we observed real frame exchange between the
+                #            client and that AP.
+                # Either is enough to fire. match_value is 'client@ssid';
+                # either side may be blank to mean "any". The @ delimiter
+                # is mandatory so the form round-trips cleanly even when
+                # one side is empty.
                 if device_kind != "wifi_client":
                     continue
                 parsed = _parse_wifi_association_value(rule.get("match_value") or "")
@@ -481,19 +485,37 @@ class AlertService:
                 ):
                     continue
                 last_ssid = (details.get("_last_ssid") or "")
-                if target_ssid and last_ssid != target_ssid:
-                    continue
-                if not target_ssid and not last_ssid:
-                    # 'any' on both sides without a fresh SSID is the
-                    # equivalent of every wifi_client tick — refuse to
-                    # fire on noise.
+                evidence: str | None = None
+                if target_ssid:
+                    if last_ssid == target_ssid:
+                        evidence = "probed"
+                    elif location_id is not None:
+                        client_assoc = {
+                            (b or "").lower()
+                            for b in (details.get("associated_bssids") or [])
+                            if isinstance(b, str)
+                        }
+                        if client_assoc:
+                            ap_bssids = await db.bssids_for_ssid_at_location(
+                                location_id, target_ssid,
+                            )
+                            if ap_bssids & client_assoc:
+                                evidence = "linked"
+                else:
+                    # 'any SSID' mode — only fire on a fresh directed
+                    # probe. The "any link to any AP" reading would
+                    # match every wifi_client tick, which is noise.
+                    if last_ssid:
+                        evidence = "probed"
+                if evidence is None:
                     continue
                 details = {
                     **details,
                     "_wifi_assoc_client": device_id_l,
-                    "_wifi_assoc_ssid": last_ssid,
+                    "_wifi_assoc_ssid": target_ssid or last_ssid,
                     "_wifi_assoc_target_client": target_client,
                     "_wifi_assoc_target_ssid": target_ssid,
+                    "_wifi_assoc_evidence": evidence,
                 }
             elif mt == "cross_kind_co_travel":
                 # match_value: "M/H" — a device of the *other* kind shares

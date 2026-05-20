@@ -538,23 +538,25 @@ class ScanOrchestrator:
                 location_id=loc_id, kind="wifi_client", device_id=mac,
                 rssi=rssi, details=details,
             )
-            # Skip the per-frame observation row for data frames —
-            # they're high-volume and every dispatch carries the same
-            # 'X is associated with Y' conclusion as the prior one.
-            # The device row's last_seen / best_rssi still get the
-            # update via upsert_device above, which is what we
-            # actually want.
-            if frame_type != "data":
-                await db.insert_observation(
-                    location_id=loc_id, kind="wifi_client", device_id=mac,
-                    rssi=rssi, lat=fix.lat, lon=fix.lon,
-                    raw={
-                        **details,
-                        "ssid": new_ssid, "channel": channel,
-                        "frame_type": frame_type,
-                        "bssid": new_bssid or None,
-                    },
-                )
+            # Insert an observation for every dispatched frame — including
+            # data frames. The probe scanner already caps data dispatch
+            # at one per (client, BSSID) per ~60s via _allow_data_dispatch,
+            # so volume is bounded. The observation row is what
+            # stay_start_at_location walks to compute sustained_presence,
+            # so without this an "always-linked but rarely-probing" client
+            # (modern phones spend most of their time in associated /
+            # data-frame state, not probe-req state) would never trigger
+            # a presence alert here.
+            await db.insert_observation(
+                location_id=loc_id, kind="wifi_client", device_id=mac,
+                rssi=rssi, lat=fix.lat, lon=fix.lon,
+                raw={
+                    **details,
+                    "ssid": new_ssid, "channel": channel,
+                    "frame_type": frame_type,
+                    "bssid": new_bssid or None,
+                },
+            )
         else:
             is_new = False
         # `_last_ssid` is the SSID captured in *this* probe (not the

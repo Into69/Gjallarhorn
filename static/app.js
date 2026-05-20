@@ -3551,7 +3551,7 @@ const MATCH_TYPE_PLACEHOLDERS = {
   arrival_after_gap: "30 — fire when this device shows up after ≥30 min away (0 = every sighting)",
   absence_gap: "30 — fire when this device hasn't been seen at the location for ≥30 min",
   sustained_presence: "10 (or 10/5) — flip-flop: 'present' after ≥10 min continuous, 'absent' after >5 min silent. Add @aa:bb,cc:dd to bind multiple ids to one conceptual device (e.g. a phone's wifi+ble MACs share one state). For wifi_client (probe) devices, widen the gap — phones can idle silent for 10–30 min between probe bursts, e.g. 1/15 or 1/30.",
-  wifi_association: "aa:bb:cc@MyNetwork — fires when this client (MAC or OUI prefix) probes for this SSID. Leave either side blank for 'any'.",
+  wifi_association: "aa:bb:cc@MyNetwork — fires when this client (MAC or OUI prefix) either probes for OR links to (observed 802.11 frame exchange with one of the SSID's BSSIDs at the current location) this SSID. Leave either side blank for 'any'.",
 };
 const MATCH_TYPE_DEFAULTS = {
   rssi_above: "-60",
