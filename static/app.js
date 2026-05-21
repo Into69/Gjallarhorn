@@ -1099,6 +1099,26 @@ function renderDeviceRow(d) {
   return tr;
 }
 
+// Reset the Devices tab to its default view — active location, no
+// filters. Triggered by the 🏠 button. Honors exactly the fields the
+// user called out: Location → active, Kind → all, Last seen → any,
+// Min RSSI → any, search cleared. The post-fetch switches (hide-WL,
+// trackers-only, linked-only) and the BSSID-group toggle stay where
+// the operator left them so a saved view-shaping preference isn't
+// silently overwritten by a quick 'go home' click.
+async function devicesGoHome() {
+  const search = $("#dev-search"); if (search) search.value = "";
+  const kind = $("#dev-kind"); if (kind) kind.value = "";
+  const since = $("#dev-since"); if (since) since.value = "";
+  const minRssi = $("#dev-min-rssi"); if (minRssi) minRssi.value = "";
+  try {
+    const { active_id } = await api("/api/locations");
+    const sel = $("#dev-location");
+    if (sel && active_id != null) sel.value = String(active_id);
+  } catch { /* keep current selection if the API call fails */ }
+  refreshDevices();
+}
+
 // Pivot the Devices tab into 'All locations' mode with the search box
 // pre-filled to this MAC. Clears the time-window / RSSI / hide-WL
 // filters so we don't accidentally hide the rows the operator was
@@ -1174,6 +1194,7 @@ function groupWifiByApPrefix(devices) {
 }
 
 $("#dev-refresh").addEventListener("click", refreshDevices);
+$("#dev-home")?.addEventListener("click", () => devicesGoHome());
 $("#dev-show-map")?.addEventListener("click", () => showDevicesOnMap());
 $("#dev-location").addEventListener("change", refreshDevices);
 $("#dev-kind").addEventListener("change", refreshDevices);

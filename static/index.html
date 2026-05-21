@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260521d" />
+  <link rel="stylesheet" href="/static/style.css?v=20260521e" />
 </head>
 <body>
   <header>
@@ -476,6 +476,7 @@
 
     <section id="tab-devices" class="tab">
       <div class="toolbar">
+        <button id="dev-home" class="icon-btn" title="Reset to defaults — Location → active, Kind → all, Last seen → any time, Min RSSI → any, search cleared." aria-label="Reset Devices view to defaults">🏠</button>
         <label>Location:
           <select id="dev-location"></select>
         </label>
@@ -1381,6 +1382,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260521d"></script>
+  <script src="/static/app.js?v=20260521e"></script>
 </body>
 </html>
