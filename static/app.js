@@ -88,6 +88,8 @@ function activateTab(id) {
   if (id === "wifi-aps") refreshWifiAps();
   if (id === "locations") refreshLocations();
   if (id === "alerts") refreshAlerts();
+  if (id === "presence") { refreshPresence(); startPresencePoll(); }
+  else { stopPresencePoll(); }
   if (id === "logs") refreshLogs();
   if (id === "about") refreshAbout();
   try { localStorage.setItem("activeTab", id); } catch {}
@@ -3404,6 +3406,108 @@ async function refreshAlerts() {
   await refreshAlertEvents();
   setBadge(0);
 }
+
+// ── presence tab ─────────────────────────────────────
+// One card per enabled sustained_presence rule. The state comes from
+// the rule's most recent alert event — the same row the alerts feed
+// shows — so the panel is effectively a re-projection of the
+// alerts feed filtered to presence transitions.
+let _presencePollTimer = null;
+function startPresencePoll() {
+  stopPresencePoll();
+  // 5 s feels live without hammering the DB. Presence transitions are
+  // minute-scale so faster polling buys nothing.
+  _presencePollTimer = setInterval(() => {
+    if (document.hidden) return;
+    refreshPresence().catch(() => {});
+  }, 5000);
+}
+function stopPresencePoll() {
+  if (_presencePollTimer) {
+    clearInterval(_presencePollTimer);
+    _presencePollTimer = null;
+  }
+}
+
+function _presenceLocationLabel(entry, fallback) {
+  if (entry.rule_location_id != null) {
+    return entry.rule_location_label
+      ? `${escapeHtml(entry.rule_location_label)} <span class="muted small">(#${entry.rule_location_id})</span>`
+      : `#${entry.rule_location_id}`;
+  }
+  // 'any' rule scope — surface the location of the most recent fire
+  // so the operator still knows where the device was last seen.
+  if (entry.last_location_id != null) {
+    const label = entry.last_location_label
+      ? `${escapeHtml(entry.last_location_label)} <span class="muted small">(#${entry.last_location_id})</span>`
+      : `#${entry.last_location_id}`;
+    return `<span class="muted small">any · last seen at</span> ${label}`;
+  }
+  return fallback || `<span class="muted">any location · no sightings yet</span>`;
+}
+
+async function refreshPresence() {
+  const list = $("#presence-list");
+  const summary = $("#presence-summary");
+  if (!list) return;
+  try {
+    const r = await api("/api/presence");
+    const entries = r.presence || [];
+    if (summary) {
+      const present = entries.filter(e => e.state === "present").length;
+      const absent = entries.filter(e => e.state === "absent").length;
+      const unknown = entries.length - present - absent;
+      summary.textContent = entries.length
+        ? `${present} present · ${absent} absent${unknown ? ` · ${unknown} unknown` : ""}`
+        : "";
+    }
+    if (!entries.length) {
+      list.innerHTML = `<div class="muted">
+        No sustained_presence rules yet. Create one on the Alerts tab
+        (Match type → "presence ⇄ absence flip-flop") and it will
+        appear here with its current state.
+      </div>`;
+      return;
+    }
+    list.innerHTML = entries.map(e => {
+      const stateClass = e.state === "present" ? "present"
+                       : e.state === "absent" ? "absent" : "unknown";
+      const stateLabel = e.state === "present" ? "Present"
+                       : e.state === "absent" ? "Absent" : "Unknown";
+      const stateDot = `<span class="presence-dot presence-dot-${stateClass}" aria-hidden="true"></span>`;
+      const where = _presenceLocationLabel(e);
+      const since = e.last_at
+        ? `<div class="presence-meta"><span class="muted small">since</span> ${escapeHtml(formatTime(e.last_at))}</div>`
+        : "";
+      const device = e.last_device_id
+        ? `<div class="presence-meta"><span class="muted small">via</span> <span class="mono">${escapeHtml(e.last_device_id)}</span></div>`
+        : "";
+      const spec = e.match_value
+        ? `<div class="presence-meta"><span class="muted small">spec</span> <span class="mono">${escapeHtml(e.match_value)}</span></div>`
+        : "";
+      return `
+        <div class="presence-card presence-${stateClass}">
+          <div class="presence-card-head">
+            ${stateDot}
+            <div class="presence-card-title">
+              <div class="presence-name">${escapeHtml(e.rule_name)}</div>
+              <div class="presence-where">${where}</div>
+            </div>
+            <div class="presence-state-pill presence-state-${stateClass}">${stateLabel}</div>
+          </div>
+          <div class="presence-card-meta">
+            ${since}
+            ${device}
+            ${spec}
+          </div>
+        </div>`;
+    }).join("");
+  } catch (err) {
+    list.innerHTML = `<div class="muted">Presence load failed: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+$("#presence-refresh")?.addEventListener("click", () => refreshPresence());
 
 // ── compound rule conditions ──────────────────────────
 // Only the simple value-based types are valid as additional conditions —

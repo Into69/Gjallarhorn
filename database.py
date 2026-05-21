@@ -1937,6 +1937,78 @@ async def purge_old_data(
     return counts
 
 
+async def presence_snapshot() -> list[dict]:
+    """For each sustained_presence rule, return the latest fire and the
+    location it came from. Powers the Presence tab — one row per rule
+    with a present/absent/unknown state derived from the most recent
+    alert_event (cleared=2 dismissals included because dismissing the
+    transition doesn't change the underlying state). Rules with
+    location_id NULL fall through to the latest event's location, which
+    is the closest we have to 'where the device is now' without
+    re-walking every observation.
+
+    Each entry:
+      rule_id, rule_name, match_value, rule_location_id (None = any),
+      rule_location_label, state ('present'|'absent'|'unknown'),
+      last_location_id, last_location_label, last_at, last_device_id.
+    """
+    out: list[dict] = []
+    async with _connect() as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, name, match_value, location_id "
+            "FROM alert_rules "
+            "WHERE match_type='sustained_presence' AND enabled=1 "
+            "ORDER BY name COLLATE NOCASE"
+        ) as cur:
+            rules = [dict(r) for r in await cur.fetchall()]
+        async with db.execute(
+            "SELECT id, label FROM sensor_locations"
+        ) as cur:
+            loc_label = {int(r[0]): r[1] for r in await cur.fetchall()}
+        for r in rules:
+            rule_id = int(r["id"])
+            # Newest event for this rule, regardless of cleared state —
+            # dismissing the transition row doesn't change the device's
+            # current presence side.
+            async with db.execute(
+                "SELECT triggered_at, location_id, device_id, details_json "
+                "FROM alert_events WHERE rule_id=? "
+                "ORDER BY id DESC LIMIT 1",
+                (rule_id,),
+            ) as cur:
+                ev = await cur.fetchone()
+            state = "unknown"
+            last_loc_id = None
+            last_at = None
+            last_device = None
+            if ev:
+                try:
+                    det = json.loads(ev["details_json"] or "{}")
+                except (TypeError, ValueError):
+                    det = {}
+                s = det.get("_presence_state")
+                if s in ("present", "absent"):
+                    state = s
+                last_loc_id = ev["location_id"]
+                last_at = ev["triggered_at"]
+                last_device = ev["device_id"]
+            rule_loc_id = r.get("location_id")
+            out.append({
+                "rule_id": rule_id,
+                "rule_name": r["name"],
+                "match_value": r.get("match_value"),
+                "rule_location_id": rule_loc_id,
+                "rule_location_label": loc_label.get(rule_loc_id) if rule_loc_id else None,
+                "state": state,
+                "last_location_id": last_loc_id,
+                "last_location_label": loc_label.get(last_loc_id) if last_loc_id else None,
+                "last_at": last_at,
+                "last_device_id": last_device,
+            })
+    return out
+
+
 async def list_latched_pairs() -> list[tuple[int, str]]:
     """Every (rule_id, device_id_lower) pair that's actively suppressing
     future fires. The cleared column has two suppressing values:

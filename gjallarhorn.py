@@ -1439,6 +1439,16 @@ async def api_delete_rule(rule_id: int):
     return {"ok": True}
 
 
+@app.get("/api/presence")
+async def api_presence():
+    """Per-rule presence snapshot for the Presence tab. One entry per
+    enabled sustained_presence rule with its current present/absent
+    state derived from the most recent alert event, plus the rule's
+    configured location (or the latest-event location when the rule
+    is scoped to 'any')."""
+    return {"presence": await db.presence_snapshot()}
+
+
 @app.get("/api/alerts/events")
 async def api_list_events(limit: int = 100, since_id: Optional[int] = None):
     """List alert events for the live feed. Annotates each row with

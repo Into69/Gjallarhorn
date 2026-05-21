@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260520c" />
+  <link rel="stylesheet" href="/static/style.css?v=20260520d" />
 </head>
 <body>
   <header>
@@ -17,6 +17,7 @@
       <button class="tab-btn" data-tab="wifi-aps">WiFi AP</button>
       <button class="tab-btn" data-tab="locations">Locations</button>
       <button class="tab-btn" data-tab="alerts">Alerts <span id="alerts-badge" class="tab-badge" hidden>0</span></button>
+      <button class="tab-btn" data-tab="presence">Presence</button>
       <button class="tab-btn" data-tab="settings">Settings</button>
       <button class="tab-btn" data-tab="logs">Logs</button>
       <button class="tab-btn" data-tab="about">About</button>
@@ -771,6 +772,29 @@
       </div>
     </section>
 
+    <section id="tab-presence" class="tab">
+      <div class="presence-page">
+        <header class="presence-header">
+          <div>
+            <h3 class="section-h">Presence monitor</h3>
+            <p class="muted small">
+              One card per enabled sustained_presence rule. The state
+              comes from the most recent alert event for the rule — a
+              transition the alerts feed already raised. Auto-refreshes
+              every few seconds while this tab is open.
+            </p>
+          </div>
+          <div class="presence-controls">
+            <span id="presence-summary" class="muted small"></span>
+            <button type="button" id="presence-refresh" class="icon-btn" title="Refresh now" aria-label="Refresh">⟳</button>
+          </div>
+        </header>
+        <div id="presence-list" class="presence-list">
+          <div class="muted">Loading…</div>
+        </div>
+      </div>
+    </section>
+
     <section id="tab-settings" class="tab">
       <div class="settings-search-bar">
         <input type="search" id="settings-search" placeholder="Search settings…" autocomplete="off"
@@ -1354,6 +1378,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260520c"></script>
+  <script src="/static/app.js?v=20260520d"></script>
 </body>
 </html>

@@ -2476,6 +2476,92 @@ tr.sensor-device { opacity: 0.85; }
   font-weight: 600;
 }
 
+/* ── Presence tab ─────────────────────────────────────────
+   Card grid mirroring the alerts tab's visual vocabulary.
+   Each card carries one sustained_presence rule's current
+   present/absent state with its location context. */
+.presence-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.presence-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; flex-wrap: wrap;
+}
+.presence-header .section-h { margin: 0 0 4px; }
+.presence-controls {
+  display: flex; align-items: center; gap: 10px;
+}
+.presence-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+.presence-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 8px;
+  transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+}
+.presence-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+.presence-card.presence-present { border-left-color: #6bdc8a; }
+.presence-card.presence-absent  { border-left-color: var(--muted); }
+.presence-card.presence-unknown { border-left-color: #f6b042; }
+
+.presence-card-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+.presence-dot {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+}
+.presence-dot-present { background: #6bdc8a; box-shadow: 0 0 0 3px rgba(107, 220, 138, 0.18); }
+.presence-dot-absent  { background: #8a8e96; box-shadow: 0 0 0 3px rgba(138, 142, 150, 0.18); }
+.presence-dot-unknown { background: #f6b042; box-shadow: 0 0 0 3px rgba(246, 176, 66, 0.18); }
+
+.presence-card-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.presence-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.presence-where { font-size: 12px; color: var(--fg); }
+.presence-state-pill {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+.presence-state-present { color: #6bdc8a; border-color: #2f5a3a; background: rgba(107, 220, 138, 0.10); }
+.presence-state-absent  { color: var(--muted); }
+.presence-state-unknown { color: #f6b042; border-color: #5a4424; background: rgba(246, 176, 66, 0.10); }
+
+.presence-card-meta {
+  display: flex; flex-direction: column; gap: 3px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.presence-meta { font-size: 12px; color: var(--fg); }
+.presence-meta .mono { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; }
+
 /* ── Logs tab ────────────────────────────────────────── */
 .log-list {
   background: var(--panel);
