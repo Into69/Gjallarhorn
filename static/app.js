@@ -2917,6 +2917,9 @@ async function refreshAlertRules() {
       if (!confirm("Delete this rule and its alert history?")) return;
       await api(`/api/alerts/rules/${b.dataset.id}`, { method: "DELETE" });
       refreshAlertRules();
+      if ($("#tab-presence")?.classList.contains("active")) {
+        refreshPresence().catch(() => {});
+      }
     })
   );
   // Populate the location dropdown in the form. Two special options:
@@ -3388,6 +3391,14 @@ async function pollAlertsBadge() {
         _alertPoppedPairs.set(key, now);
         showAlertOnMap(e);
       }
+      // Push a presence refresh on any new sustained_presence
+      // transition so the Presence tab reflects flip-flops as they
+      // happen, not on the next safety-net poll. Guarded on the
+      // tab being active so background tabs don't churn.
+      if ($("#tab-presence")?.classList.contains("active") &&
+          fresh.some(e => e.rule_match_type === "sustained_presence")) {
+        refreshPresence().catch(() => {});
+      }
     }
     alertsLastPoppedId = newest;
 
@@ -3415,12 +3426,15 @@ async function refreshAlerts() {
 let _presencePollTimer = null;
 function startPresencePoll() {
   stopPresencePoll();
-  // 5 s feels live without hammering the DB. Presence transitions are
-  // minute-scale so faster polling buys nothing.
+  // Slow safety-net poll only — the real-time updates come from the
+  // global alert-badge poll calling refreshPresence() on every new
+  // sustained_presence event, and from rule mutations pushing one
+  // directly. 30 s catches non-event drift (rule rename, location
+  // label edited) without much churn.
   _presencePollTimer = setInterval(() => {
     if (document.hidden) return;
     refreshPresence().catch(() => {});
-  }, 5000);
+  }, 30000);
 }
 function stopPresencePoll() {
   if (_presencePollTimer) {
@@ -3660,6 +3674,12 @@ $("#rule-form").addEventListener("submit", async (e) => {
     exitEditRuleMode();
     setTimeout(() => $("#rule-form-status").textContent = "", 1200);
     await refreshAlertRules();
+    // Push a presence refresh if the user is currently on that tab —
+    // a rule rename / location-scope change / new sustained_presence
+    // rule should reflect immediately, not wait for the safety poll.
+    if ($("#tab-presence")?.classList.contains("active")) {
+      refreshPresence().catch(() => {});
+    }
   } catch (err) {
     $("#rule-form-status").textContent = "error: " + err.message;
   }
@@ -3670,6 +3690,12 @@ $("#alerts-clear").addEventListener("click", async () => {
   await api("/api/alerts/events", { method: "DELETE" });
   await refreshAlertEvents();
   setBadge(0);
+  // Wiping the feed wipes the rows the Presence snapshot reads its
+  // state from — every rule will report 'unknown' until the next
+  // transition fires. Push a refresh so the tab reflects that.
+  if ($("#tab-presence")?.classList.contains("active")) {
+    refreshPresence().catch(() => {});
+  }
 });
 
 const MATCH_TYPE_PLACEHOLDERS = {
