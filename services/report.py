@@ -294,36 +294,50 @@ def _summary_blurb(locations: list[dict], common: list[dict]) -> str:
     )
 
 
+# How many entries to surface per "top N" finding category in the
+# summary. Three feels like the sweet spot — the single-winner version
+# was too narrow ("strongest signal" hiding the runners-up), but a
+# top-five would push the per-finding mini-maps into report bloat.
+_FINDING_TOP_N = 3
+
+
+def _loc_active_score(l: dict) -> int:
+    """Combined unique-device count used to rank 'most active' locations."""
+    return ((l.get("wifi_count") or 0)
+            + (l.get("bt_count") or 0)
+            + (l.get("wifi_client_count") or 0))
+
+
 def _most_active_location(locations: list[dict]) -> dict | None:
-    """Pick the location with the highest combined unique-device count
-    (wifi + bluetooth + wifi_client). Returns None when no locations have
-    any devices yet."""
+    """Single-winner helper kept for callers that still want the
+    headline location. Returns None when no location has any devices."""
     if not locations:
         return None
-    ranked = sorted(
-        locations,
-        key=lambda l: (
-            (l.get("wifi_count") or 0)
-            + (l.get("bt_count") or 0)
-            + (l.get("wifi_client_count") or 0)
-        ),
-        reverse=True,
-    )
-    top = ranked[0]
-    if ((top.get("wifi_count") or 0)
-            + (top.get("bt_count") or 0)
-            + (top.get("wifi_client_count") or 0)) == 0:
+    ranked = sorted(locations, key=_loc_active_score, reverse=True)
+    if not ranked or _loc_active_score(ranked[0]) == 0:
         return None
-    return top
+    return ranked[0]
+
+
+def _ordinal_prefix(rank: int) -> str:
+    """Render 'rank' as an inline-html lead-in for a finding bullet."""
+    if rank == 1:
+        return ""
+    return f"<font color='#7a86a3'>#{rank}</font> "
 
 
 def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dict]],
                       common: list[dict]) -> list[dict]:
-    """Generate up to ~5 noteworthy-pattern findings. Each entry is a
+    """Generate the noteworthy-pattern findings list. Each entry is a
     dict {"text": <inline-html bullet>, "map_points": [(lat,lon,hex)]
     | None, "map_zoom": int | None} so the renderer can drop a
     contextual mini-map immediately below the relevant sentence
     (rather than appending it once at the end of the section).
+
+    For "most active location", "strongest signal", and "most-traveled
+    device" we surface the top _FINDING_TOP_N entries — the single-
+    winner version hid useful runners-up.
+
     Cheap derivations only — no extra DB calls."""
     out: list[dict] = []
     if not locations:
@@ -333,88 +347,103 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
     # the mini-maps below.
     loc_by_id: dict[int, dict] = {l["id"]: l for l in locations if l.get("id") is not None}
 
-    # Most active location (highest combined unique-device count)
-    top_loc = _most_active_location(locations)
-    if top_loc is not None:
-        top_loc_total = (
-            (top_loc.get("wifi_count") or 0)
-            + (top_loc.get("bt_count") or 0)
-            + (top_loc.get("wifi_client_count") or 0)
-        )
-        label = top_loc.get("label") or f"Loc {top_loc['id']}"
+    # ── Most active locations (top N by combined unique-device count) ──
+    ranked_locs = [l for l in sorted(locations, key=_loc_active_score, reverse=True)
+                   if _loc_active_score(l) > 0]
+    for rank, loc in enumerate(ranked_locs[:_FINDING_TOP_N], start=1):
+        total = _loc_active_score(loc)
+        label = loc.get("label") or f"Loc {loc['id']}"
         map_points = None
-        if top_loc.get("lat") is not None and top_loc.get("lon") is not None:
-            map_points = [(top_loc["lat"], top_loc["lon"], "#ff6b6b")]
+        if loc.get("lat") is not None and loc.get("lon") is not None:
+            map_points = [(loc["lat"], loc["lon"], "#ff6b6b")]
         out.append({
-            "text": f"<b>Most active location:</b> {label} — {top_loc_total} unique devices.",
+            "text": (
+                f"{_ordinal_prefix(rank)}<b>Most active location:</b> "
+                f"{label} — {total} unique devices."
+            ),
             "map_points": map_points,
             "map_zoom": 16,
         })
 
-    # Strongest signal across the whole dataset — capture which
-    # location it was seen at so we can attribute + map it.
-    strongest = None
-    strongest_loc_id: int | None = None
+    # ── Strongest signal (top N distinct devices by best_rssi) ──
+    # Flatten every device across every location, tagging each with
+    # the location it came from, then rank by best_rssi.
+    flat: list[tuple[dict, int]] = []
     for loc_id, devs in per_loc_devices.items():
         for d in devs:
             r = d.get("best_rssi")
             if r is None:
                 continue
-            if strongest is None or r > strongest["best_rssi"]:
-                strongest = d
-                strongest_loc_id = loc_id
-    if strongest is not None:
-        det = strongest.get("details") or {}
-        name = det.get("ssid") or det.get("name") or strongest.get("device_id")
-        loc = loc_by_id.get(strongest_loc_id) if strongest_loc_id is not None else None
+            flat.append((d, loc_id))
+    flat.sort(key=lambda pair: pair[0].get("best_rssi") or -999, reverse=True)
+    # Dedupe by (kind, device_id) so a single device that's the strongest
+    # at three locations doesn't take all three slots.
+    seen_keys: set[tuple] = set()
+    rank = 0
+    for d, loc_id in flat:
+        key = (d.get("kind"), (d.get("device_id") or "").lower())
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        rank += 1
+        det = d.get("details") or {}
+        name = det.get("ssid") or det.get("name") or d.get("device_id")
+        loc = loc_by_id.get(loc_id)
         loc_label = (loc.get("label") if loc else None) or (
-            f"Loc {strongest_loc_id}" if strongest_loc_id is not None else "(unknown)"
+            f"Loc {loc_id}" if loc_id is not None else "(unknown)"
         )
         map_points = None
         if loc is not None and loc.get("lat") is not None and loc.get("lon") is not None:
             map_points = [(loc["lat"], loc["lon"], "#ff6b6b")]
         out.append({
             "text": (
-                f"<b>Strongest signal:</b> {strongest.get('best_rssi')} dBm — "
-                f"<font face='Courier'>{strongest.get('device_id')}</font>"
-                f"{f' ({name})' if name and name != strongest.get('device_id') else ''}"
+                f"{_ordinal_prefix(rank)}<b>Strongest signal:</b> "
+                f"{d.get('best_rssi')} dBm — "
+                f"<font face='Courier'>{d.get('device_id')}</font>"
+                f"{f' ({name})' if name and name != d.get('device_id') else ''}"
                 f" at <i>{loc_label}</i>."
             ),
             "map_points": map_points,
             "map_zoom": 16,
         })
+        if rank >= _FINDING_TOP_N:
+            break
 
-    # Top recurring device — render every location the device was
-    # observed at on a single overview map so the spread is visible.
-    if common:
-        head = common[0]
-        det = head.get("details") or {}
+    # ── Most-traveled devices (top N from the common list) ──
+    # `common` is already ranked by n_locations DESC then total_seen DESC,
+    # so just take the head N. Each device gets its own multi-marker
+    # map showing every location it was observed at — auto-zoom so the
+    # full spread fits regardless of city width.
+    trav_rank = 0
+    for dev in common:
+        n = dev.get("n_locations") or 0
+        if n < 2:
+            break  # common stays ordered, so anything below 2 is the tail
+        trav_rank += 1
+        det = dev.get("details") or {}
         name = det.get("ssid") or det.get("name") or ""
-        n = head.get("n_locations") or 0
-        if n >= 2:
-            map_points: list[tuple[float, float, str]] = []
-            raw_loc_ids = head.get("location_ids") or ""
-            for tok in str(raw_loc_ids).split(","):
-                tok = tok.strip()
-                if not tok.isdigit():
-                    continue
-                loc = loc_by_id.get(int(tok))
-                if loc and loc.get("lat") is not None and loc.get("lon") is not None:
-                    map_points.append((loc["lat"], loc["lon"], "#ff6b6b"))
-            out.append({
-                "text": (
-                    f"<b>Most-traveled device:</b> "
-                    f"<font face='Courier'>{head.get('device_id')}</font>"
-                    f"{f' ({name})' if name else ''} — seen at {n} locations."
-                ),
-                # auto-zoom (None) so all the markers fit, even when
-                # they span a city — the strongest/most-active maps
-                # are tight (zoom=16), this one wants the wider view.
-                "map_points": map_points or None,
-                "map_zoom": None,
-            })
+        map_points: list[tuple[float, float, str]] = []
+        raw_loc_ids = dev.get("location_ids") or ""
+        for tok in str(raw_loc_ids).split(","):
+            tok = tok.strip()
+            if not tok.isdigit():
+                continue
+            loc = loc_by_id.get(int(tok))
+            if loc and loc.get("lat") is not None and loc.get("lon") is not None:
+                map_points.append((loc["lat"], loc["lon"], "#ff6b6b"))
+        out.append({
+            "text": (
+                f"{_ordinal_prefix(trav_rank)}<b>Most-traveled device:</b> "
+                f"<font face='Courier'>{dev.get('device_id')}</font>"
+                f"{f' ({name})' if name else ''} — seen at {n} locations."
+            ),
+            "map_points": map_points or None,
+            "map_zoom": None,
+        })
+        if trav_rank >= _FINDING_TOP_N:
+            break
 
-    # Per-kind totals as a one-liner
+    # ── Per-kind totals one-liner ──
     total_wifi = sum(int(l.get("wifi_count") or 0) for l in locations)
     total_bt = sum(int(l.get("bt_count") or 0) for l in locations)
     total_bt_classic = sum(int(l.get("bt_classic_count") or 0) for l in locations)
