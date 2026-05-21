@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260521e" />
+  <link rel="stylesheet" href="/static/style.css?v=20260521f" />
 </head>
 <body>
   <header>
@@ -535,6 +535,7 @@
         </label>
         <button id="dev-refresh">Refresh</button>
         <button id="dev-show-map" class="icon-btn" disabled title="Show every location the listed devices appear at on a map (only available in 'All locations' mode)" aria-label="Show locations on map">🌐</button>
+        <button id="dev-sort-reset" class="icon-btn" hidden title="Clear the active column sort and go back to the default 'best RSSI first' ordering." aria-label="Reset sort">⇅</button>
         <span id="dev-count" class="muted"></span>
         <span class="toolbar-spacer"></span>
         <button id="dev-manage-whitelist" class="secondary" title="Open the whitelist editor in Settings.">Manage whitelist</button>
@@ -545,11 +546,16 @@
       <table id="dev-table">
         <thead>
           <tr>
-            <th>Kind</th>
-            <th class="loc-col" title="Sensor location this row was captured at — visible only when 'All locations' is selected.">Loc</th>
-            <th>ID</th><th>Name/SSID</th><th>Vendor</th>
-            <th>Best RSSI</th><th>Last RSSI</th><th>Seen</th>
-            <th>First</th><th>Last</th>
+            <th class="sortable" data-col="kind">Kind</th>
+            <th class="loc-col sortable" data-col="location_id" title="Sensor location this row was captured at — visible only when 'All locations' is selected.">Loc</th>
+            <th class="sortable" data-col="device_id">ID</th>
+            <th class="sortable" data-col="label">Name/SSID</th>
+            <th class="sortable" data-col="vendor">Vendor</th>
+            <th class="sortable" data-col="best_rssi">Best RSSI</th>
+            <th class="sortable" data-col="last_rssi">Last RSSI</th>
+            <th class="sortable" data-col="seen_count">Seen</th>
+            <th class="sortable" data-col="first_seen">First</th>
+            <th class="sortable" data-col="last_seen">Last</th>
             <th title="Per-device timeline + RSSI history; whitelist toggle">Actions</th>
             <th>Details</th>
           </tr>
@@ -1382,6 +1388,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260521e"></script>
+  <script src="/static/app.js?v=20260521f"></script>
 </body>
 </html>

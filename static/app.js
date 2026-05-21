@@ -635,6 +635,86 @@ let _lastRenderedDevices = [];
 // every row's location_id is its real bubble (the 'All' mode).
 let _lastRenderedMode = null;
 
+// Active client-side sort for the devices table. col=null means
+// 'default' — use whatever order the server returned (which is
+// best_rssi DESC). dir is 'asc' or 'desc'. Persists across refreshes
+// within the session so the operator's pick isn't lost on a re-fetch,
+// but resets cleanly via the ⇅ button.
+let _devSort = { col: null, dir: null };
+
+// Map sort columns onto a per-row sortable value. Strings use
+// localeCompare, numbers and ISO timestamps fall through to the
+// natural comparator. 'label' computes the same Name/SSID derivation
+// the renderer uses so the column sorts by what the operator sees.
+function _devSortKey(d, col) {
+  switch (col) {
+    case "kind":         return (d.kind || "").toLowerCase();
+    case "location_id":  return d.location_id ?? -Infinity;
+    case "device_id":    return (d.device_id || "").toLowerCase();
+    case "label": {
+      const det = d.details || {};
+      if (d.kind === "wifi_client" && Array.isArray(det.ssids)) {
+        const named = det.ssids.filter(Boolean);
+        return (named[0] || "").toLowerCase();
+      }
+      if (d._merged_ssids && d._merged_ssids.length) {
+        return String(d._merged_ssids[0]).toLowerCase();
+      }
+      return (det.ssid || det.name || "").toLowerCase();
+    }
+    case "vendor":       return ((d.details || {}).vendor || "").toLowerCase();
+    case "best_rssi":    return d.best_rssi ?? -Infinity;
+    case "last_rssi":    return d.last_rssi ?? -Infinity;
+    case "seen_count":   return d.seen_count ?? 0;
+    case "first_seen":   return d.first_seen || "";
+    case "last_seen":    return d.last_seen || "";
+    default:             return 0;
+  }
+}
+
+function _devApplySort(rows) {
+  if (!_devSort.col) return rows;
+  const col = _devSort.col;
+  const sign = _devSort.dir === "desc" ? -1 : 1;
+  // Stable sort: pre-decorate with original index so equal-key rows
+  // keep their server-side ordering (which is itself best_rssi DESC).
+  const decorated = rows.map((r, i) => [r, i, _devSortKey(r, col)]);
+  decorated.sort((a, b) => {
+    const va = a[2], vb = b[2];
+    if (typeof va === "string" || typeof vb === "string") {
+      return sign * String(va).localeCompare(String(vb)) || (a[1] - b[1]);
+    }
+    if (va < vb) return -sign;
+    if (va > vb) return sign;
+    return a[1] - b[1];
+  });
+  return decorated.map(t => t[0]);
+}
+
+function _devUpdateSortIndicators() {
+  for (const th of $$("#dev-table thead th.sortable")) {
+    th.classList.toggle("sort-asc",
+      _devSort.col === th.dataset.col && _devSort.dir === "asc");
+    th.classList.toggle("sort-desc",
+      _devSort.col === th.dataset.col && _devSort.dir === "desc");
+  }
+  const resetBtn = $("#dev-sort-reset");
+  if (resetBtn) resetBtn.hidden = !_devSort.col;
+}
+
+function _devOnHeaderClick(col) {
+  if (_devSort.col === col) {
+    // Cycle: asc → desc → off (back to server default).
+    if (_devSort.dir === "asc")        _devSort = { col, dir: "desc" };
+    else if (_devSort.dir === "desc")  _devSort = { col: null, dir: null };
+    else                               _devSort = { col, dir: "asc" };
+  } else {
+    _devSort = { col, dir: "asc" };
+  }
+  _devUpdateSortIndicators();
+  refreshDevices();
+}
+
 // Per-location label map, kept in sync with loadLocationOptions so the
 // table's Location column (visible only in 'All' mode) can resolve a
 // row's location_id without re-querying the server.
@@ -926,6 +1006,10 @@ async function _refreshDevicesInner() {
     rows = rows.filter(d => (d.linked_count || 0) > 0);
   }
 
+  // Apply the active column sort (no-op when _devSort.col is null,
+  // i.e. the operator hasn't picked a column yet — keeps the server's
+  // best_rssi DESC default in that case).
+  rows = _devApplySort(rows);
   for (const d of rows) {
     tbody.appendChild(renderDeviceRow(d));
   }
@@ -1111,6 +1195,9 @@ async function devicesGoHome() {
   const kind = $("#dev-kind"); if (kind) kind.value = "";
   const since = $("#dev-since"); if (since) since.value = "";
   const minRssi = $("#dev-min-rssi"); if (minRssi) minRssi.value = "";
+  // Also drop any active column sort so 'home' is a true clean slate.
+  _devSort = { col: null, dir: null };
+  _devUpdateSortIndicators();
   try {
     const { active_id } = await api("/api/locations");
     const sel = $("#dev-location");
@@ -1196,6 +1283,18 @@ function groupWifiByApPrefix(devices) {
 $("#dev-refresh").addEventListener("click", refreshDevices);
 $("#dev-home")?.addEventListener("click", () => devicesGoHome());
 $("#dev-show-map")?.addEventListener("click", () => showDevicesOnMap());
+$("#dev-sort-reset")?.addEventListener("click", () => {
+  _devSort = { col: null, dir: null };
+  _devUpdateSortIndicators();
+  refreshDevices();
+});
+// Delegated click on the table header — every .sortable th cycles
+// asc → desc → off on its data-col when clicked.
+$("#dev-table thead")?.addEventListener("click", (ev) => {
+  const th = ev.target.closest("th.sortable");
+  if (!th || !th.dataset.col) return;
+  _devOnHeaderClick(th.dataset.col);
+});
 $("#dev-location").addEventListener("change", refreshDevices);
 $("#dev-kind").addEventListener("change", refreshDevices);
 $("#dev-group-bssid").addEventListener("change", refreshDevices);

@@ -2420,6 +2420,26 @@ select option:disabled { color: var(--muted); }
 #dev-table .loc-col { display: none; }
 #dev-table.show-loc-col .loc-col { display: table-cell; }
 
+/* Sortable column headers: hover affordance + ▲ / ▼ indicator on the
+   active sort column. ⇅ rendered on every sortable header (in a muted
+   color) so the operator can see at a glance which columns sort. */
+#dev-table thead th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+#dev-table thead th.sortable::after {
+  content: " ⇅";
+  color: var(--border);
+  font-size: 10px;
+  margin-left: 2px;
+}
+#dev-table thead th.sortable:hover {
+  color: var(--accent);
+}
+#dev-table thead th.sort-asc::after  { content: " ▲"; color: var(--accent); font-size: 10px; }
+#dev-table thead th.sort-desc::after { content: " ▼"; color: var(--accent); font-size: 10px; }
+
 /* Devices tab: visual cue for merged multi-BSSID rows. */
 #dev-table tr.merged-ap td:first-child::after {
   content: " ⇲";
