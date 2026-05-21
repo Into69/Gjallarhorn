@@ -1044,6 +1044,7 @@ function renderDeviceRow(d) {
     ? `<button type="button" class="icon-btn dev-wl active" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelisted — click to remove from whitelist" aria-label="Remove from whitelist">★</button>`
     : `<button type="button" class="icon-btn dev-wl" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelist this device (silences alerts and excludes from reports)" aria-label="Add to whitelist">☆</button>`;
   const timelineBtn = `<button type="button" class="icon-btn dev-timeline" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Per-device timeline (RSSI history, locations seen at)" aria-label="Show timeline">⏱</button>`;
+  const findBtn = `<button type="button" class="icon-btn dev-find" data-id="${escapeAttr(d.device_id)}" title="Find this device across every location (switches Location → 'All' and pastes the MAC into search)" aria-label="Find across all locations">🔍</button>`;
 
   // Build the JSON shown in the expandable details cell. Promote linked
   // aliases to a top-level field so they're easy to spot, and split into
@@ -1078,7 +1079,7 @@ function renderDeviceRow(d) {
     <td>${d.seen_count}</td>
     <td class="mono">${formatTime(d.first_seen)}</td>
     <td class="mono">${formatTime(d.last_seen)}</td>
-    <td class="row-actions">${timelineBtn}${wlBtn}</td>
+    <td class="row-actions">${timelineBtn}${findBtn}${wlBtn}</td>
     <td><details><summary>${summaryText}</summary><pre>${escapeHtml(JSON.stringify(detailsPayload, null, 2))}</pre></details></td>
   `;
   // Wire the whitelist button — done here so each row keeps its own
@@ -1091,7 +1092,31 @@ function renderDeviceRow(d) {
     ev.stopPropagation();
     showDeviceTimeline(d.kind, d.device_id);
   });
+  tr.querySelector(".dev-find").addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    findDeviceAcrossLocations(d.device_id);
+  });
   return tr;
+}
+
+// Pivot the Devices tab into 'All locations' mode with the search box
+// pre-filled to this MAC. Clears the time-window / RSSI / hide-WL
+// filters so we don't accidentally hide the rows the operator was
+// trying to find. Triggered by the per-row 🔍 button.
+function findDeviceAcrossLocations(deviceId) {
+  const locSel = $("#dev-location");
+  if (locSel) locSel.value = ALL_LOCATIONS_SENTINEL;
+  const search = $("#dev-search");
+  if (search) search.value = deviceId || "";
+  // The 'since' and 'min RSSI' filters were almost certainly set for
+  // the current location's context — wipe them so a click that says
+  // 'find this device everywhere' actually shows every sighting.
+  const since = $("#dev-since"); if (since) since.value = "";
+  const minRssi = $("#dev-min-rssi"); if (minRssi) minRssi.value = "";
+  const hideWl = $("#dev-hide-wl"); if (hideWl) hideWl.checked = false;
+  const trackers = $("#dev-trackers-only"); if (trackers) trackers.checked = false;
+  const linked = $("#dev-linked-only"); if (linked) linked.checked = false;
+  refreshDevices();
 }
 
 function groupWifiByApPrefix(devices) {
