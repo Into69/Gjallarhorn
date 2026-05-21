@@ -624,17 +624,32 @@ $("#resize-banner-cancel")?.addEventListener("click", () => exitResizeMode({ com
 
 // ---------- devices tab ----------
 const PRESERVED_SENTINEL = "__preserved__";
+const ALL_LOCATIONS_SENTINEL = "__all__";
+
+// Per-location label map, kept in sync with loadLocationOptions so the
+// table's Location column (visible only in 'All' mode) can resolve a
+// row's location_id without re-querying the server.
+const _locationLabelById = new Map();
 
 async function loadLocationOptions() {
   const { locations, active_id } = await api("/api/locations");
   const sel = $("#dev-location");
   const previous = sel.value;
   sel.innerHTML = "";
+  // "All locations" lives at the top so it's the natural first option —
+  // the Location column on each row tells the operator which bubble
+  // the device came from in that mode.
+  const allOpt = document.createElement("option");
+  allOpt.value = ALL_LOCATIONS_SENTINEL;
+  allOpt.textContent = "★ All locations";
+  sel.appendChild(allOpt);
+  _locationLabelById.clear();
   for (const loc of locations) {
     const o = document.createElement("option");
     o.value = loc.id;
     o.textContent = `${loc.label || `Loc ${loc.id}`}${loc.id === active_id ? " (active)" : ""}`;
     sel.appendChild(o);
+    _locationLabelById.set(loc.id, loc.label || `Loc ${loc.id}`);
   }
   // Pseudo-location for whitelisted devices archived from deleted locations.
   // Only shown when there's something in it, so it doesn't clutter the
@@ -652,7 +667,11 @@ async function loadLocationOptions() {
   // default to the active location (only really used on first load,
   // since this function gets re-called from refreshDevices on change).
   const ids = new Set(locations.map(l => String(l.id)));
-  if (previous && (ids.has(previous) || previous === PRESERVED_SENTINEL)) {
+  if (previous && (
+        ids.has(previous)
+        || previous === PRESERVED_SENTINEL
+        || previous === ALL_LOCATIONS_SENTINEL
+      )) {
     sel.value = previous;
   } else if (active_id != null) {
     sel.value = String(active_id);
@@ -702,15 +721,26 @@ async function _refreshDevicesInner() {
     kind = "bluetooth";
   }
   const q = kind ? `?kind=${kind}` : "";
-  let { devices } = id === PRESERVED_SENTINEL
-    ? await api(`/api/preserved-devices${q}`)
-    : await api(`/api/locations/${id}/devices${q}`);
+  let devices;
+  if (id === PRESERVED_SENTINEL) {
+    ({ devices } = await api(`/api/preserved-devices${q}`));
+  } else if (id === ALL_LOCATIONS_SENTINEL) {
+    ({ devices } = await api(`/api/devices${q}`));
+  } else {
+    ({ devices } = await api(`/api/locations/${id}/devices${q}`));
+  }
   if (bleAddrFilter) {
     devices = devices.filter(d => {
       const at = (d.details && d.details.address_type) || "";
       return at === bleAddrFilter;
     });
   }
+  // Surface the Location column only when the operator is looking
+  // across every bubble. In single-location mode the cell is still
+  // rendered but the column is collapsed by CSS, so the renderer
+  // doesn't need to branch.
+  const dt = $("#dev-table");
+  if (dt) dt.classList.toggle("show-loc-col", id === ALL_LOCATIONS_SENTINEL);
   const tbody = $("#dev-table tbody");
   tbody.innerHTML = "";
 
@@ -900,8 +930,16 @@ function renderDeviceRow(d) {
     ? "members + JSON"
     : (linkedCount > 0 ? `linked aliases + JSON` : "JSON");
 
+  // Always render the Location cell in markup; CSS hides the whole
+  // column unless the table is in 'All locations' mode, so this row
+  // renderer doesn't have to know which mode it's in.
+  const locLabel = d.location_id != null
+    ? (_locationLabelById.get(d.location_id) || `Loc ${d.location_id}`)
+    : "—";
+  const locCell = `<td class="loc-col mono" title="Location #${escapeAttr(String(d.location_id ?? "?"))}">${escapeHtml(locLabel)}</td>`;
   tr.innerHTML = `
     <td>${escapeHtml(formatKindLabel(d.kind, det))}</td>
+    ${locCell}
     <td>${idCell}</td>
     <td>${escapeHtml(nameOrSsid)}</td>
     <td>${escapeHtml(det.vendor || "")}</td>

@@ -2404,6 +2404,11 @@ select option:disabled { color: var(--muted); }
 .dev-wl.active { color: var(--accent); border-color: var(--accent); }
 #dev-table tr.whitelisted td { opacity: 0.55; }
 #dev-table tr.whitelisted .dev-wl { opacity: 1; }
+/* Location column — visible only when 'All locations' is selected.
+   The cell is always emitted by the row renderer so the toggle is
+   purely visual. */
+#dev-table .loc-col { display: none; }
+#dev-table.show-loc-col .loc-col { display: table-cell; }
 
 /* Devices tab: visual cue for merged multi-BSSID rows. */
 #dev-table tr.merged-ap td:first-child::after {

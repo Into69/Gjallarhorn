@@ -3407,8 +3407,11 @@ def _temporal_close(this_first, this_last, sib_first, sib_last,
     return (0 <= gap_after <= window_s) or (0 <= gap_before <= window_s)
 
 
-async def devices_at_location(location_id: int, kind: str | None = None) -> list[dict]:
+async def devices_at_location(location_id: int | None, kind: str | None = None) -> list[dict]:
     """Per-location device rows with BLE rotating-MAC linkage info.
+    Pass location_id=None to span every location (the Devices tab's
+    'All locations' filter) — rows still carry their own location_id
+    so the UI can show which bubble each came from.
 
     For BLE rows that share a signature with other devices, this attaches
     `linked_count` (total signature-matching siblings) and
@@ -3417,12 +3420,16 @@ async def devices_at_location(location_id: int, kind: str | None = None) -> list
     sibling is also added to `linked_recent_ids` and the link is treated
     as high-confidence — that's the "MAC X just rotated to MAC Y" signal.
     Wifi rows have signature NULL and stay unlinked."""
-    sql = "SELECT * FROM devices WHERE location_id=?"
-    args: tuple = (location_id,)
+    clauses: list[str] = []
+    args: list = []
+    if location_id is not None:
+        clauses.append("location_id=?")
+        args.append(location_id)
     if kind:
-        sql += " AND kind=?"
-        args = (location_id, kind)
-    sql += " ORDER BY best_rssi DESC"
+        clauses.append("kind=?")
+        args.append(kind)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = f"SELECT * FROM devices{where} ORDER BY best_rssi DESC"
     async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(sql, args) as cur:

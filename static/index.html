@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260520e" />
+  <link rel="stylesheet" href="/static/style.css?v=20260521a" />
 </head>
 <body>
   <header>
@@ -543,7 +543,9 @@
       <table id="dev-table">
         <thead>
           <tr>
-            <th>Kind</th><th>ID</th><th>Name/SSID</th><th>Vendor</th>
+            <th>Kind</th>
+            <th class="loc-col" title="Sensor location this row was captured at — visible only when 'All locations' is selected.">Loc</th>
+            <th>ID</th><th>Name/SSID</th><th>Vendor</th>
             <th>Best RSSI</th><th>Last RSSI</th><th>Seen</th>
             <th>First</th><th>Last</th>
             <th title="Per-device timeline + RSSI history; whitelist toggle">Actions</th>
@@ -1378,6 +1380,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260520e"></script>
+  <script src="/static/app.js?v=20260521a"></script>
 </body>
 </html>
