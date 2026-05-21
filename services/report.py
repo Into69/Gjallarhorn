@@ -422,13 +422,13 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
         trav_rank += 1
         det = dev.get("details") or {}
         name = det.get("ssid") or det.get("name") or ""
+        # list_common_devices pops the raw 'location_ids' CSV and
+        # exposes a 'locations' list[int] instead — read that. The
+        # earlier code used the popped key and silently produced
+        # zero map_points, leaving the per-device map off the page.
         map_points: list[tuple[float, float, str]] = []
-        raw_loc_ids = dev.get("location_ids") or ""
-        for tok in str(raw_loc_ids).split(","):
-            tok = tok.strip()
-            if not tok.isdigit():
-                continue
-            loc = loc_by_id.get(int(tok))
+        for lid in (dev.get("locations") or []):
+            loc = loc_by_id.get(int(lid)) if str(lid).isdigit() or isinstance(lid, int) else None
             if loc and loc.get("lat") is not None and loc.get("lon") is not None:
                 map_points.append((loc["lat"], loc["lon"], "#ff6b6b"))
         out.append({
