@@ -7,7 +7,41 @@ async function api(path, opts = {}) {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    // Pull the actual reason out of the response body — without this,
+    // every failed call surfaces as bare "400 Bad Request", hiding the
+    // FastAPI HTTPException(detail=...) string and Pydantic 422 field
+    // breakdown that's the whole point of returning a 4xx.
+    let body = "";
+    try { body = await res.text(); } catch { /* network race; ignore */ }
+    let detail = null;
+    if (body) {
+      try { detail = JSON.parse(body).detail; }
+      catch { detail = body; }
+    }
+    let msg;
+    if (typeof detail === "string" && detail.trim()) {
+      msg = detail.trim();
+    } else if (Array.isArray(detail) && detail.length) {
+      // Pydantic 422 — format each entry as "field: message" so the
+      // form's error label tells the operator which input is wrong.
+      msg = detail.map(d => {
+        const loc = Array.isArray(d.loc)
+          ? d.loc.filter(p => p !== "body").join(".")
+          : null;
+        const tail = d.msg || (typeof d === "string" ? d : JSON.stringify(d));
+        return loc ? `${loc}: ${tail}` : tail;
+      }).join("; ");
+    } else if (detail && typeof detail === "object") {
+      msg = JSON.stringify(detail);
+    } else {
+      msg = `${res.status} ${res.statusText}`;
+    }
+    const err = new Error(msg);
+    err.status = res.status;
+    err.detail = detail;
+    throw err;
+  }
   return res.json();
 }
 
@@ -3550,7 +3584,7 @@ const MATCH_TYPE_PLACEHOLDERS = {
   cross_kind_co_travel: "2/24 — pairs with a device of the other kind at ≥2 of your last-24h locations",
   arrival_after_gap: "30 — fire when this device shows up after ≥30 min away (0 = every sighting)",
   absence_gap: "30 — fire when this device hasn't been seen at the location for ≥30 min",
-  sustained_presence: "10 (or 10/5) — flip-flop: 'present' after ≥10 min continuous, 'absent' after >5 min silent. Add @aa:bb,cc:dd to bind multiple ids to one conceptual device (e.g. a phone's wifi+ble MACs share one state). For wifi_client (probe) devices, widen the gap — phones can idle silent for 10–30 min between probe bursts, e.g. 1/15 or 1/30.",
+  sustained_presence: "10 (or 10/5) — flip-flop: 'present' after ≥N min continuous, 'absent' after >G min silent. N may be 0 to fire on the first sighting (no required continuous stay); G must be ≥1 min so the absence loop has a meaningful silence window. Add @aa:bb,cc:dd to bind multiple ids to one conceptual device (e.g. a phone's wifi+ble MACs share one state). For wifi_client (probe) devices, widen G — phones can idle silent for 10–30 min between probe bursts, e.g. 1/15 or 1/30.",
   wifi_association: "aa:bb:cc@MyNetwork — fires when this client (MAC or OUI prefix) either probes for OR links to (observed 802.11 frame exchange with one of the SSID's BSSIDs at the current location) this SSID. Leave either side blank for 'any'.",
 };
 const MATCH_TYPE_DEFAULTS = {
@@ -5436,7 +5470,21 @@ document.getElementById("mission-restore-file")?.addEventListener("change", asyn
     const resp = await fetch("/api/maintenance/db/import", {
       method: "POST", body: fd,
     });
-    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+    if (!resp.ok) {
+      // Mirror api()'s detail extraction so the FastAPI HTTPException
+      // string (e.g. "uploaded file is not a SQLite database") surfaces
+      // instead of a bare "400 Bad Request".
+      let body = "";
+      try { body = await resp.text(); } catch {}
+      let detail = null;
+      if (body) {
+        try { detail = JSON.parse(body).detail; } catch { detail = body; }
+      }
+      const msg = typeof detail === "string" && detail.trim()
+        ? detail.trim()
+        : `${resp.status} ${resp.statusText}`;
+      throw new Error(msg);
+    }
     const r = await resp.json();
     return `Restored ${formatBytes(r.bytes || 0)} — restart the app to pick up the new DB.`;
   });

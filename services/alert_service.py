@@ -1574,10 +1574,13 @@ def _parse_arrival_gap_value(value: str) -> int | None:
 def _parse_presence_value(value: str) -> tuple[int | None, int, list[str]]:
     """Parse 'N', 'N/G', 'N@id1,id2,...', or 'N/G@id1,id2,...' for the
     sustained_presence flip-flop rule into (threshold_minutes,
-    gap_minutes, aliases). Aliases are lowercased device-id prefixes;
-    when non-empty, only sightings of those ids count toward the stay
-    AND the whole alias set is treated as one conceptual device (e.g.
-    a phone's wifi + bluetooth identities share a single present/absent
+    gap_minutes, aliases). N may be 0 (fire on the first sighting —
+    no required continuous stay); G is the absence threshold and
+    must be at least 1 minute so the absence loop has a meaningful
+    silence window. Aliases are lowercased device-id prefixes; when
+    non-empty, only sightings of those ids count toward the stay AND
+    the whole alias set is treated as one conceptual device (e.g. a
+    phone's wifi + bluetooth identities share a single present/absent
     state). When empty, the rule matches any device. Returns
     (None, 0, []) on invalid input."""
     s = (value or "").strip()
@@ -1591,7 +1594,7 @@ def _parse_presence_value(value: str) -> tuple[int | None, int, list[str]]:
         g = int(parts[1]) if len(parts) > 1 and parts[1] else 5
     except (ValueError, IndexError):
         return None, 0, []
-    if n < 1 or g < 1:
+    if n < 0 or g < 1:
         return None, 0, []
     return n, g, aliases
 

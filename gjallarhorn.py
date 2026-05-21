@@ -1214,9 +1214,11 @@ ALLOWED_KINDS = {None, "wifi", "bluetooth", "wifi_client", "bluetooth_classic"}
 def _validate_presence_value(value: str) -> None:
     """Reject sustained_presence match_values that the rule evaluator
     would silently skip. Format is 'N' or 'N/G' with an optional
-    '@id1,id2,...' suffix; both N and G must parse as integers >= 1.
-    A typo like '10m' or '10 min' would otherwise return None from
-    _parse_presence_value and the rule would sit inert."""
+    '@id1,id2,...' suffix; N parses as an integer >= 0 (zero = fire
+    on the first sighting, no required continuous stay), G as an
+    integer >= 1 minute. A typo like '10m' or '10 min' would otherwise
+    return None from _parse_presence_value and the rule would sit
+    inert."""
     s = (value or "").strip()
     # Strip alias suffix before parsing the duration spec.
     if "@" in s:
@@ -1232,9 +1234,9 @@ def _validate_presence_value(value: str) -> None:
             "(integers, minutes), optionally followed by "
             "'@id1,id2,...' aliases — got: " + (value or "")
         )
-    if n < 1 or g < 1:
+    if n < 0 or g < 1:
         raise HTTPException(
-            400, "sustained_presence requires N >= 1 and G >= 1 minute"
+            400, "sustained_presence requires N >= 0 and G >= 1 minute"
         )
 
 
