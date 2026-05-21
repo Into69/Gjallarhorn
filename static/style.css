@@ -2309,6 +2309,16 @@ select option:disabled { color: var(--muted); }
 }
 .icon-btn:hover { background: rgba(92, 209, 255, 0.08); border-color: var(--accent); color: var(--accent); }
 .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.icon-btn:disabled,
+.icon-btn[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--muted);
+}
+.icon-btn:disabled:hover,
+.icon-btn[disabled]:hover { background: var(--panel-2); border-color: var(--border); color: var(--muted); }
 .icon-btn.danger { color: var(--err); border-color: #5a2828; background: transparent; }
 .icon-btn.danger:hover { background: rgba(255, 107, 107, 0.1); border-color: var(--err); color: var(--err); }
 .row-actions { display: flex; gap: 4px; }

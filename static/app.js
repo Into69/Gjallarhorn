@@ -626,6 +626,15 @@ $("#resize-banner-cancel")?.addEventListener("click", () => exitResizeMode({ com
 const PRESERVED_SENTINEL = "__preserved__";
 const ALL_LOCATIONS_SENTINEL = "__all__";
 
+// Post-filter device list captured at the end of each render so the
+// 'Show on map' button can plot the actual rows the operator is
+// looking at, not the unfiltered fetch.
+let _lastRenderedDevices = [];
+// The selection mode the last render ran in — drives the 'Show on map'
+// button's enabled state since the feature is only meaningful when
+// every row's location_id is its real bubble (the 'All' mode).
+let _lastRenderedMode = null;
+
 // Per-location label map, kept in sync with loadLocationOptions so the
 // table's Location column (visible only in 'All' mode) can resolve a
 // row's location_id without re-querying the server.
@@ -676,6 +685,120 @@ async function loadLocationOptions() {
   } else if (active_id != null) {
     sel.value = String(active_id);
   }
+}
+
+function _updateDevShowMapButton() {
+  // The 'Show on map' button only makes sense when (a) the operator
+  // is in 'All locations' mode (otherwise the rows all share the
+  // selected location) and (b) there's at least one row to plot.
+  // Anything else locks the button.
+  const btn = document.getElementById("dev-show-map");
+  if (!btn) return;
+  const ok = _lastRenderedMode === ALL_LOCATIONS_SENTINEL
+    && _lastRenderedDevices.length > 0;
+  btn.disabled = !ok;
+  btn.title = ok
+    ? `Show the ${_devUniqueLocCount()} location${_devUniqueLocCount() === 1 ? "" : "s"} the listed devices appear at on a map`
+    : (_lastRenderedMode !== ALL_LOCATIONS_SENTINEL
+        ? "Set Location to 'All locations' to plot every bubble the listed devices appear at"
+        : "No devices match the current filters — nothing to plot");
+}
+
+function _devUniqueLocCount() {
+  const ids = new Set();
+  for (const d of _lastRenderedDevices) {
+    if (d.location_id != null) ids.add(d.location_id);
+  }
+  return ids.size;
+}
+
+// Holds the Leaflet map instance bound to the current modal so we can
+// destroy it on close — a fresh instance per open prevents stale tile
+// state across multiple clicks.
+let _devMapInstance = null;
+
+async function showDevicesOnMap() {
+  if (!_lastRenderedDevices.length || _lastRenderedMode !== ALL_LOCATIONS_SENTINEL) {
+    return;
+  }
+  // Tally location_ids and how many of the displayed devices each
+  // location contributed, so the caption / popup can show context.
+  const counts = new Map();
+  for (const d of _lastRenderedDevices) {
+    if (d.location_id != null) {
+      counts.set(d.location_id, (counts.get(d.location_id) || 0) + 1);
+    }
+  }
+  const total = _lastRenderedDevices.length;
+  const locIds = [...counts.keys()];
+  openModal(
+    `Devices across ${counts.size} location${counts.size === 1 ? "" : "s"}`,
+    `<p class="muted small" style="margin: 0 0 10px;">
+       ${total} device row${total === 1 ? "" : "s"} are listed.
+       Each marker is sized to its bubble's geofence radius; the
+       count in the popup is how many of the listed devices were
+       seen at that location.
+     </p>
+     <div id="dev-map-modal" style="width:100%; height:520px; border-radius:8px; overflow:hidden;"></div>`,
+  );
+  // Fetch the live location list so we have lat/lon/radius/label.
+  let locations = [];
+  try {
+    const r = await api("/api/locations");
+    locations = r.locations || [];
+  } catch (e) {
+    document.getElementById("dev-map-modal").innerHTML =
+      `<div class="muted">Failed to load locations: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const wanted = new Set(locIds);
+  const matched = locations.filter(l => wanted.has(l.id) && l.lat != null && l.lon != null);
+  if (!matched.length) {
+    document.getElementById("dev-map-modal").innerHTML =
+      `<div class="muted">None of the locations these devices appear at have GPS coordinates.</div>`;
+    return;
+  }
+  // Build a fresh Leaflet map on the modal container.
+  if (_devMapInstance) {
+    try { _devMapInstance.remove(); } catch {}
+    _devMapInstance = null;
+  }
+  const m = L.map("dev-map-modal", { zoomControl: true });
+  _devMapInstance = m;
+  // Reuse the active tile provider from the main map so the modal
+  // matches the operator's chosen vibe (dark mode, satellite, etc).
+  const p = providersCache.osm || Object.values(providersCache)[0];
+  if (p) {
+    const opts = { attribution: p.attribution, maxZoom: p.max_zoom || 19 };
+    if (p.subdomains) opts.subdomains = p.subdomains;
+    L.tileLayer(p.url, opts).addTo(m);
+  }
+  const latlngs = [];
+  for (const loc of matched) {
+    const n = counts.get(loc.id) || 0;
+    const labelText = `${escapeHtml(loc.label || `Loc ${loc.id}`)}`;
+    const popup = `
+      <div class="loc-popup">
+        <div class="loc-popup-title">${labelText}</div>
+        <div class="loc-popup-coords">${loc.lat.toFixed(5)}, ${loc.lon.toFixed(5)}</div>
+        <div><b>${n}</b> device row${n === 1 ? "" : "s"} from this bubble</div>
+      </div>`;
+    L.marker([loc.lat, loc.lon]).bindPopup(popup).addTo(m);
+    if (loc.radius_m) {
+      L.circle([loc.lat, loc.lon], {
+        radius: loc.radius_m,
+        color: "#b8a3ff", weight: 1.5, fillOpacity: 0.06,
+      }).addTo(m);
+    }
+    latlngs.push([loc.lat, loc.lon]);
+  }
+  // Fit to all markers, with a tiny pad so the outer circles don't clip.
+  m.fitBounds(L.latLngBounds(latlngs).pad(0.25), { maxZoom: 16 });
+  // Modal layout settles a frame after open — invalidateSize so the
+  // map fills its container.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    try { m.invalidateSize(); } catch {}
+  }));
 }
 
 // Toggles the thin progress bar above the devices table. Reference-counted
@@ -806,6 +929,13 @@ async function _refreshDevicesInner() {
   for (const d of rows) {
     tbody.appendChild(renderDeviceRow(d));
   }
+  // Snapshot the post-filter rows + mode so the 'Show on map' button
+  // knows what to plot if the operator clicks it. The button's enabled
+  // state is updated at the bottom of this function alongside the row
+  // count, so a zero-row filter locks the button without flicker.
+  _lastRenderedDevices = rows;
+  _lastRenderedMode = id;
+  _updateDevShowMapButton();
   const total = (groupBssid ? groupWifiByApPrefix(devices) : devices).length;
   const filtersActive = sinceSec > 0 || q_search
     || Number.isFinite(minRssi) || hideWl || trackersOnly || linkedOnly;
@@ -1019,6 +1149,7 @@ function groupWifiByApPrefix(devices) {
 }
 
 $("#dev-refresh").addEventListener("click", refreshDevices);
+$("#dev-show-map")?.addEventListener("click", () => showDevicesOnMap());
 $("#dev-location").addEventListener("change", refreshDevices);
 $("#dev-kind").addEventListener("change", refreshDevices);
 $("#dev-group-bssid").addEventListener("change", refreshDevices);
@@ -4974,6 +5105,12 @@ function openModal(title, html) {
 function closeModal() {
   const overlay = $("#modal-overlay");
   if (overlay) overlay.hidden = true;
+  // Tear down any Leaflet instance the devices-tab map opener built so
+  // the next open starts clean and the DOM node is reusable.
+  if (_devMapInstance) {
+    try { _devMapInstance.remove(); } catch {}
+    _devMapInstance = null;
+  }
 }
 
 $("#modal-close")?.addEventListener("click", closeModal);
