@@ -1938,15 +1938,24 @@ async def purge_old_data(
 
 
 async def list_latched_pairs() -> list[tuple[int, str]]:
-    """Every (rule_id, device_id_lower) pair with at least one alert_event
-    row that's still suppressing — cleared=0 (active latch) OR cleared=2
-    (per-row trash dismissed it from the feed but kept the latch alive).
-    AlertService loads this on startup so latches survive a process
-    restart."""
+    """Every (rule_id, device_id_lower) pair that's actively suppressing
+    future fires. The cleared column has two suppressing values:
+    cleared=0 (the organic latch that latch=1 rules acquire on fire)
+    and cleared=2 (a per-row trash dismissal — applies to any rule
+    type). For latch=0 (non-latching) rules, cleared=0 is just
+    'this fired' and MUST NOT be treated as suppressing, otherwise
+    after a restart load_latches() would silently mute every device
+    a non-latching rule had ever matched.
+
+    Latching rules: pair is suppressing when cleared IN (0, 2).
+    Non-latching rules: pair is suppressing ONLY when cleared = 2."""
     async with _connect() as db:
         async with db.execute(
-            "SELECT DISTINCT rule_id, lower(device_id) "
-            "FROM alert_events WHERE cleared <> 1"
+            "SELECT DISTINCT e.rule_id, lower(e.device_id) "
+            "FROM alert_events e "
+            "JOIN alert_rules r ON r.id = e.rule_id "
+            "WHERE (r.latch = 1 AND e.cleared <> 1) "
+            "   OR (r.latch = 0 AND e.cleared = 2)"
         ) as cur:
             return [(int(r[0]), r[1]) for r in await cur.fetchall()]
 
