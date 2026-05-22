@@ -1,9 +1,11 @@
 """PDF location report generator.
 
-Lays out a multi-page report covering every sensor location: an overview
-map of all sites, per-location detail pages with a mini-map and top
-device list, a side-by-side device-count comparison, and a 'common
-devices' table for hardware seen at multiple locations.
+Lays out a multi-page report: a cover block + per-category top-N
+findings (most active locations, strongest signals, most-traveled
+devices) each with their own contextual mini-maps, a 'looks like you
+were followed by…' suspects callout with per-suspect location maps,
+an overview map of every captured location, and the Followers /
+Recurrence tables.
 """
 from __future__ import annotations
 
@@ -662,7 +664,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
     # AND emits an info log so the same trace lands in the Logs tab.
     # _STAGE_TOTAL is a moving target (we know roughly how many milestones
     # we'll hit; finer-grained ones bump it up).
-    STAGE_TOTAL = 11  # one per _step() call below; keep in sync if adding/removing stages
+    STAGE_TOTAL = 10  # one per _step() call below; keep in sync if adding/removing stages
     state = {"n": 0}
     def _step(label: str, *, weight: int = 1) -> None:
         state["n"] += weight
@@ -1035,98 +1037,6 @@ async def build_report_pdf(*, group_bssids: bool = True,
 
     # Recent alert events + Alert rules sections were removed — the report
     # focuses on followers/recurrence; live alert state belongs in the UI.
-
-    _step("Rendering per-location detail pages")
-    # ── Per-location detail ──
-    # One page per sensor location: tight-zoom mini-map of the bubble +
-    # a top-N devices table drawn from per_loc_devices. Lets the operator
-    # drill into 'what was at each location' after the cross-cutting
-    # findings above. Locations with no captured devices and no coords
-    # get skipped so the report doesn't pad out with empty placeholders.
-    if locations:
-        flow.append(PageBreak())
-        flow.append(Paragraph("Per-location detail", s["h1"]))
-        flow.append(Paragraph(
-            "One page per sensor location, capped at the 15 strongest-signal "
-            "devices per bubble. Use the Devices tab in the UI for the full "
-            "list.",
-            s["caption"],
-        ))
-        for li, loc in enumerate(locations):
-            devs = per_loc_devices.get(loc["id"], []) or []
-            has_coords = loc.get("lat") is not None and loc.get("lon") is not None
-            if not devs and not has_coords:
-                continue
-            # Each location starts on a fresh page so the heading +
-            # map + table read as one cohesive section. The very first
-            # location uses the page-break that opened the section
-            # above; subsequent locations get an explicit PageBreak.
-            if li > 0:
-                flow.append(PageBreak())
-            label = loc.get("label") or f"Loc {loc['id']}"
-            header_block: list = [
-                Paragraph(
-                    f"Location: <b>{_h(label)}</b> "
-                    f"<font color='#7a86a3'>(#{loc['id']})</font>",
-                    s["h2"],
-                ),
-            ]
-            stats_bits: list[str] = []
-            for label_, key in [
-                ("Wi-Fi APs",         "wifi_count"),
-                ("BLE",               "bt_count"),
-                ("BT Classic",        "bt_classic_count"),
-                ("Wi-Fi clients",     "wifi_client_count"),
-                ("Total observations","total_observations"),
-            ]:
-                v = loc.get(key)
-                if v:
-                    stats_bits.append(f"<b>{v}</b> {label_}")
-            if stats_bits:
-                header_block.append(Paragraph(
-                    " · ".join(stats_bits), s["caption"],
-                ))
-            if has_coords:
-                header_block.append(Spacer(1, 4))
-                header_block.append(await _render_map_image(
-                    [(loc["lat"], loc["lon"], "#ff6b6b")],
-                    width_px=560, height_px=300, zoom=16, target_inches=4.5,
-                ))
-            flow.append(KeepTogether(header_block))
-            if not devs:
-                flow.append(Paragraph(
-                    "<i>No devices captured at this location yet.</i>",
-                    s["caption"],
-                ))
-                continue
-            # Top-N by best_rssi (closer to 0 = stronger). Cap at 15
-            # so a busy cafe doesn't sprawl across multiple pages —
-            # the Devices tab has the full list.
-            top_devs = sorted(
-                devs,
-                key=lambda d: d.get("best_rssi") if d.get("best_rssi") is not None else -999,
-                reverse=True,
-            )[:15]
-            rows: list[tuple] = []
-            for d in top_devs:
-                det = d.get("details") or {}
-                name = det.get("ssid") or det.get("name") or ""
-                vendor = det.get("vendor") or ""
-                rows.append((
-                    db.kind_label(d.get("kind", ""), det.get("address_type"), det),
-                    _cell(d.get("device_id", ""), mono=True),
-                    _cell(name),
-                    _cell(vendor),
-                    f"{d.get('best_rssi', '')} dBm" if d.get("best_rssi") is not None else "",
-                    str(d.get("seen_count") or 0),
-                ))
-            flow.append(Spacer(1, 6))
-            flow.append(_table(
-                ["Kind", "Device ID", "Name / SSID", "Vendor", "Best RSSI", "Seen"],
-                rows,
-                col_widths=[1.10 * inch, 1.55 * inch, 1.45 * inch,
-                             1.20 * inch, 0.80 * inch, 0.55 * inch],
-            ))
 
     _step("Building PDF document")
     buf = io.BytesIO()
