@@ -24,9 +24,11 @@ from reportlab.platypus import (
 )
 from reportlab.platypus.flowables import HRFlowable
 from reportlab.pdfgen import canvas as _rl_canvas
+from reportlab.graphics.shapes import Drawing, Circle, Polygon
 import socket
 
 import database as db
+from config import settings_store
 from services.map_cache import render_map as _render_map_png
 
 log = logging.getLogger(__name__)
@@ -40,32 +42,55 @@ _MAX_COMMON_DEVICES = 20
 _MAX_LOCS_PER_CELL = 12        # comma-separated location IDs per cell
 _MAX_FREQ_PER_CELL = 10        # entries in the Recurrence "Per-location frequency" column
 
+# Brand palette — mirrors the web UI's lavender accent on a paper-friendly
+# light background. Hex values picked so the PDF reads as part of the
+# same product family as the dashboard without being unreadable when
+# printed in greyscale.
+THEME = {
+    "ink_strong":  colors.HexColor("#1f1830"),  # near-black for primary text
+    "ink_body":    colors.HexColor("#2c2640"),  # body text
+    "ink_muted":   colors.HexColor("#6d6a82"),  # subtitles / captions
+    "accent":      colors.HexColor("#5b4a8a"),  # darker lavender — h1, tables, logo
+    "accent_soft": colors.HexColor("#8b6db6"),  # lighter lavender — h2, accents
+    "accent_pale": colors.HexColor("#f0ebfa"),  # very pale lavender — backgrounds
+    "rule":        colors.HexColor("#d8d2e8"),  # dividers, table grid
+    "warn":        colors.HexColor("#f6b042"),  # suspect callout border (web --warn)
+    "warn_bg":     colors.HexColor("#fff6e3"),  # suspect callout fill
+    "marker":      "#5b4a8a",                   # map markers (hex string — PIL ImageDraw)
+    "marker_warn": "#d97a2c",                   # suspect-callout map markers
+}
+
 
 def _styles() -> dict[str, ParagraphStyle]:
     base = getSampleStyleSheet()
     out: dict[str, ParagraphStyle] = {}
     out["title"] = ParagraphStyle(
-        "title", parent=base["Title"], fontSize=22, leading=26, spaceAfter=4,
+        "title", parent=base["Title"], fontSize=22, leading=26,
+        spaceAfter=4, textColor=THEME["ink_strong"],
     )
     out["subtitle"] = ParagraphStyle(
-        "subtitle", parent=base["Normal"], fontSize=10, textColor=colors.grey,
-        spaceAfter=20,
+        "subtitle", parent=base["Normal"], fontSize=10,
+        textColor=THEME["ink_muted"], spaceAfter=12,
     )
     out["h1"] = ParagraphStyle(
-        "h1", parent=base["Heading1"], fontSize=16, leading=20, spaceBefore=8,
-        spaceAfter=8, textColor=colors.HexColor("#1f4060"),
+        "h1", parent=base["Heading1"], fontSize=16, leading=20,
+        spaceBefore=8, spaceAfter=8, textColor=THEME["accent"],
     )
     out["h2"] = ParagraphStyle(
-        "h2", parent=base["Heading2"], fontSize=13, leading=16, spaceBefore=6,
-        spaceAfter=4, textColor=colors.HexColor("#2a4d70"),
+        "h2", parent=base["Heading2"], fontSize=13, leading=16,
+        spaceBefore=6, spaceAfter=4, textColor=THEME["accent_soft"],
     )
-    out["body"] = base["BodyText"]
+    out["body"] = ParagraphStyle(
+        "body", parent=base["BodyText"],
+        textColor=THEME["ink_body"], fontSize=10, leading=13,
+    )
     out["mono"] = ParagraphStyle(
         "mono", parent=base["Code"], fontSize=8, leading=10,
+        textColor=THEME["ink_body"],
     )
     out["caption"] = ParagraphStyle(
-        "caption", parent=base["Normal"], fontSize=9, textColor=colors.grey,
-        spaceAfter=8,
+        "caption", parent=base["Normal"], fontSize=9,
+        textColor=THEME["ink_muted"], spaceAfter=8,
     )
     return out
 
@@ -77,18 +102,22 @@ async def _render_map_image(
     height_px: int = 540,
     zoom: int | None = None,
     target_inches: float = 6.5,
+    provider: str = "osm",
 ) -> Image | Paragraph:
-    """Render an OSM map for the given points using the cached tile store.
-    `target_inches` is the on-page width — defaults to the full body width
-    of ~6.5", pass a smaller value (e.g. 4.0) for mini-maps that share a
-    page with other content. Falls back to a text placeholder if the
-    renderer raises — a missing map shouldn't break a whole report."""
+    """Render a tile-based map for the given points, using the operator's
+    chosen tile provider (so the report's basemap matches what they see
+    on the live map). `target_inches` is the on-page width — defaults
+    to the full body width of ~6.5", pass a smaller value (e.g. 4.0)
+    for mini-maps that share a page with other content. Falls back to a
+    text placeholder if the renderer raises — a missing map shouldn't
+    break a whole report."""
     styles = _styles()
     if not points:
         return Paragraph("<i>No locations to plot.</i>", styles["caption"])
     try:
         png_bytes = await _render_map_png(
             points, width_px=width_px, height_px=height_px, zoom=zoom,
+            provider=provider,
         )
         buf = io.BytesIO(png_bytes)
         target_w = target_inches * inch
@@ -234,21 +263,24 @@ def _table(headers: list[str], rows: list[tuple], col_widths: list[float] | None
     data = [headers] + [list(r) for r in rows]
     t = Table(data, colWidths=col_widths, repeatRows=1)
     t.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f4060")),
+        ("BACKGROUND", (0, 0), (-1, 0), THEME["accent"]),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, 0), 9),
         # Plain-string data cells inherit this size; Paragraph cells use
         # their own ParagraphStyle and ignore it.
         ("FONTSIZE", (0, 1), (-1, -1), 8.5),
-        ("BOTTOMPADDING", (0, 0), (-1, 0), 5),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f5f9")]),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#c8cdd5")),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+        ("TOPPADDING", (0, 0), (-1, 0), 6),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, THEME["accent_pale"]]),
+        ("LINEBELOW", (0, 0), (-1, 0), 1.0, THEME["accent"]),
+        ("GRID", (0, 1), (-1, -1), 0.25, THEME["rule"]),
+        ("TEXTCOLOR", (0, 1), (-1, -1), THEME["ink_body"]),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 1), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 1), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 4),
     ]))
     return t
 
@@ -371,7 +403,7 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
         label = loc.get("label") or f"Loc {loc['id']}"
         map_points = None
         if loc.get("lat") is not None and loc.get("lon") is not None:
-            map_points = [(loc["lat"], loc["lon"], "#ff6b6b")]
+            map_points = [(loc["lat"], loc["lon"], THEME["marker"])]
         out.append({
             "category": "most_active",
             "text": f"{_rank_prefix(rank)}<b>{label}</b> — {total} unique devices.",
@@ -406,7 +438,7 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
         )
         map_points = None
         if loc is not None and loc.get("lat") is not None and loc.get("lon") is not None:
-            map_points = [(loc["lat"], loc["lon"], "#ff6b6b")]
+            map_points = [(loc["lat"], loc["lon"], THEME["marker"])]
         out.append({
             "category": "strongest",
             "text": (
@@ -434,7 +466,7 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
         for lid in (dev.get("locations") or []):
             loc = loc_by_id.get(int(lid)) if str(lid).isdigit() or isinstance(lid, int) else None
             if loc and loc.get("lat") is not None and loc.get("lon") is not None:
-                map_points.append((loc["lat"], loc["lon"], "#ff6b6b"))
+                map_points.append((loc["lat"], loc["lon"], THEME["marker"]))
         out.append({
             "category": "most_traveled",
             "text": (
@@ -494,7 +526,8 @@ def _top_followers(common: list[dict], *, top_n: int,
 
 
 async def _render_suspect(sus: dict, s: dict, *, total_locations: int,
-                          loc_by_id: dict[int, dict] | None = None):
+                          loc_by_id: dict[int, dict] | None = None,
+                          provider: str = "osm"):
     """Build a KeepTogether block describing one "suspected follower"
     for the headline section. Pulls every available signal (kind,
     name, vendor, tracker class, RSSI, observation count, BLE-signature
@@ -570,9 +603,9 @@ async def _render_suspect(sus: dict, s: dict, *, total_locations: int,
         fontSize=10, leading=13,
         leftIndent=8, rightIndent=8,
         spaceBefore=6, spaceAfter=6,
-        borderColor=colors.HexColor("#cca56a"),
+        borderColor=THEME["warn"],
         borderWidth=0.6, borderPadding=8,
-        backColor=colors.HexColor("#fff6e8"),
+        backColor=THEME["warn_bg"],
     )
     chunk: list = [Paragraph(body, style)]
     # Per-suspect mini-map: every location the device was observed at,
@@ -587,13 +620,14 @@ async def _render_suspect(sus: dict, s: dict, *, total_locations: int,
             except (TypeError, ValueError):
                 continue
             if loc and loc.get("lat") is not None and loc.get("lon") is not None:
-                map_points.append((loc["lat"], loc["lon"], "#cc2a2a"))
+                map_points.append((loc["lat"], loc["lon"], THEME["marker_warn"]))
     if map_points:
         chunk.append(Spacer(1, 4))
         chunk.append(await _render_map_image(
             map_points,
             width_px=600, height_px=320,
             zoom=None, target_inches=4.5,
+            provider=provider,
         ))
         chunk.append(Spacer(1, 4))
     return KeepTogether(chunk)
@@ -607,13 +641,75 @@ def _h(s_in) -> str:
             .replace(">", "&gt;"))
 
 
+def _logo_mark(size_pt: float = 28) -> Drawing:
+    """Vector logo mark — a lavender disc with a stylized 'horn' glyph
+    (a curved quad nodding to Heimdall's watchman horn). Drawn with
+    ReportLab Drawing primitives so we don't ship a binary asset and
+    the mark scales cleanly at any output DPI."""
+    d = Drawing(size_pt, size_pt)
+    r = size_pt / 2.0
+    # Lavender disc background with a slightly lighter halo ring.
+    d.add(Circle(r, r, r - 0.6,
+                 fillColor=THEME["accent"],
+                 strokeColor=THEME["accent_soft"],
+                 strokeWidth=1.0))
+    # Stylized horn — a 4-point polygon with one inward vertex for a
+    # subtle 'curl,' fitting inside the disc with a comfortable margin.
+    horn = Polygon(
+        points=[
+            r - size_pt * 0.20, r + size_pt * 0.22,    # top-left
+            r + size_pt * 0.26, r + size_pt * 0.04,    # right point
+            r + size_pt * 0.06, r - size_pt * 0.18,    # bottom
+            r - size_pt * 0.14, r - size_pt * 0.02,    # inner curl
+        ],
+        fillColor=colors.white,
+        strokeColor=colors.white,
+        strokeWidth=0.5,
+    )
+    d.add(horn)
+    return d
+
+
+def _logo_banner() -> Table:
+    """First-page banner: lavender bar carrying the logo mark, the
+    GJALLARHORN wordmark, and a 'sensor report' subtitle. Sits above
+    the cover block so the PDF has the same product identity as the
+    web dashboard."""
+    mark = _logo_mark(38)
+    wordmark_style = ParagraphStyle(
+        "logo_word", fontName="Helvetica-Bold",
+        fontSize=20, leading=22, textColor=colors.white,
+        spaceAfter=0,
+    )
+    tagline_style = ParagraphStyle(
+        "logo_tag", fontName="Helvetica",
+        fontSize=9, leading=11, textColor=THEME["accent_pale"],
+        spaceAfter=0,
+    )
+    text_cell = [
+        Paragraph("GJALLARHORN", wordmark_style),
+        Paragraph("sensor report · wireless reconnaissance", tagline_style),
+    ]
+    t = Table([[mark, text_cell]], colWidths=[0.7 * inch, None])
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), THEME["accent"]),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+        ("LINEBELOW", (0, 0), (-1, -1), 2.0, THEME["accent_soft"]),
+    ]))
+    return t
+
+
 def _section_rule() -> HRFlowable:
-    """Thin horizontal rule between major report sections. Slightly
-    indented so it doesn't kiss the page margins."""
+    """Thin lavender rule between major report sections. Matches the
+    table grid color so the page reads as a unified palette."""
     return HRFlowable(
-        width="100%", thickness=0.4,
-        color=colors.HexColor("#c8cdd5"),
-        spaceBefore=10, spaceAfter=10,
+        width="100%", thickness=0.5,
+        color=THEME["accent_soft"],
+        spaceBefore=12, spaceAfter=10,
     )
 
 
@@ -643,9 +739,14 @@ class _NumberedCanvas(_rl_canvas.Canvas):
     def _draw_footer(self, total: int) -> None:
         self.saveState()
         self.setFont("Helvetica", 8)
-        self.setFillColor(colors.HexColor("#7a86a3"))
+        # A thin lavender rule above the footer ties it visually to the
+        # section rules in the body so the whole document reads as one
+        # palette family.
+        self.setStrokeColor(THEME["accent_soft"])
+        self.setLineWidth(0.4)
         page_w = self._pagesize[0]
-        # Right-aligned page number, left-aligned product mark.
+        self.line(0.5 * inch, 0.52 * inch, page_w - 0.5 * inch, 0.52 * inch)
+        self.setFillColor(THEME["ink_muted"])
         self.drawString(
             0.5 * inch, 0.35 * inch,
             "Gjallarhorn — sensor report",
@@ -678,6 +779,15 @@ async def build_report_pdf(*, group_bssids: bool = True,
     _step("Loading locations")
     locations = await db.list_locations()
     locations = sorted(locations, key=lambda l: l["id"])
+
+    # Mirror the operator's chosen Leaflet tile provider so the report's
+    # mini-maps match what they see in the web UI. Settings load is
+    # cheap — async cache — so we just fetch it here.
+    try:
+        settings_obj = await settings_store.load()
+        map_provider = getattr(settings_obj, "map_provider", "osm") or "osm"
+    except Exception:
+        map_provider = "osm"
 
     _step("Loading common devices")
     common = await db.list_common_devices(min_locations=2, limit=_MAX_COMMON_DEVICES)
@@ -722,11 +832,12 @@ async def build_report_pdf(*, group_bssids: bool = True,
 
     _step("Rendering summary")
     # ── Cover block ──
-    # First-page banner identifying what the report covers: app title,
-    # generation timestamp, sensor host name, optional mission scope,
-    # and a totals strip. Designed to give the PDF a clear identity
-    # when emailed or printed without needing to scan the body.
-    flow.append(Paragraph("Gjallarhorn Sensor Report", s["title"]))
+    # Logo banner + identifying metadata (generated-at timestamp,
+    # sensor host name, optional mission scope, totals strip). Gives
+    # the PDF the same product identity as the web dashboard when
+    # emailed or printed without us shipping an image asset.
+    flow.append(_logo_banner())
+    flow.append(Spacer(1, 14))
     try:
         host = socket.gethostname() or "(unknown host)"
     except Exception:
@@ -836,6 +947,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
                 height_px=380 if wide else 300,
                 zoom=f.get("map_zoom"),
                 target_inches=4.5 if wide else 4.0,
+                provider=map_provider,
             ))
             chunk.append(Spacer(1, 6))
         return chunk
@@ -883,6 +995,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
             flow.append(await _render_suspect(
                 sus, s, total_locations=len(locations),
                 loc_by_id=loc_by_id,
+                provider=map_provider,
             ))
         flow.append(Spacer(1, 16))
 
@@ -890,8 +1003,8 @@ async def build_report_pdf(*, group_bssids: bool = True,
     # ── Overview map ──
     flow.append(_section_rule())
     flow.append(Paragraph("Overview", s["h1"]))
-    points = [(l["lat"], l["lon"], "#ff6b6b") for l in locations if l.get("lat") is not None]
-    flow.append(await _render_map_image(points))
+    points = [(l["lat"], l["lon"], THEME["marker"]) for l in locations if l.get("lat") is not None]
+    flow.append(await _render_map_image(points, provider=map_provider))
     flow.append(Paragraph(
         f"{len(locations)} sensor location{'s' if len(locations) != 1 else ''} plotted.",
         s["caption"],

@@ -487,74 +487,11 @@ async def api_bt_adapter_names():
 # ---------- Map providers ----------
 @app.get("/api/map_providers")
 async def api_map_providers():
-    return {
-        "providers": {
-            "osm": {
-                "name": "OpenStreetMap",
-                "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-                "attribution": "© OpenStreetMap contributors",
-                "max_zoom": 19,
-            },
-            "osm_topo": {
-                "name": "OpenTopoMap",
-                "url": "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
-                "attribution": "© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)",
-                "max_zoom": 17,
-            },
-            "carto_positron": {
-                "name": "Carto Positron (light)",
-                "url": "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
-                "attribution": "© OpenStreetMap, © CARTO",
-                "max_zoom": 19,
-            },
-            "carto_dark": {
-                "name": "Carto Dark Matter",
-                "url": "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-                "attribution": "© OpenStreetMap, © CARTO",
-                "max_zoom": 19,
-            },
-            "stamen_terrain": {
-                "name": "Stamen Terrain",
-                "url": "https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}{r}.png",
-                "attribution": "© Stadia Maps, © Stamen Design, © OSM",
-                "max_zoom": 18,
-            },
-            "esri_satellite": {
-                "name": "Esri Satellite",
-                "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-                "attribution": "Tiles © Esri",
-                "max_zoom": 19,
-            },
-            "google_roadmap": {
-                "name": "Google Roadmap",
-                "url": "https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
-                "attribution": "Map data © Google",
-                "max_zoom": 20,
-                "subdomains": "0123",
-            },
-            "google_satellite": {
-                "name": "Google Satellite",
-                "url": "https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
-                "attribution": "Imagery © Google",
-                "max_zoom": 20,
-                "subdomains": "0123",
-            },
-            "google_hybrid": {
-                "name": "Google Hybrid",
-                "url": "https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
-                "attribution": "Imagery © Google",
-                "max_zoom": 20,
-                "subdomains": "0123",
-            },
-            "google_terrain": {
-                "name": "Google Terrain",
-                "url": "https://mt{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}",
-                "attribution": "Map data © Google",
-                "max_zoom": 20,
-                "subdomains": "0123",
-            },
-        }
-    }
+    """The single source of truth for tile-provider definitions lives
+    in services.map_cache so the report renderer and the web UI both
+    see the same catalogue."""
+    from services.map_cache import MAP_PROVIDERS
+    return {"providers": MAP_PROVIDERS}
 
 
 # ---------- Locations + devices ----------

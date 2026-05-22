@@ -22,18 +22,107 @@ log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = REPO_ROOT / "tile-cache"
 
-TILE_URL = "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"
 TILE_SIZE = 256
 USER_AGENT = "Gjallarhorn-Report/0.1 (https://github.com/Into69/Gjallarhorn)"
 FETCH_TIMEOUT_S = 10.0
 
+# Canonical tile-provider catalogue. The /api/map_providers endpoint
+# returns the same shape (callers shouldn't have to duplicate the
+# table). 'subdomains' is optional and only used when the URL pattern
+# carries the '{s}' placeholder; we substitute the first character so
+# the cached tile path is stable regardless of which subdomain a live
+# Leaflet client happens to load.
+MAP_PROVIDERS: dict[str, dict] = {
+    "osm": {
+        "name": "OpenStreetMap",
+        "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        "attribution": "© OpenStreetMap contributors",
+        "max_zoom": 19,
+        "subdomains": "abc",
+    },
+    "osm_topo": {
+        "name": "OpenTopoMap",
+        "url": "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+        "attribution": "© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)",
+        "max_zoom": 17,
+        "subdomains": "abc",
+    },
+    "carto_positron": {
+        "name": "Carto Positron (light)",
+        "url": "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+        "attribution": "© OpenStreetMap, © CARTO",
+        "max_zoom": 19,
+        "subdomains": "abcd",
+    },
+    "carto_dark": {
+        "name": "Carto Dark Matter",
+        "url": "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        "attribution": "© OpenStreetMap, © CARTO",
+        "max_zoom": 19,
+        "subdomains": "abcd",
+    },
+    "stamen_terrain": {
+        "name": "Stamen Terrain",
+        "url": "https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}.png",
+        "attribution": "© Stadia Maps, © Stamen Design, © OSM",
+        "max_zoom": 18,
+    },
+    "esri_satellite": {
+        "name": "Esri Satellite",
+        "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        "attribution": "Tiles © Esri",
+        "max_zoom": 19,
+    },
+    "google_roadmap": {
+        "name": "Google Roadmap",
+        "url": "https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}",
+        "attribution": "Map data © Google",
+        "max_zoom": 20,
+        "subdomains": "0123",
+    },
+    "google_satellite": {
+        "name": "Google Satellite",
+        "url": "https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        "attribution": "Imagery © Google",
+        "max_zoom": 20,
+        "subdomains": "0123",
+    },
+    "google_hybrid": {
+        "name": "Google Hybrid",
+        "url": "https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+        "attribution": "Imagery © Google",
+        "max_zoom": 20,
+        "subdomains": "0123",
+    },
+    "google_terrain": {
+        "name": "Google Terrain",
+        "url": "https://mt{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}",
+        "attribution": "Map data © Google",
+        "max_zoom": 20,
+        "subdomains": "0123",
+    },
+}
 
-def _tile_path(z: int, x: int, y: int) -> Path:
-    return CACHE_DIR / str(z) / str(x) / f"{y}.png"
+
+def _provider_url(provider: str) -> tuple[str, str]:
+    """Resolve a provider key to (url_template_with_s_substituted, key_used).
+    Falls back to OSM if the requested key is unknown."""
+    p = MAP_PROVIDERS.get(provider) or MAP_PROVIDERS["osm"]
+    url = p["url"]
+    if "{s}" in url:
+        sub = (p.get("subdomains") or "a")[0]
+        url = url.replace("{s}", sub)
+    return url, (provider if provider in MAP_PROVIDERS else "osm")
 
 
-def _fetch_tile_blocking(z: int, x: int, y: int) -> bytes:
-    url = TILE_URL.format(z=z, x=x, y=y)
+def _tile_path(provider: str, z: int, x: int, y: int) -> Path:
+    # Per-provider sub-directory so switching providers doesn't pollute
+    # cached tiles with a mismatched basemap.
+    return CACHE_DIR / provider / str(z) / str(x) / f"{y}.png"
+
+
+def _fetch_tile_blocking(url_template: str, z: int, x: int, y: int) -> bytes:
+    url = url_template.format(z=z, x=x, y=y)
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
         if resp.status >= 400:
@@ -41,15 +130,16 @@ def _fetch_tile_blocking(z: int, x: int, y: int) -> bytes:
         return resp.read()
 
 
-async def _get_tile_bytes(z: int, x: int, y: int) -> bytes:
+async def _get_tile_bytes(provider: str, url_template: str,
+                          z: int, x: int, y: int) -> bytes:
     """Return PNG bytes for tile (z,x,y), fetching + caching on miss."""
-    p = _tile_path(z, x, y)
+    p = _tile_path(provider, z, x, y)
     if p.exists():
         try:
             return p.read_bytes()
         except OSError:
             pass
-    data = await asyncio.to_thread(_fetch_tile_blocking, z, x, y)
+    data = await asyncio.to_thread(_fetch_tile_blocking, url_template, z, x, y)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".png.tmp")
     tmp.write_bytes(data)
@@ -95,13 +185,18 @@ async def render_map(
     height_px: int = 540,
     zoom: int | None = None,
     padding: int = 40,
+    provider: str = "osm",
 ) -> bytes:
-    """Compose an OSM-tile map for the given (lat, lon, color_hex) points.
+    """Compose a tile-based map for the given (lat, lon, color_hex)
+    points. The basemap is picked from MAP_PROVIDERS using the supplied
+    provider key (defaults to OSM) so the report's maps can mirror the
+    operator's chosen Leaflet provider in the web UI.
 
     Returns PNG bytes. Tiles that fail to fetch are skipped — the result
     will have grey gaps where tiles are missing rather than raising."""
     if not points:
         raise ValueError("render_map requires at least one point")
+    url_template, provider_key = _provider_url(provider)
 
     if zoom is None:
         zoom = _pick_zoom([(p[0], p[1]) for p in points], width_px, height_px, padding)
@@ -133,7 +228,7 @@ async def render_map(
             if tx < 0 or tx >= n or ty < 0 or ty >= n:
                 continue
             coords.append((tx, ty))
-            fetch_tasks.append(_get_tile_bytes(zoom, tx, ty))
+            fetch_tasks.append(_get_tile_bytes(provider_key, url_template, zoom, tx, ty))
 
     results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
     for (tx, ty), data in zip(coords, results):
