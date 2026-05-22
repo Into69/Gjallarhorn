@@ -2739,6 +2739,43 @@ tr.sensor-device { opacity: 0.85; }
 
   /* Fix card: keep two-column grids if room, but allow them to collapse. */
   .fix-grid { grid-template-columns: 1fr 1fr; gap: 4px; }
+
+  /* About / Presence / Mission card grids — force single column at
+     phone widths so the cards don't get squeezed to half-readable
+     widths. They use auto-fit minmax internally; pinning to 1fr here
+     is cheaper than re-tuning the minmax. */
+  .about-grid,
+  .presence-list { grid-template-columns: 1fr; }
+  .mission-status-grid,
+  .mission-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mission-action-grid { grid-template-columns: 1fr; }
+
+  /* Modal: claim most of the screen on phones; the existing 800px /
+     92vw cap leaves a 30px gutter that's not useful when the inside
+     content (Leaflet map, timeline tables) wants the space. */
+  .modal {
+    width: min(800px, 96vw);
+    max-height: 94vh;
+    border-radius: 8px;
+  }
+  .modal-body { padding: 10px 12px; }
+  /* The devices-tab 'Show on map' modal pins its Leaflet container
+     to 520px; bump it to a viewport-relative height on phones so
+     the map gets a usable share of the screen even in portrait. */
+  #dev-map-modal { height: 60vh !important; min-height: 320px; }
+
+  /* Field tooltip cap: 320px on a 360px phone would push against the
+     edges. Tighten so the placement code's clamp has more headroom. */
+  .field-tooltip { max-width: min(320px, calc(100vw - 24px)); }
+
+  /* Larger tap target on the tab nav buttons so a finger can hit
+     them reliably (iOS HIG is 44pt). */
+  .tab-btn { min-height: 40px; }
+
+  /* Per-row icon buttons get a hair more padding on touch so they're
+     not microscopic. The :hover/:focus rules still apply, just with
+     a comfier tap surface. */
+  .icon-btn { padding: 6px 8px; }
 }
 
 /* Very narrow phones (≤ 380px) — collapse stat grids further. */
@@ -2746,4 +2783,23 @@ tr.sensor-device { opacity: 0.85; }
   .fix-grid { grid-template-columns: 1fr; }
   header h1 { display: none; }   /* claw back space; the tabs are obvious */
   .tab-btn { padding: 8px 10px; font-size: 12px; }
+  .mission-status-grid,
+  .mission-stats { grid-template-columns: 1fr; }
+}
+
+/* ── touch-input adjustments (orthogonal to viewport size) ────────
+   pointer:coarse fires on every touchscreen regardless of width, so
+   stylus / phone-in-landscape / tablet all get the same treatment.
+   The body.touch-device class is mirrored from JS so any logic that
+   needs to branch on touch can do so without re-querying matchMedia.
+*/
+@media (pointer: coarse) {
+  /* Field tooltip is a hover-only affordance on desktop; on touch
+     there's no hover, so suppress entirely to avoid it appearing
+     after a long-press / focus and blocking the input the operator
+     just tapped into. */
+  .field-tooltip { display: none !important; }
+  /* Wider tap targets across the board so 40-pt iOS / Android tap
+     points are easier to land. */
+  .icon-btn { padding: 8px 10px; }
 }

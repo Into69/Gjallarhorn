@@ -6327,6 +6327,26 @@ function _initFieldTooltips() {
   window.addEventListener("resize", place);
 }
 
+// ---------- responsive / input-mode detection ----------
+// Mirror the primary input type onto <body> so CSS and JS can branch
+// on touch without re-querying matchMedia each time. This is the
+// 'detect mobile' signal — pointer: coarse fires on every touchscreen
+// regardless of viewport width (phone in landscape, tablet, kiosk),
+// which is more accurate than parsing User-Agent strings. The narrow-
+// viewport bucket is handled separately by the CSS @media rules.
+(function _initInputModeDetection() {
+  if (!window.matchMedia) return;
+  const coarse = window.matchMedia("(pointer: coarse)");
+  const apply = () => document.body.classList.toggle("touch-device", coarse.matches);
+  apply();
+  try {
+    coarse.addEventListener("change", apply);
+  } catch {
+    // Older Safari uses addListener / removeListener.
+    coarse.addListener?.(apply);
+  }
+})();
+
 // ---------- boot ----------
 (async function main() {
   _initFieldTooltips();
