@@ -55,6 +55,10 @@ async def lifespan(app: FastAPI):
     # Resolve the host's own scanner MACs so they get treated as
     # implicitly-whitelisted devices and tagged "Sensor" in the UI.
     sensor_identity.refresh(s)
+    # Kick off the batched observation writer before any scan loop
+    # starts queuing rows. Drains every ~1s — see database.py for
+    # the trade-off.
+    await db.start_observation_flusher()
     gps = GPSService(host=s.gpsd_host, port=s.gpsd_port, poll_s=s.gps_poll_interval_s)
     await gps.start()
     await oui_service.ensure_loaded()
@@ -72,6 +76,9 @@ async def lifespan(app: FastAPI):
             await orchestrator.stop()
         if gps:
             await gps.stop()
+        # Stop the flusher last so any rows the scan loops queued
+        # during shutdown still make it to disk.
+        await db.stop_observation_flusher()
         log.info("Gjallarhorn stopped")
 
 

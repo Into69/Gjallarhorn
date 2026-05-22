@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
 import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 import aiosqlite
+
+log = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).parent / "gjallarhorn.db"
 
@@ -724,6 +728,10 @@ async def _preserve_whitelisted_devices(db, location_ids: list[int]) -> int:
 
 
 async def delete_devices_at_location(location_id: int) -> dict:
+    # Flush any queued observations first so a row mid-write doesn't
+    # land in the table immediately after the DELETE and look like an
+    # orphan to the operator.
+    await _flush_observations()
     """Wipe every device and observation row tied to this location while
     keeping the sensor_location itself. Whitelisted devices get archived
     into preserved_devices first, same as delete_location, so their
@@ -1040,6 +1048,7 @@ async def delete_auto_locations() -> dict:
     in place. Whitelisted devices get archived into preserved_devices
     first, same as delete_all_locations does. Temp whitelist is left
     intact — Reset is a softer action than Delete all."""
+    await _flush_observations()
     async with _connect() as db:
         async with db.execute(
             "SELECT id FROM sensor_locations WHERE source='auto'"
@@ -1082,6 +1091,7 @@ async def delete_all_locations() -> dict:
     session-scoped to the current location set, so a full reset clears
     them too.
     Returns the row counts that were removed."""
+    await _flush_observations()
     async with _connect() as db:
         async with db.execute("SELECT COUNT(*) FROM sensor_locations") as cur:
             n_loc = (await cur.fetchone())[0]
@@ -1469,6 +1479,31 @@ async def device_timeline(kind: str, device_id: str, *, max_points: int = 500) -
     return out
 
 
+# ── Batched observation writer ──────────────────────────────────────
+# Scan loops fire observations at high cadence — every probe-req, every
+# BLE adv, every AP sighting becomes one row. The single-INSERT path
+# below opened a connection, executed one statement, and committed for
+# every single sighting; on a busy channel that's hundreds of single-row
+# transactions per second, with all the locking + SD-card write
+# amplification that implies.
+#
+# The batched path keeps insert_observation() non-blocking: it appends
+# the row to an in-memory queue and a background flusher coroutine
+# drains the queue every _OBS_FLUSH_INTERVAL_S (or sooner when the
+# queue crosses _OBS_FLUSH_BATCH). Crash window is sub-second —
+# whatever's in the queue at the time is lost, which is acceptable for
+# observation history (devices.last_seen is updated by the synchronous
+# upsert_device path anyway, so 'when was X last seen?' stays accurate).
+_OBS_FLUSH_INTERVAL_S = 1.0
+_OBS_FLUSH_BATCH = 250        # high-water mark that triggers an early flush
+_OBS_MAX_PER_FLUSH = 1000     # cap per executemany so one flush isn't multi-second
+
+_obs_queue: list[tuple] = []
+_obs_queue_lock = asyncio.Lock()
+_obs_flusher_task: Optional[asyncio.Task] = None
+_obs_flusher_stop: Optional[asyncio.Event] = None
+
+
 async def insert_observation(
     location_id: int,
     kind: str,
@@ -1478,14 +1513,111 @@ async def insert_observation(
     lon: float | None,
     raw: dict,
 ) -> None:
+    """Queue an observation row for the batched writer. Synchronous
+    callers don't pay the per-INSERT commit cost anymore — the flusher
+    coroutine drains the queue every ~1s into one executemany +
+    commit. When the queue passes the high-water mark, an early flush
+    is scheduled so a burst doesn't grow unbounded."""
     now = datetime.now().isoformat()
-    async with _connect() as db:
-        await db.execute(
-            "INSERT INTO observations(location_id,kind,device_id,rssi,lat,lon,seen_at,raw_json) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (location_id, kind, device_id, rssi, lat, lon, now, json.dumps(raw, default=str)),
-        )
-        await db.commit()
+    row = (
+        location_id, kind, device_id, rssi, lat, lon, now,
+        json.dumps(raw, default=str),
+    )
+    _obs_queue.append(row)
+    if len(_obs_queue) >= _OBS_FLUSH_BATCH:
+        # Don't await — fire-and-forget so the scan loop doesn't stall
+        # on the flush. The flusher coroutine itself awaits the lock.
+        asyncio.create_task(_flush_observations())
+
+
+async def _flush_observations() -> int:
+    """Drain up to _OBS_MAX_PER_FLUSH queued observations into a single
+    executemany + commit. Returns the count written so callers can
+    log throughput if they want. Safe to call concurrently — the lock
+    serializes drains."""
+    if not _obs_queue:
+        return 0
+    async with _obs_queue_lock:
+        # Re-check under the lock — another flush may have already
+        # drained the queue while we were waiting.
+        if not _obs_queue:
+            return 0
+        batch = _obs_queue[:_OBS_MAX_PER_FLUSH]
+        del _obs_queue[:len(batch)]
+    if not batch:
+        return 0
+    try:
+        async with _connect() as db:
+            await db.executemany(
+                "INSERT INTO observations(location_id,kind,device_id,rssi,lat,lon,seen_at,raw_json) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                batch,
+            )
+            await db.commit()
+    except Exception:
+        # Re-queue at the head so we don't drop rows on a transient
+        # DB error. Acceptable: same rows retry next tick.
+        async with _obs_queue_lock:
+            _obs_queue[:0] = batch
+        raise
+    return len(batch)
+
+
+async def _obs_flusher_loop(stop: asyncio.Event) -> None:
+    """Periodic drain loop. Wakes every _OBS_FLUSH_INTERVAL_S and on
+    explicit stop signal. Logs and swallows per-flush errors so a
+    transient DB hiccup doesn't kill the writer."""
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=_OBS_FLUSH_INTERVAL_S)
+        except asyncio.TimeoutError:
+            pass
+        try:
+            n = await _flush_observations()
+            if n:
+                log.debug("observation flush wrote %d row(s)", n)
+        except Exception as e:
+            log.warning("observation flush failed: %s", e)
+
+
+async def start_observation_flusher() -> None:
+    """Kick off the background drain loop. Safe to call multiple times —
+    a second call is a no-op while the first task is still alive."""
+    global _obs_flusher_task, _obs_flusher_stop
+    if _obs_flusher_task and not _obs_flusher_task.done():
+        return
+    _obs_flusher_stop = asyncio.Event()
+    _obs_flusher_task = asyncio.create_task(
+        _obs_flusher_loop(_obs_flusher_stop),
+        name="observation-flusher",
+    )
+
+
+async def stop_observation_flusher() -> None:
+    """Signal stop, await the flusher's exit, then do one final drain
+    so a clean shutdown writes everything queued. Called from the
+    FastAPI lifespan shutdown hook."""
+    global _obs_flusher_task, _obs_flusher_stop
+    if _obs_flusher_stop:
+        _obs_flusher_stop.set()
+    if _obs_flusher_task:
+        try:
+            await _obs_flusher_task
+        except Exception as e:
+            log.warning("observation flusher exit error: %s", e)
+        _obs_flusher_task = None
+    _obs_flusher_stop = None
+    # Final drain — the flusher loop already does one on each tick,
+    # but a stop signal during a sleep would skip it. Loop until the
+    # queue is empty in case _OBS_MAX_PER_FLUSH split a big tail.
+    while _obs_queue:
+        try:
+            n = await _flush_observations()
+            if not n:
+                break
+        except Exception as e:
+            log.warning("final observation drain failed: %s", e)
+            break
 
 
 # ---------- alerts ----------
@@ -2719,6 +2851,7 @@ async def delete_devices_by_kind(kind: str) -> dict:
     """Wipe every device + observation of the given kind across all
     locations. Whitelisted devices follow the same preservation flow as
     location deletion — they're archived to preserved_devices first."""
+    await _flush_observations()
     if kind not in ("wifi", "bluetooth", "bluetooth_classic", "wifi_client"):
         return {"error": "invalid kind", "devices": 0, "observations": 0}
     async with _connect() as db:
