@@ -17,8 +17,12 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import (
-    Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+    Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer,
+    Table, TableStyle,
 )
+from reportlab.platypus.flowables import HRFlowable
+from reportlab.pdfgen import canvas as _rl_canvas
+import socket
 
 import database as db
 from services.map_cache import render_map as _render_map_png
@@ -319,11 +323,21 @@ def _most_active_location(locations: list[dict]) -> dict | None:
     return ranked[0]
 
 
-def _ordinal_prefix(rank: int) -> str:
-    """Render 'rank' as an inline-html lead-in for a finding bullet."""
-    if rank == 1:
-        return ""
-    return f"<font color='#7a86a3'>#{rank}</font> "
+def _rank_prefix(rank: int) -> str:
+    """Inline-html lead-in for a ranked bullet inside a top-N group.
+    Sub-heading already labels the category, so we just need to mark
+    the operator's place in the ranking."""
+    return f"<font color='#7a86a3'>#{rank}.</font>&nbsp;"
+
+
+# Order each category's findings appear in the report. Bullets within
+# a category share a sub-heading and stay together as a block.
+_FINDING_CATEGORIES = [
+    ("most_active",  "Most active locations"),
+    ("strongest",    "Strongest signal"),
+    ("most_traveled", "Most-traveled devices"),
+    ("by_kind",      None),  # one-liner; no sub-heading
+]
 
 
 def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dict]],
@@ -357,17 +371,13 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
         if loc.get("lat") is not None and loc.get("lon") is not None:
             map_points = [(loc["lat"], loc["lon"], "#ff6b6b")]
         out.append({
-            "text": (
-                f"{_ordinal_prefix(rank)}<b>Most active location:</b> "
-                f"{label} — {total} unique devices."
-            ),
+            "category": "most_active",
+            "text": f"{_rank_prefix(rank)}<b>{label}</b> — {total} unique devices.",
             "map_points": map_points,
             "map_zoom": 16,
         })
 
     # ── Strongest signal (top N distinct devices by best_rssi) ──
-    # Flatten every device across every location, tagging each with
-    # the location it came from, then rank by best_rssi.
     flat: list[tuple[dict, int]] = []
     for loc_id, devs in per_loc_devices.items():
         for d in devs:
@@ -396,9 +406,9 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
         if loc is not None and loc.get("lat") is not None and loc.get("lon") is not None:
             map_points = [(loc["lat"], loc["lon"], "#ff6b6b")]
         out.append({
+            "category": "strongest",
             "text": (
-                f"{_ordinal_prefix(rank)}<b>Strongest signal:</b> "
-                f"{d.get('best_rssi')} dBm — "
+                f"{_rank_prefix(rank)}<b>{d.get('best_rssi')} dBm</b> — "
                 f"<font face='Courier'>{d.get('device_id')}</font>"
                 f"{f' ({name})' if name and name != d.get('device_id') else ''}"
                 f" at <i>{loc_label}</i>."
@@ -410,10 +420,6 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
             break
 
     # ── Most-traveled devices (top N from the common list) ──
-    # `common` is already ranked by n_locations DESC then total_seen DESC,
-    # so just take the head N. Each device gets its own multi-marker
-    # map showing every location it was observed at — auto-zoom so the
-    # full spread fits regardless of city width.
     trav_rank = 0
     for dev in common:
         n = dev.get("n_locations") or 0
@@ -422,18 +428,15 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
         trav_rank += 1
         det = dev.get("details") or {}
         name = det.get("ssid") or det.get("name") or ""
-        # list_common_devices pops the raw 'location_ids' CSV and
-        # exposes a 'locations' list[int] instead — read that. The
-        # earlier code used the popped key and silently produced
-        # zero map_points, leaving the per-device map off the page.
         map_points: list[tuple[float, float, str]] = []
         for lid in (dev.get("locations") or []):
             loc = loc_by_id.get(int(lid)) if str(lid).isdigit() or isinstance(lid, int) else None
             if loc and loc.get("lat") is not None and loc.get("lon") is not None:
                 map_points.append((loc["lat"], loc["lon"], "#ff6b6b"))
         out.append({
+            "category": "most_traveled",
             "text": (
-                f"{_ordinal_prefix(trav_rank)}<b>Most-traveled device:</b> "
+                f"{_rank_prefix(trav_rank)}"
                 f"<font face='Courier'>{dev.get('device_id')}</font>"
                 f"{f' ({name})' if name else ''} — seen at {n} locations."
             ),
@@ -450,6 +453,7 @@ def _summary_findings(locations: list[dict], per_loc_devices: dict[int, list[dic
     total_cl = sum(int(l.get("wifi_client_count") or 0) for l in locations)
     if total_wifi or total_bt or total_bt_classic or total_cl:
         out.append({
+            "category": "by_kind",
             "text": (
                 f"<b>By kind:</b> {total_wifi} Wi-Fi APs, {total_bt} BLE devices, "
                 f"{total_bt_classic} Bluetooth Classic, "
@@ -487,11 +491,15 @@ def _top_followers(common: list[dict], *, top_n: int,
     return out
 
 
-def _render_suspect(sus: dict, s: dict, *, total_locations: int):
-    """Build a Paragraph block describing one "suspected follower" for
-    the headline section. Pulls every available signal (kind, name,
-    vendor, tracker class, RSSI, observation count, BLE-signature
-    aliases) into a compact multi-line callout."""
+async def _render_suspect(sus: dict, s: dict, *, total_locations: int,
+                          loc_by_id: dict[int, dict] | None = None):
+    """Build a KeepTogether block describing one "suspected follower"
+    for the headline section. Pulls every available signal (kind,
+    name, vendor, tracker class, RSSI, observation count, BLE-signature
+    aliases) into a compact multi-line callout, then anchors a multi-
+    marker mini-map underneath showing every location that suspect
+    appeared at. The whole bundle is wrapped in KeepTogether so the
+    map can't get split off from the callout it illustrates."""
     det = sus.get("details") or {}
     merged_count = sus.get("_merged_count") or 1
     members = sus.get("_members") or []
@@ -564,7 +572,29 @@ def _render_suspect(sus: dict, s: dict, *, total_locations: int):
         borderWidth=0.6, borderPadding=8,
         backColor=colors.HexColor("#fff6e8"),
     )
-    return Paragraph(body, style)
+    chunk: list = [Paragraph(body, style)]
+    # Per-suspect mini-map: every location the device was observed at,
+    # auto-zoomed to fit. Plot only when we have a loc_by_id and at
+    # least one resolvable lat/lon — silently skip otherwise so a
+    # missing-coord follower still gets its callout.
+    map_points: list[tuple[float, float, str]] = []
+    if loc_by_id:
+        for lid in (sus.get("locations") or []):
+            try:
+                loc = loc_by_id.get(int(lid))
+            except (TypeError, ValueError):
+                continue
+            if loc and loc.get("lat") is not None and loc.get("lon") is not None:
+                map_points.append((loc["lat"], loc["lon"], "#cc2a2a"))
+    if map_points:
+        chunk.append(Spacer(1, 4))
+        chunk.append(await _render_map_image(
+            map_points,
+            width_px=600, height_px=320,
+            zoom=None, target_inches=4.5,
+        ))
+        chunk.append(Spacer(1, 4))
+    return KeepTogether(chunk)
 
 
 def _h(s_in) -> str:
@@ -575,6 +605,56 @@ def _h(s_in) -> str:
             .replace(">", "&gt;"))
 
 
+def _section_rule() -> HRFlowable:
+    """Thin horizontal rule between major report sections. Slightly
+    indented so it doesn't kiss the page margins."""
+    return HRFlowable(
+        width="100%", thickness=0.4,
+        color=colors.HexColor("#c8cdd5"),
+        spaceBefore=10, spaceAfter=10,
+    )
+
+
+class _NumberedCanvas(_rl_canvas.Canvas):
+    """Two-pass canvas that captures every page's state during the first
+    build, then on save() iterates the captured pages and draws the
+    'Gjallarhorn report — page N of M' footer with the now-known total
+    page count. Standard ReportLab idiom for footers that need to
+    reference the doc's total page count."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._saved_pages: list[dict] = []
+
+    def showPage(self):
+        self._saved_pages.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total = len(self._saved_pages)
+        for state in self._saved_pages:
+            self.__dict__.update(state)
+            self._draw_footer(total)
+            super().showPage()
+        super().save()
+
+    def _draw_footer(self, total: int) -> None:
+        self.saveState()
+        self.setFont("Helvetica", 8)
+        self.setFillColor(colors.HexColor("#7a86a3"))
+        page_w = self._pagesize[0]
+        # Right-aligned page number, left-aligned product mark.
+        self.drawString(
+            0.5 * inch, 0.35 * inch,
+            "Gjallarhorn — sensor report",
+        )
+        self.drawRightString(
+            page_w - 0.5 * inch, 0.35 * inch,
+            f"page {self._pageNumber} of {total}",
+        )
+        self.restoreState()
+
+
 async def build_report_pdf(*, group_bssids: bool = True,
                            progress=None,
                            mission: dict | None = None) -> bytes:
@@ -582,7 +662,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
     # AND emits an info log so the same trace lands in the Logs tab.
     # _STAGE_TOTAL is a moving target (we know roughly how many milestones
     # we'll hit; finer-grained ones bump it up).
-    STAGE_TOTAL = 10  # one per _step() call below; keep in sync if adding/removing stages
+    STAGE_TOTAL = 11  # one per _step() call below; keep in sync if adding/removing stages
     state = {"n": 0}
     def _step(label: str, *, weight: int = 1) -> None:
         state["n"] += weight
@@ -639,10 +719,20 @@ async def build_report_pdf(*, group_bssids: bool = True,
     flow: list[Any] = []
 
     _step("Rendering summary")
-    # ── Title ──
+    # ── Cover block ──
+    # First-page banner identifying what the report covers: app title,
+    # generation timestamp, sensor host name, optional mission scope,
+    # and a totals strip. Designed to give the PDF a clear identity
+    # when emailed or printed without needing to scan the body.
     flow.append(Paragraph("Gjallarhorn Sensor Report", s["title"]))
+    try:
+        host = socket.gethostname() or "(unknown host)"
+    except Exception:
+        host = "(unknown host)"
     flow.append(Paragraph(
-        f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", s["subtitle"],
+        f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} · "
+        f"sensor host <font face='Courier'>{_h(host)}</font>",
+        s["subtitle"],
     ))
     # ── Optional mission cover block ──
     # Threaded in from /api/missions/{id}/report/start. Renders the
@@ -722,21 +812,50 @@ async def build_report_pdf(*, group_bssids: bool = True,
     ))
     flow.append(Spacer(1, 8))
     findings = _summary_findings(locations, per_loc_devices, common)
+    # Bucket findings by category so we can drop a sub-heading once
+    # per category instead of repeating the verb prefix in every
+    # bullet. The categories list controls the on-page order.
+    by_cat: dict[str, list[dict]] = {}
     for f in findings:
-        flow.append(Paragraph(f"• {f['text']}", s["body"]))
+        by_cat.setdefault(f.get("category", "by_kind"), []).append(f)
+    async def _build_finding_chunk(f: dict) -> list:
+        # Bullet + its mini-map (if any) packaged so they stay on the
+        # same page. Maps that span multiple markers (most-traveled)
+        # get a slightly larger canvas — auto-zoom plus multiple
+        # points needs the extra vertical room to be readable.
+        chunk = [Paragraph(f"• {f['text']}", s["body"])]
         pts = f.get("map_points")
         if pts:
-            # Drop the mini-map immediately below the finding so the
-            # visual stays glued to the sentence it illustrates. The
-            # most-traveled map uses auto-zoom (map_zoom=None) to fit
-            # every marker; the per-location maps stay tight at 16.
-            flow.append(Spacer(1, 4))
-            flow.append(await _render_map_image(
-                pts, width_px=560, height_px=320,
-                zoom=f.get("map_zoom"), target_inches=4.0,
+            wide = f.get("map_zoom") is None and len(pts) > 1
+            chunk.append(Spacer(1, 4))
+            chunk.append(await _render_map_image(
+                pts,
+                width_px=600 if wide else 560,
+                height_px=380 if wide else 300,
+                zoom=f.get("map_zoom"),
+                target_inches=4.5 if wide else 4.0,
             ))
-            flow.append(Spacer(1, 6))
-    flow.append(Spacer(1, 16))
+            chunk.append(Spacer(1, 6))
+        return chunk
+
+    for cat, heading in _FINDING_CATEGORIES:
+        bucket = by_cat.get(cat) or []
+        if not bucket:
+            continue
+        # Keep the sub-heading glued to the first bullet+map of its
+        # category so the heading can't strand at the bottom of a
+        # page with all its content pushed to the next. The remaining
+        # items in the category get their own KeepTogether blocks
+        # since each one needs to be independently page-fittable.
+        first_chunk = await _build_finding_chunk(bucket[0])
+        head_block: list = []
+        if heading:
+            head_block.append(Paragraph(heading, s["h2"]))
+        flow.append(KeepTogether(head_block + first_chunk))
+        for f in bucket[1:]:
+            flow.append(KeepTogether(await _build_finding_chunk(f)))
+        flow.append(Spacer(1, 8))
+    flow.append(Spacer(1, 8))
 
     _step("Picking suspected followers")
     # ── "Looks like you were followed by…" callout ──
@@ -744,7 +863,11 @@ async def build_report_pdf(*, group_bssids: bool = True,
     # *before* the data tables. Surfaces the answer to the question most
     # operators are actually asking when they generate this report.
     suspects = _top_followers(common, top_n=5, n_total_locations=len(locations))
+    loc_by_id: dict[int, dict] = {
+        l["id"]: l for l in locations if l.get("id") is not None
+    }
     if suspects:
+        flow.append(_section_rule())
         flow.append(Paragraph("Looks like you were followed by…", s["h1"]))
         flow.append(Paragraph(
             "Devices that appeared at the largest fraction of your sensor "
@@ -755,11 +878,15 @@ async def build_report_pdf(*, group_bssids: bool = True,
             s["caption"],
         ))
         for sus in suspects:
-            flow.append(_render_suspect(sus, s, total_locations=len(locations)))
+            flow.append(await _render_suspect(
+                sus, s, total_locations=len(locations),
+                loc_by_id=loc_by_id,
+            ))
         flow.append(Spacer(1, 16))
 
     _step("Rendering overview map")
     # ── Overview map ──
+    flow.append(_section_rule())
     flow.append(Paragraph("Overview", s["h1"]))
     points = [(l["lat"], l["lon"], "#ff6b6b") for l in locations if l.get("lat") is not None]
     flow.append(await _render_map_image(points))
@@ -774,7 +901,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
     # "recent" column counts distinct locations within the last 24 hours,
     # which uses the same BLE-signature aggregation as the persistent_
     # companion alert rule — rotating private MACs collapse to one entry.
-    flow.append(Spacer(1, 14))
+    flow.append(_section_rule())
     flow.append(Paragraph("Followers", s["h1"]))
     flow.append(Paragraph(
         "Devices observed at multiple sensor locations — ordered by total "
@@ -859,7 +986,7 @@ async def build_report_pdf(*, group_bssids: bool = True,
         if not is_wl(r.get("kind", ""), r.get("device_id", ""))
     ]
     if recurrence:
-        flow.append(Spacer(1, 14))
+        flow.append(_section_rule())
         flow.append(Paragraph("Recurrence breakdown", s["h1"]))
         flow.append(Paragraph(
             "Top 10 devices observed at multiple locations, ranked by total "
@@ -909,13 +1036,108 @@ async def build_report_pdf(*, group_bssids: bool = True,
     # Recent alert events + Alert rules sections were removed — the report
     # focuses on followers/recurrence; live alert state belongs in the UI.
 
+    _step("Rendering per-location detail pages")
+    # ── Per-location detail ──
+    # One page per sensor location: tight-zoom mini-map of the bubble +
+    # a top-N devices table drawn from per_loc_devices. Lets the operator
+    # drill into 'what was at each location' after the cross-cutting
+    # findings above. Locations with no captured devices and no coords
+    # get skipped so the report doesn't pad out with empty placeholders.
+    if locations:
+        flow.append(PageBreak())
+        flow.append(Paragraph("Per-location detail", s["h1"]))
+        flow.append(Paragraph(
+            "One page per sensor location, capped at the 15 strongest-signal "
+            "devices per bubble. Use the Devices tab in the UI for the full "
+            "list.",
+            s["caption"],
+        ))
+        for li, loc in enumerate(locations):
+            devs = per_loc_devices.get(loc["id"], []) or []
+            has_coords = loc.get("lat") is not None and loc.get("lon") is not None
+            if not devs and not has_coords:
+                continue
+            # Each location starts on a fresh page so the heading +
+            # map + table read as one cohesive section. The very first
+            # location uses the page-break that opened the section
+            # above; subsequent locations get an explicit PageBreak.
+            if li > 0:
+                flow.append(PageBreak())
+            label = loc.get("label") or f"Loc {loc['id']}"
+            header_block: list = [
+                Paragraph(
+                    f"Location: <b>{_h(label)}</b> "
+                    f"<font color='#7a86a3'>(#{loc['id']})</font>",
+                    s["h2"],
+                ),
+            ]
+            stats_bits: list[str] = []
+            for label_, key in [
+                ("Wi-Fi APs",         "wifi_count"),
+                ("BLE",               "bt_count"),
+                ("BT Classic",        "bt_classic_count"),
+                ("Wi-Fi clients",     "wifi_client_count"),
+                ("Total observations","total_observations"),
+            ]:
+                v = loc.get(key)
+                if v:
+                    stats_bits.append(f"<b>{v}</b> {label_}")
+            if stats_bits:
+                header_block.append(Paragraph(
+                    " · ".join(stats_bits), s["caption"],
+                ))
+            if has_coords:
+                header_block.append(Spacer(1, 4))
+                header_block.append(await _render_map_image(
+                    [(loc["lat"], loc["lon"], "#ff6b6b")],
+                    width_px=560, height_px=300, zoom=16, target_inches=4.5,
+                ))
+            flow.append(KeepTogether(header_block))
+            if not devs:
+                flow.append(Paragraph(
+                    "<i>No devices captured at this location yet.</i>",
+                    s["caption"],
+                ))
+                continue
+            # Top-N by best_rssi (closer to 0 = stronger). Cap at 15
+            # so a busy cafe doesn't sprawl across multiple pages —
+            # the Devices tab has the full list.
+            top_devs = sorted(
+                devs,
+                key=lambda d: d.get("best_rssi") if d.get("best_rssi") is not None else -999,
+                reverse=True,
+            )[:15]
+            rows: list[tuple] = []
+            for d in top_devs:
+                det = d.get("details") or {}
+                name = det.get("ssid") or det.get("name") or ""
+                vendor = det.get("vendor") or ""
+                rows.append((
+                    db.kind_label(d.get("kind", ""), det.get("address_type"), det),
+                    _cell(d.get("device_id", ""), mono=True),
+                    _cell(name),
+                    _cell(vendor),
+                    f"{d.get('best_rssi', '')} dBm" if d.get("best_rssi") is not None else "",
+                    str(d.get("seen_count") or 0),
+                ))
+            flow.append(Spacer(1, 6))
+            flow.append(_table(
+                ["Kind", "Device ID", "Name / SSID", "Vendor", "Best RSSI", "Seen"],
+                rows,
+                col_widths=[1.10 * inch, 1.55 * inch, 1.45 * inch,
+                             1.20 * inch, 0.80 * inch, 0.55 * inch],
+            ))
+
     _step("Building PDF document")
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=letter,
         leftMargin=0.6 * inch, rightMargin=0.6 * inch,
-        topMargin=0.6 * inch, bottomMargin=0.6 * inch,
+        topMargin=0.6 * inch,
+        # Slightly larger bottom margin so flowables don't crowd the
+        # 'page N of M' footer the NumberedCanvas draws at y=0.35".
+        bottomMargin=0.7 * inch,
         title="Gjallarhorn Sensor Report",
     )
-    doc.build(flow)
+    doc.build(flow, canvasmaker=_NumberedCanvas)
     return buf.getvalue()
