@@ -164,19 +164,88 @@ fi
 # standard install locations (incl. /usr/local/bin) directly, so PATH doesn't
 # need /usr/local/bin to be set in the gjallarhorn process's environment —
 # the binary will be found regardless of how the app is launched.
-HACKRF_BUILD_PKGS=(hackrf libhackrf-dev libfftw3-dev cmake build-essential git)
 BTLE_SRC_DIR="$SCRIPT_DIR/vendor/BTLE"
 
+# Returns 0 if libhackrf headers are already discoverable. Used to skip
+# the apt install of hackrf / libhackrf-dev when the operator has
+# libhackrf installed from upstream source (or a PPA) — Ubuntu's
+# packaged versions often conflict with anything newer than the LTS
+# baseline.
+_libhackrf_headers_present() {
+    [[ -f /usr/include/libhackrf/hackrf.h \
+       || -f /usr/local/include/libhackrf/hackrf.h ]]
+}
+
+_libfftw_present() {
+    [[ -f /usr/include/fftw3.h \
+       || -f /usr/local/include/fftw3.h ]]
+}
+
 install_hackrf_stack() {
-    log "installing HackRF build deps: ${HACKRF_BUILD_PKGS[*]}"
-    if have apt-get; then
-        run_sudo apt-get install -y "${HACKRF_BUILD_PKGS[@]}"
+    # Build only the package list we actually need so a pre-existing
+    # libhackrf install (newer than Ubuntu's, common via PPA / source
+    # build) doesn't trip apt into a 'held broken packages' error
+    # trying to downgrade libhackrf0.
+    local apt_pkgs=()
+    have cmake || apt_pkgs+=(cmake)
+    have make  || apt_pkgs+=(build-essential)
+    have git   || apt_pkgs+=(git)
+    _libfftw_present || apt_pkgs+=(libfftw3-dev)
+    if ! have hackrf_info; then
+        apt_pkgs+=(hackrf)
+    fi
+    if ! _libhackrf_headers_present; then
+        apt_pkgs+=(libhackrf-dev)
+    fi
+
+    if [[ ${#apt_pkgs[@]} -eq 0 ]]; then
+        log "HackRF build deps already satisfied — skipping apt"
+    elif have apt-get; then
+        log "installing HackRF build deps: ${apt_pkgs[*]}"
+        if ! run_sudo apt-get install -y "${apt_pkgs[@]}"; then
+            warn ""
+            warn "apt install failed — likely a libhackrf version conflict."
+            warn "  Your system probably has libhackrf0 from a PPA or a source"
+            warn "  build that's newer than the version Ubuntu's 'hackrf' and"
+            warn "  'libhackrf-dev' packages pin. Two ways out:"
+            warn ""
+            warn "  A) Keep your newer libhackrf, install headers from upstream:"
+            warn "       git clone https://github.com/greatscottgadgets/hackrf"
+            warn "       cd hackrf/host && mkdir build && cd build"
+            warn "       cmake .. && make && sudo make install"
+            warn ""
+            warn "  B) Downgrade libhackrf0 to Ubuntu's pinned version:"
+            warn "       sudo apt install --allow-downgrades \\"
+            warn "         libhackrf0=2023.01.1-9build1 hackrf libhackrf-dev"
+            warn ""
+            warn "  Once libhackrf headers are present, re-run:"
+            warn "    ./setup.sh --with-hackrf"
+            warn ""
+            return 1
+        fi
     elif have dnf; then
-        run_sudo dnf install -y hackrf-devel fftw-devel cmake gcc-c++ git
+        run_sudo dnf install -y hackrf-devel fftw-devel cmake gcc-c++ git || \
+            { warn "dnf install failed — install manually"; return 1; }
     elif have pacman; then
-        run_sudo pacman -S --needed --noconfirm hackrf fftw cmake base-devel git
+        run_sudo pacman -S --needed --noconfirm hackrf fftw cmake base-devel git || \
+            { warn "pacman install failed — install manually"; return 1; }
     else
-        warn "no supported package manager — install manually: ${HACKRF_BUILD_PKGS[*]}"
+        warn "no supported package manager — install hackrf, libhackrf-dev,"
+        warn "  libfftw3-dev, cmake, build-essential, and git manually."
+        return 1
+    fi
+
+    # Final pre-build sanity check: headers must be present or cmake
+    # will bomb with a less helpful error. Bail with guidance.
+    if ! _libhackrf_headers_present; then
+        warn "libhackrf headers still not found after install attempt."
+        warn "  Cannot build btle_rx without hackrf.h. See guidance above."
+        return 1
+    fi
+    if ! _libfftw_present; then
+        warn "libfftw3 headers still not found after install attempt."
+        warn "  Cannot build btle_rx without fftw3.h. See guidance above."
+        return 1
     fi
 
     # plugdev group so libusb can talk to the dongle without root.
@@ -225,7 +294,11 @@ install_hackrf_stack() {
 }
 
 if [[ "$WITH_HACKRF" -eq 1 ]]; then
-    install_hackrf_stack
+    # Swallow install failure so the rest of setup.sh still completes —
+    # the operator gets a clear diagnostic from install_hackrf_stack
+    # explaining what to do (libhackrf version conflict, etc.) and the
+    # core Gjallarhorn install isn't blocked on an optional component.
+    install_hackrf_stack || warn "HackRF setup skipped — see messages above"
 elif have hackrf_info; then
     log "hackrf_info detected — HackRF BLE scanner is available"
     if ! have btle_rx && [[ ! -x /usr/local/bin/btle_rx ]]; then
