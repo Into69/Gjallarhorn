@@ -25,3 +25,15 @@ tile-cache/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Vendored third-party source — setup.sh --with-hackrf clones
+# JiaoXianjun/BTLE into vendor/BTLE for the btle_rx build, but
+# the repo itself isn't ours to ship.
+vendor/
+
+# HackRF capture artifacts — some builds of btle_rx and the
+# hackrf_* tools drop a log file named after the dongle's 32-hex
+# serial number into CWD when launched. Gitignore doesn't support
+# {n} repetition, so we spell out the 32-char hex form to avoid
+# accidentally ignoring unrelated short filenames.
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
