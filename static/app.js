@@ -4319,13 +4319,31 @@ function enterEditRuleMode(rule) {
   // wifi_association rules round-trip via the two-input composer; show
   // it, populate datalists, and split the stored 'client@ssid' back
   // into its parts so the operator sees the same form they originally
-  // submitted.
+  // submitted. gps_state uses a single-select dropdown — load the
+  // stored value into the picker so editing reflects the saved state.
   const isWifiAssoc = rule.match_type === "wifi_association";
+  const isGpsState = rule.match_type === "gps_state";
   const valLabel = $("#rule-match-value-label");
   const composer = $("#rule-wifi-assoc");
-  if (valLabel) valLabel.hidden = isWifiAssoc;
+  const gpsLabel = $("#rule-gps-state-label");
+  if (valLabel) valLabel.hidden = isWifiAssoc || isGpsState;
   if (composer) composer.hidden = !isWifiAssoc;
-  mv.required = !isWifiAssoc;
+  if (gpsLabel) gpsLabel.hidden = !isGpsState;
+  mv.required = !isWifiAssoc && !isGpsState;
+  if (isGpsState) {
+    const sel = $("#rule-gps-state-select");
+    if (sel) {
+      // Saved value may be one of the canonical names or a free-text
+      // combination ('lost', 'fix_2d', 'disconnected,no_fix', etc).
+      // Try to match the exact value first; fall back to 'any' if the
+      // operator typed a combination the picker doesn't have a single
+      // option for — they can still edit the underlying field if they
+      // need the multi-state form back.
+      const stored = (rule.match_value || "").trim().toLowerCase();
+      const opt = Array.from(sel.options).find(o => o.value === stored);
+      sel.value = opt ? stored : "any";
+    }
+  }
   if (isWifiAssoc) {
     _setWifiAssocFromValue(rule.match_value);
     _populateWifiAssocLists();
@@ -4464,11 +4482,19 @@ function applyMatchTypeUI(matchType) {
   // scanned data. Form submit/edit logic round-trips the pair to and
   // from the underlying match_value string.
   const isWifiAssoc = matchType === "wifi_association";
+  // gps_state swaps the plain Value field for a single-select dropdown
+  // of the valid state names + shortcut aliases — operators rarely need
+  // multi-state combinations and a typed comma list is more error-prone
+  // than a picker. The select syncs to the hidden match_value on every
+  // change, same shape as the wifi_association composer.
+  const isGpsState = matchType === "gps_state";
   const valLabel = $("#rule-match-value-label");
   const composer = $("#rule-wifi-assoc");
-  if (valLabel) valLabel.hidden = isWifiAssoc;
-  v.required = !isWifiAssoc;
+  const gpsLabel = $("#rule-gps-state-label");
+  if (valLabel) valLabel.hidden = isWifiAssoc || isGpsState;
+  v.required = !isWifiAssoc && !isGpsState;
   if (composer) composer.hidden = !isWifiAssoc;
+  if (gpsLabel) gpsLabel.hidden = !isGpsState;
   if (isWifiAssoc) {
     // Auto-set the kind filter to wifi_client since this rule only
     // fires on probe-request sightings.
@@ -4479,9 +4505,27 @@ function applyMatchTypeUI(matchType) {
   // Always swap the value to the new type's default (or clear it for free-text
   // types) so a stale value from the previous type can't accidentally submit.
   v.value = MATCH_TYPE_DEFAULTS[matchType] || "";
+  // Mirror the default into the GPS picker so the visible UI matches
+  // the underlying match_value the form will submit.
+  if (isGpsState) {
+    const sel = $("#rule-gps-state-select");
+    if (sel) sel.value = v.value || "any";
+  }
 }
 $("#rule-match-type").addEventListener("change", (e) => applyMatchTypeUI(e.target.value));
 applyMatchTypeUI($("#rule-match-type").value);
+
+// gps_state picker → underlying match_value. The select holds one of
+// the canonical state names / aliases the backend's
+// _parse_gps_state_value() accepts; the form's submit handler keeps
+// reading from #rule-match-value, so the rest of the pipeline stays
+// unchanged. If the operator picked the 'any' shortcut we leave the
+// match_value as-is rather than blanking it — both work, but a literal
+// 'any' round-trips visibly through the rules table.
+$("#rule-gps-state-select")?.addEventListener("change", (e) => {
+  const mv = $("#rule-match-value");
+  if (mv) mv.value = e.target.value || "any";
+});
 
 // wifi_association composer: keep the underlying match_value in sync
 // with the two-input UI so the existing form submit path still sees a

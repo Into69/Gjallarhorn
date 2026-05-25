@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260525e" />
+  <link rel="stylesheet" href="/static/style.css?v=20260525f" />
 </head>
 <body>
   <header>
@@ -746,6 +746,17 @@
                 fires when a client *advertises interest* in the named network.
               </p>
             </div>
+            <label id="rule-gps-state-label" hidden>Fire on
+              <select id="rule-gps-state-select" data-help="Pick which GPS state transition this rule fires on. 'Any state change' fires on every transition; 'Lost' fires when GPS becomes disconnected or loses its fix; 'Acquired' fires when a 2D or 3D fix is obtained.">
+                <option value="any">Any state change</option>
+                <option value="lost">Lost — gpsd disconnected or no fix</option>
+                <option value="acquired">Acquired — 2D or 3D fix obtained</option>
+                <option value="disconnected">Disconnected — gpsd connection lost</option>
+                <option value="no_fix">No fix — mode 0/1 (modem responding, no position)</option>
+                <option value="fix_2d">2D fix — mode 2 (position, no altitude)</option>
+                <option value="fix_3d">3D fix — mode 3 (position + altitude)</option>
+              </select>
+            </label>
             <label>Location
               <select name="location_id" id="rule-location">
                 <option value="">any</option>
@@ -1510,6 +1521,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260525e"></script>
+  <script src="/static/app.js?v=20260525f"></script>
 </body>
 </html>
