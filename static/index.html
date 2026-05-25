@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260524e" />
+  <link rel="stylesheet" href="/static/style.css?v=20260524f" />
 </head>
 <body>
   <header>
@@ -1102,8 +1102,22 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <dt>Packets</dt><dd id="hackrf-packet-count">—</dd>
             <dt>Last packet</dt><dd id="hackrf-last-packet">—</dd>
             <dt>btle_rx binary</dt><dd id="hackrf-binary">—</dd>
+            <dt>btle_rx output</dt><dd id="hackrf-line-counts">—</dd>
             <dt>Last error</dt><dd id="hackrf-last-error" class="muted">—</dd>
           </dl>
+          <details id="hackrf-debug">
+            <summary>Recent btle_rx output (debug)</summary>
+            <p class="hint small">
+              The most recent lines btle_rx printed — useful when the
+              scanner runs but no packets show up (likely a parser
+              mismatch). Stdout lines below the parser miss; stderr
+              shows init logs / hardware messages.
+            </p>
+            <h4 class="subsection-h">stdout (last 40 lines)</h4>
+            <pre id="hackrf-recent-stdout" class="code-block small">—</pre>
+            <h4 class="subsection-h">stderr (last 20 lines)</h4>
+            <pre id="hackrf-recent-stderr" class="code-block small">—</pre>
+          </details>
         </fieldset>
         </div>
 
@@ -1483,6 +1497,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260524e"></script>
+  <script src="/static/app.js?v=20260524f"></script>
 </body>
 </html>

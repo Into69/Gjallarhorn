@@ -2581,6 +2581,35 @@ async function refreshHackrfStatus() {
     errEl.textContent = s.last_error ? s.last_error : "—";
     errEl.classList.toggle("muted", !s.last_error);
   }
+  // Stdout / stderr line counters + recent-output ring buffers so the
+  // operator (and us) can see whether btle_rx is producing output at
+  // all and what shape it's in — distinguishes 'no output / wrong
+  // binary' from 'output but parser didn't match'.
+  const lineCountsEl = $("#hackrf-line-counts");
+  if (lineCountsEl) {
+    if (s.binary_available || s.running || s.last_error) {
+      const out = s.stdout_line_count ?? 0;
+      const err = s.stderr_line_count ?? 0;
+      const pkt = s.packet_count ?? 0;
+      // 'parsed N of M' tells the operator at a glance whether our
+      // parser is matching what btle_rx prints. A high stdout count
+      // with zero packets means the format doesn't match — paste
+      // the recent-output panel below into a bug report.
+      lineCountsEl.innerHTML = `<span class="mono">${pkt.toLocaleString()} parsed of ${out.toLocaleString()} stdout · ${err.toLocaleString()} stderr</span>`;
+    } else {
+      lineCountsEl.textContent = "—";
+    }
+  }
+  const stdoutEl = $("#hackrf-recent-stdout");
+  if (stdoutEl) {
+    const lines = s.recent_lines || [];
+    stdoutEl.textContent = lines.length ? lines.join("\n") : "(no stdout lines captured)";
+  }
+  const stderrEl = $("#hackrf-recent-stderr");
+  if (stderrEl) {
+    const lines = s.recent_stderr || [];
+    stderrEl.textContent = lines.length ? lines.join("\n") : "(no stderr lines captured)";
+  }
 
   // ── Map sidebar card ──
   // Hidden by default; only revealed when the toolchain is installed

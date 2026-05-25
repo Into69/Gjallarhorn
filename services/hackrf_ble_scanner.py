@@ -32,6 +32,7 @@ import os
 import re
 import shutil
 import time
+from collections import deque
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
@@ -135,6 +136,16 @@ class HackRFBleScanner:
         # the operator can fix the issue and re-test without editing
         # settings.
         self._disabled_channels: set[int] = set()
+        # Ring buffer of recent stdout lines (parsed AND unparsed) for
+        # debugging the parser. btle_rx's text format varies between
+        # builds; capturing what it actually emits lets the operator
+        # share samples without needing log access. _stdout_line_count
+        # tracks all lines so we can tell 'no output' from 'output but
+        # parser didn't match'.
+        self._recent_lines: deque = deque(maxlen=40)
+        self._stdout_line_count: int = 0
+        self._stderr_line_count: int = 0
+        self._recent_stderr: deque = deque(maxlen=20)
 
     # ── status surface ──────────────────────────────────────────────
     @property
@@ -183,6 +194,15 @@ class HackRFBleScanner:
             "last_packet_at": self._last_packet_at,
             "started_at": self._started_at,
             "last_error": self._last_error,
+            # Debug surface: total stdout / stderr lines seen since
+            # start(), and a ring of the most recent ones. Lets the
+            # operator see whether btle_rx is producing output at all
+            # and what shape it's in (so we can confirm the parser is
+            # matching the actual format).
+            "stdout_line_count": self._stdout_line_count,
+            "stderr_line_count": self._stderr_line_count,
+            "recent_lines": list(self._recent_lines),
+            "recent_stderr": list(self._recent_stderr),
         }
 
     # ── lifecycle ───────────────────────────────────────────────────
@@ -219,6 +239,10 @@ class HackRFBleScanner:
         self._stop.clear()
         self._last_error = None
         self._packet_count = 0
+        self._stdout_line_count = 0
+        self._stderr_line_count = 0
+        self._recent_lines.clear()
+        self._recent_stderr.clear()
         self._started_at = time.time()
         self._disabled_channels.clear()
         self._task = asyncio.create_task(self._run_loop(), name="hackrf-ble-scanner")
@@ -370,6 +394,8 @@ class HackRFBleScanner:
             text = line.decode("utf-8", errors="replace").rstrip()
             if not text:
                 continue
+            self._stderr_line_count += 1
+            self._recent_stderr.append(text)
             # btle_rx is chatty on init ("hackrf_open returned 0", board
             # info dumps); only log lines that look like errors.
             lower = text.lower()
@@ -379,23 +405,51 @@ class HackRFBleScanner:
                             "btle_rx-stderr", text)
 
     # ── output parser ───────────────────────────────────────────────
-    # btle_rx prints one decoded packet per line. The exact column set
-    # depends on which build, but the fields we care about appear in
-    # readable form:
-    #   "AdvA: aa:bb:cc:dd:ee:ff"   (advertiser MAC)
-    #   "RSSI: -47"                 (dBm)
-    #   "PDU_Type: ADV_IND"         (advertising mode)
-    #   "AdvData: 02 01 06 ..."     (hex octets of the advertising payload)
-    _RE_ADVA = re.compile(r"AdvA[:\s=]+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})")
-    _RE_RSSI = re.compile(r"RSSI[:\s=]+(-?\d+)")
-    _RE_PDU = re.compile(r"PDU[_\s]Type[:\s=]+([A-Za-z_]+)")
-    _RE_ADVDATA = re.compile(r"Adv(?:Data|_Data)[:\s=]+([0-9A-Fa-f\s]+?)(?:\s{2,}|$)")
+    # btle_rx forks vary in output format. We try several patterns
+    # rather than picking one and breaking on the others. Anything
+    # that doesn't parse still lands in the recent-lines ring buffer
+    # so the operator can share samples for future parser tuning.
+    #
+    # Known shapes:
+    #   "AdvA: aa:bb:cc:dd:ee:ff"  (labelled form, some forks)
+    #   "ADDR:aabbccddeeff"         (compact form, mainline btle_rx)
+    #   "ADV_A=aa:bb:cc:dd:ee:ff"
+    # We also accept any 6-octet MAC with or without colons in a
+    # space-delimited token, because btle_rx mainline emits compact
+    # 12-hex AdvA fields without separators.
+    _RE_LABELED_MAC = re.compile(
+        r"(?:AdvA|ADV_?A|ADDR(?:ESS)?|Mac|MAC)[\s:=]+"
+        r"((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|[0-9A-Fa-f]{12})"
+    )
+    _RE_RSSI = re.compile(r"RSSI[\s:=]+(-?\d+)")
+    _RE_PDU = re.compile(
+        r"(?:PDU[_\s]?Type|type|PDU)[\s:=]+([A-Za-z][A-Za-z_]*)"
+    )
+    # AdvData / Payload / Data — accept hex bytes separated by space
+    # or run together, until we hit two consecutive whitespace runs or
+    # end-of-line. Captures the rest of the line greedily; the
+    # consumer strips whitespace.
+    _RE_ADVDATA = re.compile(
+        r"(?:AdvData|Adv_Data|Payload|Data)[\s:=]+([0-9A-Fa-f\s]+?)\s*$"
+    )
+
+    @staticmethod
+    def _normalize_mac(raw: str) -> str:
+        """Accept aa:bb:cc:dd:ee:ff or aabbccddeeff, return upper-colon."""
+        clean = raw.replace(":", "").upper()
+        if len(clean) != 12:
+            return raw.upper()
+        return ":".join(clean[i:i + 2] for i in range(0, 12, 2))
 
     async def _handle_line(self, line: str, ch: int) -> None:
-        m_mac = self._RE_ADVA.search(line)
+        self._stdout_line_count += 1
+        # Record every line (parsed or not) so a debugging operator
+        # can confirm output shape from the UI without log access.
+        self._recent_lines.append(line)
+        m_mac = self._RE_LABELED_MAC.search(line)
         if not m_mac:
             return
-        mac = m_mac.group(1).upper()
+        mac = self._normalize_mac(m_mac.group(1))
         m_rssi = self._RE_RSSI.search(line)
         rssi = int(m_rssi.group(1)) if m_rssi else -100
         if rssi < self._min_rssi:
@@ -403,7 +457,8 @@ class HackRFBleScanner:
         m_pdu = self._RE_PDU.search(line)
         pdu_type = m_pdu.group(1) if m_pdu else None
         m_data = self._RE_ADVDATA.search(line)
-        adv_data = (m_data.group(1).replace(" ", "") if m_data else "")
+        adv_data = (m_data.group(1).replace(" ", "").replace(":", "")
+                    if m_data else "")
         self._packet_count += 1
         self._last_packet_at = time.time()
         if self._cb is None:
