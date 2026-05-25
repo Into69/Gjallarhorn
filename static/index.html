@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260524h" />
+  <link rel="stylesheet" href="/static/style.css?v=20260525a" />
 </head>
 <body>
   <header>
@@ -522,6 +522,9 @@
             <option value="bluetooth">BLE (any)</option>
             <option value="bluetooth:public">BLE (public)</option>
             <option value="bluetooth:random">BLE (random)</option>
+            <option value="bluetooth:hackrf" title="BLE devices the HackRF SDR scanner has captured (regardless of whether the host adapter also saw them).">BLE (via HackRF)</option>
+            <option value="bluetooth:hackrf-only" title="BLE devices only the HackRF SDR scanner has captured — not surfaced by the host BLE adapter. The headline value of the SDR backend.">BLE (HackRF only)</option>
+            <option value="bluetooth:bleak-only" title="BLE devices only the host adapter (bleak) has captured — not yet picked up by the HackRF SDR scanner.">BLE (host only)</option>
             <option value="bluetooth_classic">Bluetooth Classic</option>
             <option value="wifi_client">wifi client (probe)</option>
           </select>
@@ -1497,6 +1500,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260524h"></script>
+  <script src="/static/app.js?v=20260525a"></script>
 </body>
 </html>

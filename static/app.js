@@ -920,15 +920,27 @@ async function _refreshDevicesInner() {
   await loadLocationOptions();
   const id = $("#dev-location").value;
   if (!id) return;
-  // The Kind filter accepts compound 'bluetooth:public' / 'bluetooth:random'
-  // pseudo-kinds in addition to the real DB kinds. The server side only
-  // knows wifi/bluetooth/wifi_client, so we send the base kind and
-  // post-filter rows by address_type in JS.
+  // The Kind filter accepts compound 'bluetooth:<sub>' pseudo-kinds in
+  // addition to the real DB kinds:
+  //   bluetooth:public / random   — filter by adv address_type
+  //   bluetooth:hackrf            — devices the HackRF SDR has seen
+  //   bluetooth:hackrf-only       — only the HackRF, not bleak
+  //   bluetooth:bleak-only        — only the host adapter, not HackRF
+  // The server only knows wifi/bluetooth/wifi_client, so we send the
+  // base kind and post-filter in JS based on details.address_type or
+  // details._sources.
   const rawKind = $("#dev-kind").value;
   let kind = rawKind;
-  let bleAddrFilter = null;
+  let bleAddrFilter = null;        // public / random
+  let bleSourceFilter = null;      // hackrf / hackrf-only / bleak-only
+  const _SOURCE_SUBS = new Set(["hackrf", "hackrf-only", "bleak-only"]);
   if (rawKind && rawKind.startsWith("bluetooth:")) {
-    bleAddrFilter = rawKind.split(":")[1];
+    const sub = rawKind.split(":")[1];
+    if (_SOURCE_SUBS.has(sub)) {
+      bleSourceFilter = sub;
+    } else {
+      bleAddrFilter = sub;
+    }
     kind = "bluetooth";
   }
   const q = kind ? `?kind=${kind}` : "";
@@ -944,6 +956,18 @@ async function _refreshDevicesInner() {
     devices = devices.filter(d => {
       const at = (d.details && d.details.address_type) || "";
       return at === bleAddrFilter;
+    });
+  }
+  if (bleSourceFilter) {
+    devices = devices.filter(d => {
+      const sources = (d.details && Array.isArray(d.details._sources))
+        ? d.details._sources : [];
+      const hasHackrf = sources.includes("hackrf");
+      const hasBleak = sources.includes("bleak");
+      if (bleSourceFilter === "hackrf")       return hasHackrf;
+      if (bleSourceFilter === "hackrf-only")  return hasHackrf && !hasBleak;
+      if (bleSourceFilter === "bleak-only")   return hasBleak && !hasHackrf;
+      return true;
     });
   }
   // Surface the Location column only when the operator is looking
