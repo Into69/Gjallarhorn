@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260521g" />
+  <link rel="stylesheet" href="/static/style.css?v=20260524b" />
 </head>
 <body>
   <header>
@@ -821,6 +821,7 @@
           <button type="button" class="settings-nav-item" data-section="sensors">Sensors</button>
           <button type="button" class="settings-nav-item" data-section="gps">GPS</button>
           <button type="button" class="settings-nav-item" data-section="probe">Probe scanner</button>
+          <button type="button" class="settings-nav-item" data-section="hackrf">HackRF BLE</button>
           <button type="button" class="settings-nav-item" data-section="clustering">Location clustering</button>
           <button type="button" class="settings-nav-item" data-section="filtering">Filtering</button>
           <button type="button" class="settings-nav-item" data-section="retention">Retention</button>
@@ -1010,6 +1011,63 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <dt>Status</dt><dd id="probe-state">—</dd>
             <dt>tshark</dt><dd id="probe-tshark">—</dd>
             <dt>scapy</dt><dd id="probe-scapy">—</dd>
+          </dl>
+        </fieldset>
+        </div>
+
+        <div class="settings-section" data-section="hackrf">
+        <fieldset>
+          <legend>HackRF BLE — SDR-driven advertising sniffer</legend>
+          <p class="hint">
+            Wraps <code>btle_rx</code> from
+            <a href="https://github.com/JiaoXianjun/BTLE" target="_blank" rel="noopener">JiaoXianjun/BTLE</a>
+            to capture BLE advertising-channel packets via a HackRF One. Runs
+            alongside the regular bleak scanner — the same MAC seen by both
+            paths collapses into one row. PHY-level capture sees devices the
+            OS stack filters out (weak / fragmented / legacy modes) and
+            absolute-dBm RSSI rather than the controller's massaged value.
+          </p>
+          <p class="hint">
+            Requires <code>hackrf-tools</code> + <code>btle_rx</code> on the
+            host PATH. Build hints are in <code>setup.sh</code>. Silently
+            disabled when the binary isn't installed — toggle on after
+            install to retry without restarting.
+          </p>
+          <label class="mission-switch">
+            <span class="mission-switch-label">Enable HackRF BLE scanner</span>
+            <input type="checkbox" name="hackrf_ble_enabled" role="switch" />
+            <span class="mission-switch-track" aria-hidden="true">
+              <span class="mission-switch-thumb"></span>
+            </span>
+          </label>
+          <label>HackRF serial (leave blank to use first detected)
+            <select name="hackrf_ble_serial" id="set-hackrf-serial">
+              <option value="">— first detected —</option>
+            </select>
+          </label>
+          <label>VGA gain (0–62 dB, 2 dB steps)
+            <input type="number" name="hackrf_ble_gain" min="0" max="62" step="2"
+                   data-help="HackRF variable-gain amp setting. Higher = more sensitivity (more reach) but also more noise. 40 is a good starting point indoors; drop to 20–30 in dense RF environments to keep packet decoding clean." />
+          </label>
+          <label>Minimum RSSI (dBm)
+            <input type="number" name="hackrf_ble_min_rssi" min="-120" max="-20"
+                   data-help="Drop packets weaker than this. SDR captures pull in everything the antenna sees including chip-edge noise; -90 keeps the signal-to-noise ratio reasonable." />
+          </label>
+          <label>Channel dwell (ms)
+            <input type="number" name="hackrf_ble_hop_ms" min="200" max="5000" step="50"
+                   data-help="Time spent on each advertising channel before hopping. Must be ≥200 ms (the btle_rx spawn cost is ~50–100 ms, so below that the loop is mostly waiting for the process to come up). 1000 ms is comfortable: catches advertisers with intervals up to ~1 s on each channel. Bump higher for low-power tags that advertise every few seconds." />
+          </label>
+          <label>Channels (CSV — BLE advertising indexes 37, 38, 39)
+            <input type="text" name="hackrf_ble_channels"
+                   data-help="Which advertising channels to scan. BLE defines exactly three: 37 (2.402 GHz), 38 (2.426 GHz), 39 (2.480 GHz). Leave as 37,38,39 unless you have a reason to focus on one band (e.g. 37 only is the most aggressively-used in some peripherals)." />
+          </label>
+          <dl id="hackrf-stats">
+            <dt>Status</dt><dd id="hackrf-state">—</dd>
+            <dt>Current channel</dt><dd id="hackrf-current-channel">—</dd>
+            <dt>Packets</dt><dd id="hackrf-packet-count">—</dd>
+            <dt>Last packet</dt><dd id="hackrf-last-packet">—</dd>
+            <dt>btle_rx binary</dt><dd id="hackrf-binary">—</dd>
+            <dt>Last error</dt><dd id="hackrf-last-error" class="muted">—</dd>
           </dl>
         </fieldset>
         </div>
@@ -1294,6 +1352,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             <ul class="about-features">
               <li><b>Wi-Fi 802.11 capture</b> — active AP scan (iw / nmcli) plus passive client tracking on a monitor-mode interface. Probe-reqs, assoc / reassoc / auth, and data frames all contribute — clients linked to an AP surface even when they aren't sending directed probes.</li>
               <li><b>Bluetooth</b> — BLE advertising capture via bleak; optional BR/EDR inquiry via BlueZ with Class-of-Device decoding. Dual-mode devices with the same MAC merge into a single row carrying both transports' evidence.</li>
+              <li><b>HackRF BLE (optional SDR)</b> — wraps <a href="https://github.com/JiaoXianjun/BTLE" target="_blank" rel="noopener">JiaoXianjun/BTLE</a>'s <code>btle_rx</code> to capture BLE advertising-channel packets directly off the PHY via a HackRF One. Runs alongside the bleak path; same MAC seen by both collapses into one row. Surfaces devices the OS stack filters out, with absolute-dBm RSSI rather than the controller's massaged value.</li>
               <li><b>GPS clustering</b> — gpsd fix stream resolves into auto-clustered location bubbles, with manually drawn geofences and merge-by-overlap.</li>
               <li><b>Missions</b> — discrete recording sessions with lifecycle, history, live activity feed, and on-map pill.</li>
               <li><b>Alert rules</b> — value-based, follower-detection (cross-location, persistent companion, cross-kind co-travel), arrival-after-gap, absence-gap, sustained presence flip-flop (with alias groups for multi-MAC devices), and Wi-Fi association (probed or linked). Per-rule latching, Discord delivery, audible alarm, per-row dismissal that persists across restart.</li>
@@ -1359,6 +1418,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
               <li><b>aiosqlite</b> — SQLite with WAL journal mode.</li>
               <li><b>bleak</b> — BLE advertising / BlueZ Classic inquiry.</li>
               <li><b>scapy</b> &amp; <b>tshark</b> — 802.11 frame capture backends for the probe scanner.</li>
+              <li><b><a href="https://github.com/JiaoXianjun/BTLE" target="_blank" rel="noopener">JiaoXianjun/BTLE</a></b> — <code>btle_rx</code> (optional) for SDR-driven BLE advertising capture via HackRF.</li>
               <li><b>gpsd-py3</b> — GPS fix stream parsing.</li>
               <li><b>ReportLab</b> — PDF report generation.</li>
               <li><b>Leaflet</b> + OpenStreetMap tiles — the in-app map and report mini-maps.</li>
@@ -1388,6 +1448,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260521g"></script>
+  <script src="/static/app.js?v=20260524b"></script>
 </body>
 </html>

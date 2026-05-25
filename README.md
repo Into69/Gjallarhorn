@@ -19,6 +19,13 @@ automatically opened.
   encryption suite, cipher, auth, capabilities, beacon interval, OUI;
   BT MAC, name, RSSI, TX power, manufacturer data, service UUIDs/data,
   appearance, address type).
+- **HackRF BLE (optional SDR)** — wraps
+  [JiaoXianjun/BTLE](https://github.com/JiaoXianjun/BTLE)'s `btle_rx`
+  to capture BLE advertising-channel packets directly off the PHY via
+  a HackRF One. Runs alongside the bleak path; the same MAC seen by
+  both paths collapses into one row. Surfaces devices the OS stack
+  filters out (weak / fragmented / legacy modes) and reports absolute-
+  dBm RSSI rather than the controller's massaged value.
 - **Locations tab** — list all locations, rename them, force-open a
   new one at the current fix.
 - **Settings tab** — map provider (OSM, OpenTopo, Carto Light/Dark,
@@ -48,6 +55,34 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(readlink -f .venv/bin/python3)
 
 Bluetooth (bleak / BlueZ) usually works without elevation if your user
 is in the `bluetooth` group; otherwise run as root.
+
+### Optional: HackRF BLE scanner
+
+To enable the SDR-driven BLE path (HackRF One + `btle_rx` from
+[JiaoXianjun/BTLE](https://github.com/JiaoXianjun/BTLE)):
+
+```bash
+# 1. Build deps + hackrf user tools
+sudo apt install -y hackrf libhackrf-dev libfftw3-dev cmake build-essential git
+
+# 2. USB access without root (log out / back in after)
+sudo usermod -aG plugdev "$USER"
+
+# 3. Confirm the dongle is detected
+hackrf_info        # should print 'Serial number: ...'
+
+# 4. Build + install btle_rx
+git clone https://github.com/JiaoXianjun/BTLE.git
+cd BTLE/host && mkdir build && cd build
+cmake .. && make
+sudo make install  # installs btle_rx to /usr/local/bin
+```
+
+Then in **Settings → HackRF BLE**: toggle **Enable HackRF BLE scanner**,
+optionally pick a serial (auto-detected via `hackrf_info`), and tune
+gain / minimum RSSI / channel dwell. The scanner stays silently
+disabled while `btle_rx` isn't on `PATH`, so it's safe to leave the
+toggle off on hosts without the SDR toolchain.
 
 ## Run
 
@@ -87,11 +122,14 @@ config.py                # settings persistence wrapper
 database.py              # aiosqlite schema + queries
 models.py                # pydantic models
 services/
-  gps_service.py         # gpsd polling
-  wifi_scanner.py        # `iw dev <iface> scan` parser
-  bluetooth_scanner.py   # bleak BLE scanner
-  location_manager.py    # haversine clustering
-  scan_orchestrator.py   # background loops
+  gps_service.py             # gpsd polling
+  wifi_scanner.py            # `iw dev <iface> scan` parser
+  bluetooth_scanner.py       # bleak BLE scanner
+  bluetooth_classic_scanner.py  # optional BlueZ BR/EDR inquiry
+  probe_scanner.py           # passive WiFi probe-req / mgmt / data capture
+  hackrf_ble_scanner.py      # optional SDR BLE capture via btle_rx
+  location_manager.py        # haversine clustering
+  scan_orchestrator.py       # background loops
 static/
   index.html             # tabs: map / devices / locations / settings
   app.js                 # leaflet + REST polling
@@ -112,3 +150,5 @@ static/
 | PATCH  | `/api/locations/{id}`                  | rename a location             |
 | GET    | `/api/locations/{id}/devices?kind=...` | devices seen at a location    |
 | POST   | `/api/locations/new`                   | force-open new location       |
+| GET    | `/api/hackrf/devices`                  | detected HackRF dongles       |
+| GET    | `/api/hackrf/status`                   | live HackRF BLE scanner state |

@@ -124,6 +124,14 @@ function activateSettingsSection(name) {
   // Save bar when an auxiliary panel is showing.
   const content = document.querySelector(".settings-content");
   if (content) content.dataset.activeSection = name;
+  // Section-specific side effects on open. The HackRF serial dropdown
+  // is populated lazily so we don't shell out to `hackrf_info` on
+  // every page load — only when the operator actually opens the
+  // panel — and we re-poll on each open in case they just plugged a
+  // dongle in.
+  if (name === "hackrf" && typeof refreshHackrfSerials === "function") {
+    refreshHackrfSerials();
+  }
   try { localStorage.setItem("settingsActiveSection", name); } catch {}
 }
 $$(".settings-nav-item").forEach(b => {
@@ -2471,6 +2479,133 @@ async function refreshScannerStatus() {
   updateScannerCard("wifi", s.wifi || {}, s.paused);
   updateScannerCard("bt", s.bluetooth || {}, s.paused);
   tickScannerRelativeTimes();
+}
+
+// ── HackRF BLE scanner status panel ─────────────────────────────────
+// Polls /api/hackrf/status (cheap — just a dict from the scanner
+// singleton, no DB hit) and paints the Settings-tab dl. The Sensors
+// panel + Mission tab pill share the same data source so a future
+// widget can just consume _hackrfLastStatus.
+let _hackrfLastStatus = null;
+let _hackrfPrevCount = null;
+let _hackrfPrevAt = null;
+let _hackrfRateText = "—";
+
+async function refreshHackrfStatus() {
+  let s;
+  try {
+    s = await api("/api/hackrf/status");
+  } catch (e) {
+    return;
+  }
+  _hackrfLastStatus = s;
+  const now = Date.now() / 1000;
+  const count = s.packet_count || 0;
+  if (_hackrfPrevCount !== null && _hackrfPrevAt !== null && s.running) {
+    const dt = now - _hackrfPrevAt;
+    const dn = count - _hackrfPrevCount;
+    if (dt > 0 && dn >= 0) {
+      const perMin = (dn / dt) * 60;
+      if (perMin >= 100) _hackrfRateText = `${perMin.toFixed(0)}/min`;
+      else if (perMin >= 10) _hackrfRateText = `${perMin.toFixed(1)}/min`;
+      else if (perMin > 0) _hackrfRateText = `${perMin.toFixed(2)}/min`;
+      else _hackrfRateText = "0/min";
+    }
+  } else if (!s.running) {
+    _hackrfRateText = "—";
+  }
+  _hackrfPrevCount = count;
+  _hackrfPrevAt = now;
+
+  const stateEl = $("#hackrf-state");
+  if (stateEl) {
+    if (s.running) {
+      const dwellHint = s.hop_ms ? ` · ${s.hop_ms} ms/ch` : "";
+      stateEl.innerHTML =
+        `<span class="pill ok">running${dwellHint}</span>`;
+    } else if (s.last_error) {
+      stateEl.innerHTML = `<span class="pill err">${escapeHtml(s.last_error)}</span>`;
+    } else if (!s.binary_available) {
+      stateEl.innerHTML =
+        `<span class="pill warn">btle_rx not installed — see setup.sh</span>`;
+    } else {
+      stateEl.innerHTML = `<span class="pill">disabled</span>`;
+    }
+  }
+  const chEl = $("#hackrf-current-channel");
+  if (chEl) {
+    if (s.running && s.current_channel != null) {
+      const disabled = (s.disabled_channels || []).length
+        ? ` <span class="muted small">(skipping ${(s.disabled_channels || []).join(", ")})</span>`
+        : "";
+      chEl.innerHTML = `ch ${s.current_channel}${disabled}`;
+    } else {
+      chEl.textContent = "—";
+    }
+  }
+  const pktEl = $("#hackrf-packet-count");
+  if (pktEl) {
+    pktEl.innerHTML = s.running
+      ? `${count.toLocaleString()} <span class="muted small">(${_hackrfRateText})</span>`
+      : "—";
+  }
+  const lastEl = $("#hackrf-last-packet");
+  if (lastEl) {
+    if (s.last_packet_at) {
+      const ago = Math.max(0, Date.now() / 1000 - s.last_packet_at);
+      lastEl.textContent = `${ago.toFixed(1)} s ago`;
+    } else {
+      lastEl.textContent = "—";
+    }
+  }
+  const binEl = $("#hackrf-binary");
+  if (binEl) {
+    binEl.innerHTML = s.binary_available
+      ? `<span class="pill ok">on PATH</span>`
+      : `<span class="pill warn">missing — install JiaoXianjun/BTLE</span>`;
+  }
+  const errEl = $("#hackrf-last-error");
+  if (errEl) {
+    errEl.textContent = s.last_error ? s.last_error : "—";
+    errEl.classList.toggle("muted", !s.last_error);
+  }
+}
+
+// Populate the HackRF serial dropdown from /api/hackrf/devices. Called
+// when the operator opens the HackRF settings section, since serials
+// don't change often — no need to poll.
+async function refreshHackrfSerials() {
+  const sel = $("#set-hackrf-serial");
+  if (!sel) return;
+  const prev = sel.value;
+  try {
+    const r = await api("/api/hackrf/devices");
+    sel.innerHTML = `<option value="">— first detected —</option>`;
+    for (const dev of (r.devices || [])) {
+      const opt = document.createElement("option");
+      opt.value = dev.serial;
+      // Truncate long serials in the visible label but keep the
+      // full value as the option's value so it round-trips.
+      opt.textContent = dev.serial.length > 12
+        ? `${dev.serial.slice(0, 8)}…${dev.serial.slice(-4)}`
+        : dev.serial;
+      sel.appendChild(opt);
+    }
+    if (r.error) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.disabled = true;
+      opt.textContent = `(${r.error})`;
+      sel.appendChild(opt);
+    }
+    // Restore the operator's prior selection if it still matches a
+    // detected device. Otherwise leave "first detected" selected.
+    if (prev && [...sel.options].some(o => o.value === prev)) {
+      sel.value = prev;
+    }
+  } catch (e) {
+    // Leave the dropdown as-is on transient errors.
+  }
 }
 
 function updateScannerCard(prefix, stats, paused) {
@@ -6362,6 +6497,11 @@ function _initFieldTooltips() {
   setInterval(refreshProbeStatus, 3000);
   refreshScannerStatus();
   setInterval(refreshScannerStatus, 3000);
+  // HackRF status polls slower — the scanner is minute-scale and the
+  // status surface only reflects packet_count / current_channel / last
+  // error, none of which need sub-3s freshness.
+  refreshHackrfStatus();
+  setInterval(refreshHackrfStatus, 5000);
   // Header clock — local time, ticks every second.
   const tickClock = () => {
     const el = $("#clock-status");

@@ -461,6 +461,53 @@ async def api_system_restart():
     return {"ok": True, "restarting": True}
 
 
+# ── HackRF BLE scanner ─────────────────────────────────────────────
+@app.get("/api/hackrf/devices")
+async def api_hackrf_devices():
+    """Detected HackRF dongles, via ``hackrf_info``. Powers the
+    Settings tab's serial picker. Returns an empty list (with a
+    diagnostic 'error' string) when hackrf_info isn't installed
+    or the call fails — the UI can render that as a hint."""
+    from services.hackrf_ble_scanner import hackrf_info_available
+    if not hackrf_info_available():
+        return {
+            "devices": [],
+            "error": "hackrf_info not on PATH (install the hackrf-tools package)",
+        }
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "hackrf_info",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            out_b, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return {"devices": [], "error": "hackrf_info timed out"}
+    except Exception as e:
+        return {"devices": [], "error": f"hackrf_info failed: {e}"}
+    text = out_b.decode("utf-8", errors="replace")
+    devices = []
+    # 'Serial number: 0000000000000000457863c81b29b50f' — one per device.
+    import re
+    for m in re.finditer(r"Serial number:\s+([0-9a-fA-F]+)", text):
+        devices.append({"serial": m.group(1)})
+    return {"devices": devices, "raw": text.strip()}
+
+
+@app.get("/api/hackrf/status")
+async def api_hackrf_status():
+    """Live status of the HackRF BLE scanner — current channel,
+    packet count, last error. Mirrors the shape of the probe-scanner
+    status so the Sensors panel can render both with the same widget."""
+    from services.hackrf_ble_scanner import hackrf_ble_scanner
+    return hackrf_ble_scanner.stats()
+
+
 # ---------- Interfaces / adapters ----------
 @app.get("/api/interfaces/wifi")
 async def api_wifi_interfaces():

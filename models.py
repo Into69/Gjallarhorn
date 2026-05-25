@@ -194,6 +194,28 @@ class AppSettings(BaseModel):
     # adapters); max 2000 ms (= "park on each channel for 2 s").
     probe_channel_hop_ms: int = 100
 
+    # HackRF BLE scanner — wraps btle_rx (JiaoXianjun/BTLE) as an SDR-
+    # backed BLE sniffer. Complementary to the bleak path: same MAC
+    # seen by both collapses into one row via db.upsert_bluetooth.
+    # Silently disabled when btle_rx isn't on PATH.
+    hackrf_ble_enabled: bool = False
+    # Serial of the HackRF to use when multiple are plugged in.
+    # Null / empty = let btle_rx pick the first device it finds.
+    hackrf_ble_serial: Optional[str] = None
+    # HackRF VGA gain (0-62 in 2-dB steps). Higher = more sensitivity
+    # but also more noise — 40 is a good starting point indoors.
+    hackrf_ble_gain: int = 40
+    # Drop packets below this dBm. SDR captures pull in everything the
+    # antenna sees including very weak / chip-edge packets; -90 keeps
+    # the signal-to-noise ratio reasonable.
+    hackrf_ble_min_rssi: int = -90
+    # Dwell per advertising channel. ≥200 ms — below that the per-hop
+    # btle_rx spawn cost (~50-100 ms) dominates. 1000 ms is comfortable.
+    hackrf_ble_hop_ms: int = 1000
+    # Which BLE advertising channels to scan. The BLE spec defines
+    # three: 37 (2.402 GHz), 38 (2.426 GHz), 39 (2.480 GHz).
+    hackrf_ble_channels: str = "37,38,39"
+
     # notifications
     discord_webhook_url: Optional[str] = None
     discord_username: str = "Gjallarhorn"

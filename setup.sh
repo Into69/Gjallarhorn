@@ -147,6 +147,47 @@ if have systemctl; then
     run_sudo systemctl enable --now gpsd        2>/dev/null || true
 fi
 
+# ---- 5b. HackRF BLE scanner (optional) --------------------------------------
+#
+# The HackRF BLE scanner wraps `btle_rx` from JiaoXianjun/BTLE as an SDR-backed
+# BLE advertising sniffer. Strictly optional — the bleak-based BLE scanner
+# covers ~90% of what most operators need. If you have a HackRF One and want
+# PHY-level capture (devices the OS filters out, absolute-dBm RSSI, raw
+# advertising bytes), follow the manual steps below. We don't automate the
+# cmake/make/install because it requires sudo, pulls in two dev packages,
+# and clones a third-party repo — best done deliberately by the operator.
+#
+#   1) Install the build deps + hackrf user tools:
+#        sudo apt install -y hackrf libhackrf-dev libfftw3-dev cmake build-essential git
+#
+#   2) Add yourself to the 'plugdev' group so libusb can talk to the HackRF
+#      without root, then log out / back in:
+#        sudo usermod -aG plugdev "$USER"
+#
+#   3) Confirm the HackRF is detected:
+#        hackrf_info       # should print 'Serial number: ...'
+#
+#   4) Clone + build btle_rx:
+#        git clone https://github.com/JiaoXianjun/BTLE.git
+#        cd BTLE/host
+#        mkdir build && cd build
+#        cmake ..
+#        make
+#        sudo make install   # installs btle_rx to /usr/local/bin
+#
+#   5) Toggle 'Enable HackRF BLE scanner' in Gjallarhorn's Settings →
+#      HackRF BLE section. The Settings panel auto-detects the binary;
+#      if it's not on PATH the scanner stays silently disabled.
+#
+# We detect HackRF presence here purely to print a hint — no install attempt.
+if have hackrf_info; then
+    log "hackrf_info detected — HackRF BLE scanner is available"
+    if ! have btle_rx; then
+        warn "btle_rx not on PATH — install JiaoXianjun/BTLE to enable the"
+        warn "  HackRF BLE scanner (see comments in setup.sh section 5b)"
+    fi
+fi
+
 # ---- 6. data directories ----------------------------------------------------
 
 log "ensuring tile-cache and oui-cache exist and are writable"

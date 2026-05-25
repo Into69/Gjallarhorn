@@ -13,6 +13,9 @@ from services.bluetooth_scanner import scan_bluetooth
 from services.bluetooth_classic_scanner import scan_bluetooth_classic
 from services.alert_service import alert_service
 from services.probe_scanner import probe_scanner, parse_channels
+from services.hackrf_ble_scanner import (
+    hackrf_ble_scanner, parse_ble_adv_data, btle_rx_available,
+)
 from services.oui import oui_service
 import database as db
 
@@ -130,6 +133,7 @@ class ScanOrchestrator:
             asyncio.create_task(self._bt_loop()),
             asyncio.create_task(self._bt_classic_loop()),
             asyncio.create_task(self._probe_loop()),
+            asyncio.create_task(self._hackrf_ble_loop()),
             asyncio.create_task(self._purge_loop()),
             asyncio.create_task(self._absence_loop()),
         ]
@@ -141,6 +145,7 @@ class ScanOrchestrator:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         await probe_scanner.stop()
+        await hackrf_ble_scanner.stop()
 
     async def _sleep(self, seconds: float) -> bool:
         try:
@@ -568,6 +573,116 @@ class ScanOrchestrator:
         await alert_service.evaluate(
             device_kind="wifi_client", device_id=mac, rssi=rssi,
             location_id=loc_id, details=eval_details, is_new=is_new,
+            speed_mps=fix.speed,
+        )
+
+    # ── HackRF BLE scanner (optional SDR backend) ───────────────────
+    async def _hackrf_ble_loop(self) -> None:
+        """Watches HackRF-BLE settings; starts/stops/reconfigures the
+        capture as the operator toggles things. Doesn't poll for
+        packets itself — the scanner pushes them via _on_hackrf_ble."""
+        while not self._stop.is_set():
+            try:
+                s = await settings_store.load()
+                want_enabled = bool(getattr(s, "hackrf_ble_enabled", False))
+                if want_enabled and btle_rx_available():
+                    serial = (getattr(s, "hackrf_ble_serial", None) or "") or None
+                    gain = int(getattr(s, "hackrf_ble_gain", 40) or 40)
+                    min_rssi = int(getattr(s, "hackrf_ble_min_rssi", -90) or -90)
+                    hop_ms = int(getattr(s, "hackrf_ble_hop_ms", 1000) or 1000)
+                    channels_raw = (getattr(s, "hackrf_ble_channels", "") or "")
+                    try:
+                        channels = [
+                            int(x) for x in channels_raw.split(",")
+                            if x.strip().isdigit()
+                        ] or [37, 38, 39]
+                    except ValueError:
+                        channels = [37, 38, 39]
+                    cur = (
+                        hackrf_ble_scanner._serial,
+                        hackrf_ble_scanner._gain,
+                        hackrf_ble_scanner._min_rssi,
+                        hackrf_ble_scanner._hop_ms,
+                        list(hackrf_ble_scanner._channels),
+                    ) if hackrf_ble_scanner.running else (None, 0, 0, 0, [])
+                    target = (serial, gain, min_rssi, hop_ms, channels)
+                    if cur != target:
+                        await hackrf_ble_scanner.stop()
+                        await hackrf_ble_scanner.start(
+                            callback=self._on_hackrf_ble,
+                            serial=serial,
+                            gain=gain,
+                            min_rssi=min_rssi,
+                            hop_ms=hop_ms,
+                            channels=channels,
+                        )
+                elif hackrf_ble_scanner.running:
+                    await hackrf_ble_scanner.stop()
+            except Exception as e:
+                log.exception("hackrf ble loop error: %s", e)
+            if not await self._sleep(5.0):
+                return
+
+    async def _on_hackrf_ble(self, pkt: dict) -> None:
+        """Handle a parsed BLE adv-channel packet from btle_rx. Decodes
+        the raw AdvData blob into the bleak-shaped details dict so the
+        per-MAC merge in db.upsert_bluetooth collapses HackRF + bleak
+        sightings into one row."""
+        if self._paused:
+            return
+        s = await settings_store.load()
+        loc_id = location_manager.active_id
+        if loc_id is None:
+            return
+        mac = pkt["mac"]
+        rssi = pkt.get("rssi") if pkt.get("rssi") is not None else -100
+        if rssi < s.min_rssi:
+            return
+        # Normalize AdvData into the same fields the bleak scanner
+        # produces. Unknown TLVs survive as 'unknown_types' so any
+        # future analysis can pick them up.
+        parsed = parse_ble_adv_data(pkt.get("adv_data_hex") or "")
+        # Vendor lookup — same path bleak uses.
+        try:
+            vendor = await oui_service.lookup(mac)
+        except Exception:
+            vendor = None
+        # PDU_Type → address_type hint when btle_rx surfaces it. Most
+        # ADV_IND / ADV_NONCONN_IND traffic from a random MAC is the
+        # privacy-mode form; we don't have explicit RFU bits here so
+        # the hint is best-effort.
+        details = {
+            "vendor": vendor,
+            "name": parsed.get("name"),
+            "tx_power": parsed.get("tx_power"),
+            "manufacturer_data": parsed.get("manufacturer_data") or {},
+            "service_uuids": parsed.get("service_uuids") or [],
+            "service_data": parsed.get("service_data") or {},
+            # Provenance markers so the operator can tell a HackRF-only
+            # sighting from a bleak one when inspecting the row's JSON.
+            "_source": "hackrf",
+            "_hackrf_pdu_type": pkt.get("pdu_type"),
+            "_hackrf_channel": pkt.get("channel"),
+            "_adv_flags": parsed.get("flags"),
+        }
+        if parsed.get("unknown_types"):
+            details["_adv_unknown_types"] = parsed["unknown_types"]
+        fix = self.gps.fix
+        if self._recording:
+            is_new, _ = await db.upsert_bluetooth(
+                location_id=loc_id, kind="bluetooth", device_id=mac,
+                rssi=rssi, details=details,
+            )
+            await db.insert_observation(
+                location_id=loc_id, kind="bluetooth", device_id=mac,
+                rssi=rssi, lat=fix.lat, lon=fix.lon,
+                raw=details,
+            )
+        else:
+            is_new = False
+        await alert_service.evaluate(
+            device_kind="bluetooth", device_id=mac, rssi=rssi,
+            location_id=loc_id, details=details, is_new=is_new,
             speed_mps=fix.speed,
         )
 
