@@ -250,6 +250,12 @@ class ScanOrchestrator:
                         if s.hide_random_bt_addresses and d.address_type == "random":
                             continue
                         details = d.model_dump(mode="json")
+                        # Stamp provenance so the device list can show
+                        # whether this MAC was seen by bleak, HackRF,
+                        # both, or via the Classic inquiry path.
+                        # upsert_bluetooth merges this into the row's
+                        # _sources list.
+                        details["_source"] = "bleak"
                         # upsert_bluetooth normalizes the MAC to uppercase
                         # and absorbs any matching Classic row at this
                         # location into the BLE row.
@@ -323,6 +329,7 @@ class ScanOrchestrator:
                         if d.rssi < s.min_rssi:
                             continue
                         details = d.model_dump(mode="json")
+                        details["_source"] = "classic"
                         # upsert_bluetooth uppercases the MAC and folds
                         # this Classic sighting into the existing BLE row
                         # (if any) at this location, returning the kind

@@ -1129,9 +1129,31 @@ function renderDeviceRow(d) {
       : `🔗 +${linkedCount}`;
     linkBadge = ` <span class="${cls}" title="${escapeAttr(tooltip)}">${text}</span>`;
   }
+  // Source provenance badge — which scanner backend(s) saw this MAC.
+  // Only meaningful for BLE rows since wifi / wifi_client have a
+  // single source. The badge is omitted when only bleak was involved
+  // (the default expected path) — surfacing it only when HackRF
+  // contributed keeps the table clean while still telling the
+  // operator which devices came from the SDR backend.
+  let sourceBadge = "";
+  if (d.kind === "bluetooth") {
+    const sources = (det && Array.isArray(det._sources)) ? det._sources : [];
+    const hasBleak = sources.includes("bleak");
+    const hasHackrf = sources.includes("hackrf");
+    if (hasHackrf && hasBleak) {
+      sourceBadge = ` <span class="source-tag source-both" title="Seen by both the host BLE adapter (bleak) and the HackRF SDR scanner.">host+SDR</span>`;
+    } else if (hasHackrf) {
+      sourceBadge = ` <span class="source-tag source-sdr" title="Only the HackRF SDR scanner has captured this MAC — bleak / the host adapter hasn't surfaced it.">SDR only</span>`;
+    } else if (hasBleak && _hackrfLastStatus?.running) {
+      // Only flag the bleak-only state when the SDR scanner is
+      // actually running — otherwise the absence of a HackRF
+      // sighting is meaningless and the badge is just noise.
+      sourceBadge = ` <span class="source-tag source-bleak" title="Captured by the host BLE adapter (bleak). Not yet seen on the HackRF SDR scan.">host only</span>`;
+    }
+  }
   const idCell = d._merged_count > 1
-    ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>${sensorBadge}${trackerBadge}${linkBadge}`
-    : `<span class="mono">${escapeHtml(d.device_id)}</span>${sensorBadge}${trackerBadge}${linkBadge}`;
+    ? `<span class="mono">${escapeHtml(d.device_id)}</span> <span class="merged-tag">+${d._merged_count - 1}</span>${sensorBadge}${trackerBadge}${linkBadge}${sourceBadge}`
+    : `<span class="mono">${escapeHtml(d.device_id)}</span>${sensorBadge}${trackerBadge}${linkBadge}${sourceBadge}`;
   const wlBtn = wl
     ? `<button type="button" class="icon-btn dev-wl active" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelisted — click to remove from whitelist" aria-label="Remove from whitelist">★</button>`
     : `<button type="button" class="icon-btn dev-wl" data-kind="${escapeAttr(d.kind)}" data-id="${escapeAttr(d.device_id)}" title="Whitelist this device (silences alerts and excludes from reports)" aria-label="Add to whitelist">☆</button>`;

@@ -1247,6 +1247,27 @@ async def upsert_bluetooth(
         merged_best = max(best_candidates)
         merged_seen = sum((r[5] or 0) for r in rows) + 1
 
+        # Accumulate the per-row '_sources' provenance list so the UI
+        # can show whether a device has been seen by the bleak BLE
+        # scanner, the HackRF SDR scanner, the Classic inquiry path,
+        # or some combination. Incoming details may carry either
+        # _source (single string) or _sources (list); we merge them
+        # into a deduped list under merged["_sources"].
+        prior_sources = list(merged.get("_sources") or [])
+        new_sources: list[str] = []
+        if isinstance(details.get("_sources"), list):
+            new_sources = [str(x) for x in details["_sources"] if x]
+        if details.get("_source"):
+            new_sources.append(str(details["_source"]))
+        for src in new_sources:
+            if src not in prior_sources:
+                prior_sources.append(src)
+        if prior_sources:
+            merged["_sources"] = prior_sources
+        # Drop the singular _source — _sources is the canonical
+        # accumulated field.
+        merged.pop("_source", None)
+
         signature = compute_ble_signature(target_kind, merged)
         payload = json.dumps(merged, default=str)
 

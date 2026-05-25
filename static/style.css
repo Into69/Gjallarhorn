@@ -2511,6 +2511,36 @@ tr.sensor-device { opacity: 0.85; }
   font-weight: 600;
 }
 
+/* Source provenance — which scanner backend(s) saw this BLE MAC.
+   'host only' is muted (it's the default expected state); 'SDR only'
+   and 'host+SDR' use accent colors so HackRF contributions stand
+   out at a glance. */
+.source-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: help;
+  white-space: nowrap;
+}
+.source-tag.source-bleak { /* host-only — keep muted */ }
+.source-tag.source-sdr {
+  color: var(--accent);
+  border-color: #4a3f6a;
+  background: rgba(184, 163, 255, 0.10);
+  font-weight: 600;
+}
+.source-tag.source-both {
+  color: var(--ok);
+  border-color: #2e5a35;
+  background: rgba(121, 224, 140, 0.10);
+}
+
 /* ── Presence tab ─────────────────────────────────────────
    Card grid mirroring the alerts tab's visual vocabulary.
    Each card carries one sustained_presence rule's current
