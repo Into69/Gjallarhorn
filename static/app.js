@@ -2581,6 +2581,105 @@ async function refreshHackrfStatus() {
     errEl.textContent = s.last_error ? s.last_error : "—";
     errEl.classList.toggle("muted", !s.last_error);
   }
+
+  // ── Map sidebar card ──
+  // Hidden by default; only revealed when the toolchain is installed
+  // or the operator has the scanner turned on. Same gate as the
+  // Mission tile so the Map sidebar doesn't get a permanent
+  // 'stopped' card for an SDR backend most users don't run.
+  const card = $("#hackrf-card");
+  if (card) {
+    const showCard = !!(s.binary_available || s.running || s.last_error);
+    card.hidden = !showCard;
+  }
+  const mapState = $("#hackrf-map-state");
+  if (mapState) {
+    if (s.running) {
+      mapState.textContent = "running";
+      mapState.className = "probe-state-pill running";
+    } else if (s.last_error) {
+      mapState.textContent = "error";
+      mapState.className = "probe-state-pill error";
+    } else if (!s.binary_available) {
+      mapState.textContent = "no btle_rx";
+      mapState.className = "probe-state-pill error";
+    } else {
+      mapState.textContent = "stopped";
+      mapState.className = "probe-state-pill stopped";
+    }
+  }
+  const mapMeta = $("#hackrf-map-meta");
+  if (mapMeta) {
+    const bits = [];
+    if (s.serial) {
+      // Truncate long serials in the inline meta line so it doesn't wrap.
+      const sn = s.serial.length > 12 ? `${s.serial.slice(0, 6)}…${s.serial.slice(-4)}` : s.serial;
+      bits.push(`HackRF ${sn}`);
+    } else if (s.binary_available) {
+      bits.push("first detected HackRF");
+    }
+    if (s.binary_available) {
+      bits.push(`gain ${s.gain ?? "?"} dB`);
+      bits.push(`min ${s.min_rssi ?? "?"} dBm`);
+    }
+    mapMeta.textContent = bits.length ? bits.join(" · ") : "—";
+  }
+  const mapErr = $("#hackrf-map-error");
+  if (mapErr) {
+    if (s.last_error) {
+      mapErr.textContent = s.last_error;
+      mapErr.hidden = false;
+    } else {
+      mapErr.hidden = true;
+    }
+  }
+  const mapCh = $("#hackrf-map-channel");
+  if (mapCh) {
+    if (s.running && s.current_channel != null) {
+      mapCh.textContent = `ch ${s.current_channel}`;
+    } else if (s.running) {
+      mapCh.textContent = "hop";
+    } else {
+      mapCh.textContent = "—";
+    }
+  }
+  const mapCount = $("#hackrf-map-count");
+  if (mapCount) {
+    mapCount.textContent = s.binary_available ? (count.toLocaleString()) : "—";
+  }
+  const mapRate = $("#hackrf-map-rate");
+  if (mapRate) {
+    mapRate.textContent = s.running ? _hackrfRateText : "—";
+  }
+  const mapLast = $("#hackrf-map-last");
+  if (mapLast) {
+    if (s.last_packet_at) {
+      const ago = Math.max(0, Date.now() / 1000 - s.last_packet_at);
+      mapLast.textContent = ago < 60
+        ? `${ago.toFixed(1)} s ago`
+        : `${Math.floor(ago / 60)} m ${Math.floor(ago % 60)} s ago`;
+    } else {
+      mapLast.textContent = "—";
+    }
+  }
+  const mapUp = $("#hackrf-map-uptime");
+  if (mapUp) {
+    if (s.running && s.started_at) {
+      const up = Math.max(0, Date.now() / 1000 - s.started_at);
+      mapUp.textContent = formatUptime(up);
+    } else {
+      mapUp.textContent = "—";
+    }
+  }
+  const mapDwell = $("#hackrf-map-dwell");
+  if (mapDwell) {
+    if (s.running && s.hop_ms) {
+      const channels = (s.channels || []).length;
+      mapDwell.textContent = `${s.hop_ms} ms × ${channels} ch`;
+    } else {
+      mapDwell.textContent = "—";
+    }
+  }
 }
 
 // Populate the HackRF serial dropdown from /api/hackrf/devices. Called
@@ -5661,11 +5760,12 @@ async function refreshMission() {
   //   "error"    — last attempt raised
   //   "disabled" — not configured / not enabled
   try {
-    const [paused, gps, scanners, probe] = await Promise.all([
+    const [paused, gps, scanners, probe, hackrf] = await Promise.all([
       api("/api/system/pause").catch(() => ({})),
       api("/api/gps").catch(() => ({})),
       api("/api/scanners/status").catch(() => ({})),
       api("/api/probe/status").catch(() => ({})),
+      api("/api/hackrf/status").catch(() => ({})),
     ]);
     const isPaused = !!paused.paused;
     renderPauseButton(isPaused);
@@ -5714,6 +5814,31 @@ async function refreshMission() {
       }),
       probeExtra,
     );
+    // HackRF BLE tile — only revealed when the operator has the
+    // toolchain installed (binary present OR they've turned the
+    // scanner on). Hidden on stock installs so the Mission card
+    // doesn't carry a permanent 'disabled' tile for an optional
+    // SDR backend most users don't run.
+    const hackrfWrap = document.getElementById("mission-stat-hackrf-wrap");
+    const showHackrf = !!hackrf && (
+      hackrf.binary_available || hackrf.running || hackrf.last_error
+    );
+    if (hackrfWrap) hackrfWrap.hidden = !showHackrf;
+    if (showHackrf) {
+      const hackrfChan = hackrf?.current_channel;
+      const hackrfExtra = hackrfChan != null ? `ch ${hackrfChan}` : "";
+      _renderScannerStateTile(
+        "mission-stat-hackrf-state", _classifyScannerState({
+          paused: isPaused,
+          running: hackrf?.running,
+          last_error: hackrf?.last_error,
+          enabled: hackrf?.binary_available && (
+            hackrf?.running || (hackrf?.channels || []).length > 0
+          ),
+        }),
+        hackrfExtra,
+      );
+    }
   } catch {}
   // Active + historical mission + live ticker — best-effort, each
   // independently caught so a failed call doesn't break the others.

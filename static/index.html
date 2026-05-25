@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260524d" />
+  <link rel="stylesheet" href="/static/style.css?v=20260524e" />
 </head>
 <body>
   <header>
@@ -212,6 +212,37 @@
             <span id="bt-map-uptime">—</span>
           </div>
         </div>
+
+        <div class="probe-card" id="hackrf-card" hidden>
+          <div class="probe-header">
+            <span class="probe-title">HackRF BLE</span>
+            <span id="hackrf-map-state" class="probe-state-pill stopped">stopped</span>
+          </div>
+          <div id="hackrf-map-meta" class="probe-meta">—</div>
+          <div id="hackrf-map-error" class="probe-error" hidden></div>
+          <div class="probe-grid">
+            <div class="probe-stat">
+              <label>Channel</label>
+              <div id="hackrf-map-channel" class="probe-stat-value">—</div>
+            </div>
+            <div class="probe-stat">
+              <label>Packets</label>
+              <div id="hackrf-map-count" class="probe-stat-value">—</div>
+            </div>
+            <div class="probe-stat">
+              <label>Rate</label>
+              <div id="hackrf-map-rate" class="probe-stat-value">—</div>
+            </div>
+            <div class="probe-stat">
+              <label>Last packet</label>
+              <div id="hackrf-map-last" class="probe-stat-value">—</div>
+            </div>
+          </div>
+          <div class="probe-footer">
+            <span>Uptime <strong id="hackrf-map-uptime">—</strong></span>
+            <span id="hackrf-map-dwell">—</span>
+          </div>
+        </div>
       </aside>
     </section>
 
@@ -338,6 +369,10 @@
             <div>
               <dt>Probe scanner</dt>
               <dd id="mission-stat-probe-state" class="mission-scanner-state">—</dd>
+            </div>
+            <div id="mission-stat-hackrf-wrap" hidden>
+              <dt>HackRF BLE</dt>
+              <dd id="mission-stat-hackrf-state" class="mission-scanner-state">—</dd>
             </div>
             <div><dt>Uptime</dt><dd id="mission-stat-uptime">—</dd></div>
             <div><dt>Active location</dt><dd id="mission-stat-active-loc">—</dd></div>
@@ -1448,6 +1483,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260524d"></script>
+  <script src="/static/app.js?v=20260524e"></script>
 </body>
 </html>
