@@ -167,6 +167,16 @@ class ScanOrchestrator:
                         dynamic_enabled=s.new_location_dynamic,
                         dynamic_t_s=s.new_location_dynamic_t_s,
                     )
+                    # Drive the gps_state alert rule on the same cadence
+                    # as the GPS poll — sub-second responsiveness matters
+                    # here (a quick disconnect/reconnect should still
+                    # alert), and the check is cheap when no rules match.
+                    await alert_service.check_gps_state(
+                        connected=self.gps.connected,
+                        fix_mode=fix.mode,
+                        sats_used=fix.sats_used,
+                        sats_visible=fix.sats_visible,
+                    )
             except Exception as e:
                 log.exception("gps loop error: %s", e)
             if not await self._sleep((await settings_store.load()).gps_poll_interval_s):

@@ -63,6 +63,12 @@ class AlertService:
         # minutes — never repeating in the same state. Restored on startup
         # by load_presence_state() from the latest event per key.
         self._presence_state: dict[tuple[int, str, str, int], str] = {}
+        # Last GPS state we observed in check_gps_state(). Used to detect
+        # transitions — the rule only fires when current != prev so a
+        # steady-state GPS doesn't spam the feed every loop tick.
+        # Initialised to None so the first call after startup just
+        # records the baseline without firing.
+        self._gps_state_last: str | None = None
 
     async def load_rules(self) -> None:
         self._rules = await db.list_alert_rules()
@@ -967,6 +973,86 @@ class AlertService:
                 ))
         return emitted
 
+    async def check_gps_state(
+        self, connected: bool, fix_mode: int,
+        sats_used: int | None = None, sats_visible: int | None = None,
+    ) -> list[int]:
+        """Fire gps_state rules on transitions of the host's GPS state.
+        State is derived from (gpsd connection, fix.mode) — see
+        _current_gps_state(). Called every GPS-loop tick; only fires
+        when the state has actually changed since the previous call,
+        so a steady-state fix doesn't spam the feed.
+
+        The rule's per-(rule,'gps') latch is cleared on every
+        transition (whether the new state matches the rule's wanted
+        set or not), so the next matching transition fires fresh.
+        Without this, latch=1 (the default) would fire once and then
+        never again, which is almost never what the operator wants
+        for a GPS-state rule."""
+        if not self._rules_loaded:
+            await self.load_rules()
+            await self.load_whitelist()
+            await self.load_latches()
+            await self.load_presence_state()
+        current = _current_gps_state(connected, int(fix_mode or 0))
+        prev = self._gps_state_last
+        # Record the latest state regardless — guarantees we don't
+        # alert on the very first call (no baseline) and that the
+        # next call has a real prev to compare against.
+        self._gps_state_last = current
+        if prev is None or prev == current:
+            return []
+        if not self._rules:
+            return []
+        emitted: list[int] = []
+        for rule in self._rules:
+            if not rule.get("enabled"):
+                continue
+            if rule.get("match_type") != "gps_state":
+                continue
+            wanted = _parse_gps_state_value(rule.get("match_value") or "")
+            if wanted is None:
+                continue
+            # Any state change clears this rule's latch so the next
+            # matching entry can fire fresh — same shape as how the
+            # sighting path clears absence_gap latches on re-sighting.
+            key = (rule["id"], "gps")
+            if key in self._latched:
+                self._latched.discard(key)
+                try:
+                    await db.clear_alert_pair(rule["id"], "gps")
+                except Exception:
+                    pass
+            if current not in wanted:
+                continue
+            latch_enabled = int(rule.get("latch", 1) or 0) == 1
+            if latch_enabled:
+                self._latched.add(key)
+            details = {
+                "_gps_state": current,
+                "_gps_prev_state": prev,
+                "_gps_mode": fix_mode,
+                "_gps_connected": connected,
+                "_gps_sats_used": sats_used,
+                "_gps_sats_visible": sats_visible,
+            }
+            event_id = await db.insert_alert_event(
+                rule_id=rule["id"], location_id=None,
+                device_kind="gps", device_id="gps", rssi=0,
+                details=details,
+            )
+            log.info(
+                "ALERT '%s' (rule %d) gps_state %s → %s",
+                rule["name"], rule["id"], prev, current,
+            )
+            emitted.append(event_id)
+            if rule.get("notify_discord"):
+                asyncio.create_task(_dispatch_discord(
+                    rule=rule, device_kind="gps", device_id="gps",
+                    rssi=0, location_id=None, details=details,
+                ))
+        return emitted
+
 
 # ── Discord webhook ───────────────────────────────────────────────
 _KIND_COLOR = {
@@ -1653,6 +1739,53 @@ def _parse_absence_gap_value(value: str) -> int | None:
     if n < 1:
         return None
     return n
+
+
+# Canonical GPS state names + aliases the operator can use in gps_state
+# rules. 'any' is the everything-bucket; 'lost' / 'acquired' are the
+# common shortcuts ("alert me when GPS goes down / comes back").
+GPS_STATES = ("disconnected", "no_fix", "fix_2d", "fix_3d")
+_GPS_STATE_SET = set(GPS_STATES)
+_GPS_STATE_ALIASES: dict[str, set[str]] = {
+    "any": set(GPS_STATES),
+    "lost": {"disconnected", "no_fix"},
+    "acquired": {"fix_2d", "fix_3d"},
+}
+
+
+def _current_gps_state(connected: bool, fix_mode: int) -> str:
+    """Reduce (connected, fix.mode) to one of GPS_STATES. gpsd uses
+    mode 0/1 for 'no fix' (the modem responded but doesn't know where
+    we are yet), 2 for 2D, 3 for 3D — see models.GPSFix."""
+    if not connected:
+        return "disconnected"
+    if fix_mode >= 3:
+        return "fix_3d"
+    if fix_mode == 2:
+        return "fix_2d"
+    return "no_fix"
+
+
+def _parse_gps_state_value(value: str) -> set[str] | None:
+    """Parse the gps_state match_value: comma-separated list of state
+    names ('disconnected', 'no_fix', 'fix_2d', 'fix_3d') and/or
+    aliases ('any', 'lost', 'acquired'). Returns the expanded set of
+    target states, or None if nothing parses. An empty/blank value is
+    treated as 'any' so a rule with no value still does something
+    sensible instead of silently ignoring transitions."""
+    s = (value or "").strip().lower()
+    if not s:
+        return set(GPS_STATES)
+    out: set[str] = set()
+    for tok in s.split(","):
+        t = tok.strip()
+        if not t:
+            continue
+        if t in _GPS_STATE_ALIASES:
+            out |= _GPS_STATE_ALIASES[t]
+        elif t in _GPS_STATE_SET:
+            out.add(t)
+    return out or None
 
 
 def _parse_co_arrival_value(value: str) -> tuple[int | None, int, float]:

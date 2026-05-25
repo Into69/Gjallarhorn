@@ -1204,7 +1204,7 @@ ALLOWED_MATCH_TYPES = {
     "co_arrival_transit", "travel_time_companion", "approach_vector",
     "novel_location_chain", "mac_rotation_rate", "cross_kind_co_travel",
     "arrival_after_gap", "absence_gap", "sustained_presence",
-    "wifi_association",
+    "wifi_association", "gps_state",
 }
 # Compound (AND) conditions only support the simple value-based types — the
 # stateful ones (new_device, cross_location) only make sense as the primary
@@ -1241,6 +1241,25 @@ def _validate_presence_value(value: str) -> None:
     if n < 0 or g < 1:
         raise HTTPException(
             400, "sustained_presence requires N >= 0 and G >= 1 minute"
+        )
+
+
+def _validate_gps_state_value(value: str) -> None:
+    """Reject gps_state match_values that the evaluator would silently
+    skip. Accepts a comma-separated list of state names ('disconnected',
+    'no_fix', 'fix_2d', 'fix_3d') and/or aliases ('any', 'lost',
+    'acquired'). Blank value is allowed and means 'any'."""
+    from services.alert_service import _parse_gps_state_value
+    if not (value or "").strip():
+        return  # blank = 'any', handled by the evaluator
+    parsed = _parse_gps_state_value(value)
+    if not parsed:
+        raise HTTPException(
+            400,
+            "gps_state match_value must be a comma-separated list of "
+            "states ('disconnected', 'no_fix', 'fix_2d', 'fix_3d') or "
+            "aliases ('any', 'lost', 'acquired') — got: "
+            + (value or "")
         )
 
 
@@ -1283,7 +1302,10 @@ async def api_create_rule(payload: dict):
     if match_type not in ALLOWED_MATCH_TYPES:
         raise HTTPException(400, f"match_type must be one of {sorted(ALLOWED_MATCH_TYPES)}")
     match_value = (payload.get("match_value") or "").strip()
-    if not match_value:
+    # gps_state is the one rule type where a blank value is meaningful
+    # ('any' state transition); every other type requires explicit
+    # tuning so we don't accidentally create an inert / runaway rule.
+    if not match_value and match_type != "gps_state":
         raise HTTPException(400, "match_value required")
     if match_type == "wifi_association":
         # 'client@ssid' — both sides optional but '@' alone (nothing on
@@ -1300,6 +1322,8 @@ async def api_create_rule(payload: dict):
         # parser silently return None at evaluation time (which makes the
         # rule appear created-but-inert).
         _validate_presence_value(match_value)
+    if match_type == "gps_state":
+        _validate_gps_state_value(match_value)
     kind = payload.get("kind") or None
     if kind not in ALLOWED_KINDS:
         raise HTTPException(400, "kind must be wifi, bluetooth, or null")
@@ -1352,13 +1376,13 @@ async def api_update_rule(rule_id: int, payload: dict):
         fields["match_type"] = payload["match_type"]
     if "match_value" in payload:
         v = (payload["match_value"] or "").strip()
-        if not v:
+        mt = fields.get("match_type") or payload.get("match_type")
+        if not v and mt != "gps_state":
             raise HTTPException(400, "match_value cannot be empty")
         # If the caller is updating to wifi_association (in this same
         # payload, or unchanged from the stored row), enforce the
         # 'client@ssid' shape so a malformed value can't sneak past the
         # create-time check.
-        mt = fields.get("match_type") or payload.get("match_type")
         if mt == "wifi_association":
             if "@" not in v:
                 raise HTTPException(400, "wifi_association match_value must be 'client@ssid'")
@@ -1367,6 +1391,8 @@ async def api_update_rule(rule_id: int, payload: dict):
                 raise HTTPException(400, "wifi_association requires a client and/or SSID")
         if mt == "sustained_presence":
             _validate_presence_value(v)
+        if mt == "gps_state":
+            _validate_gps_state_value(v)
         fields["match_value"] = v
     if "kind" in payload:
         k = payload["kind"] or None

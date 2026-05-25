@@ -1290,6 +1290,7 @@ body.stealth-mode .mission-status-grid dd { visibility: hidden; }
 }
 .alert-toast.kind-wifi { border-left-color: var(--accent); }
 .alert-toast.kind-bluetooth { border-left-color: #b8a3ff; }
+.alert-toast.kind-gps { border-left-color: #79e08c; }
 .alert-toast.dismissing { animation: alert-toast-out 160ms ease-in forwards; }
 @keyframes alert-toast-in {
   from { transform: translateX(20px); opacity: 0; }
@@ -1335,6 +1336,7 @@ body.stealth-mode .mission-status-grid dd { visibility: hidden; }
 }
 .alert-popup.kind-wifi { border-left-color: var(--accent); }
 .alert-popup.kind-bluetooth { border-left-color: #b8a3ff; }
+.alert-popup.kind-gps { border-left-color: #79e08c; }
 
 .alert-popup-rule {
   font-weight: 600;
@@ -1724,6 +1726,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .alert-item.kind-wifi { border-left-color: var(--accent); }
 .alert-item.kind-bluetooth { border-left-color: #b8a3ff; }
+.alert-item.kind-gps { border-left-color: #79e08c; }
 @keyframes alert-flash {
   0% { background: rgba(255, 107, 107, 0.18); }
   100% { background: var(--panel); }

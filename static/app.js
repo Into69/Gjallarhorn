@@ -3747,17 +3747,38 @@ $("#alerts-filter-reset").addEventListener("click", () => {
 
 function renderAlertEvent(e) {
   const det = e.details || {};
-  const label = normalizeSsid(det.ssid) || det.name || "";
-  const vendor = det.vendor ? ` · ${escapeHtml(det.vendor)}` : "";
-  const where = e.location_id != null ? `loc #${e.location_id}` : "no loc";
+  const isGps = e.device_kind === "gps";
+  // gps_state alerts aren't device-scoped — the device_id is the
+  // sentinel 'gps' string. Surface the state transition + sat counts
+  // instead of the empty ssid/name/vendor block, and skip the
+  // whitelist control (you can't whitelist a sensor's own GPS).
+  let label = "";
+  let vendor = "";
+  if (isGps) {
+    const prev = det._gps_prev_state || "?";
+    const cur = det._gps_state || "?";
+    label = `${prev} → ${cur}`;
+    const sats = det._gps_sats_used != null && det._gps_sats_visible != null
+      ? ` · sats ${det._gps_sats_used}/${det._gps_sats_visible}`
+      : "";
+    vendor = sats;
+  } else {
+    label = normalizeSsid(det.ssid) || det.name || "";
+    vendor = det.vendor ? ` · ${escapeHtml(det.vendor)}` : "";
+  }
+  const where = isGps
+    ? "sensor GPS"
+    : (e.location_id != null ? `loc #${e.location_id}` : "no loc");
   // Whitelist toggle: alerts only fire on non-whitelisted devices, so the
   // button typically reads ☆. Once whitelisted (here or on the Devices tab)
   // we render the active ★ — historical events stay in the feed for
   // reference but are clearly marked as actioned.
-  const wl = isWhitelisted(e.device_kind, e.device_id);
-  const wlBtn = wl
-    ? `<button type="button" class="icon-btn alert-wl active" disabled title="Whitelisted — future alerts on this device are suppressed" aria-label="Already whitelisted">★</button>`
-    : `<button type="button" class="icon-btn alert-wl" data-kind="${escapeAttr(e.device_kind)}" data-id="${escapeAttr(e.device_id)}" title="Whitelist this device — silences future alerts and excludes it from PDF reports" aria-label="Whitelist device">☆</button>`;
+  const wl = !isGps && isWhitelisted(e.device_kind, e.device_id);
+  const wlBtn = isGps
+    ? ""
+    : wl
+      ? `<button type="button" class="icon-btn alert-wl active" disabled title="Whitelisted — future alerts on this device are suppressed" aria-label="Already whitelisted">★</button>`
+      : `<button type="button" class="icon-btn alert-wl" data-kind="${escapeAttr(e.device_kind)}" data-id="${escapeAttr(e.device_id)}" title="Whitelist this device — silences future alerts and excludes it from PDF reports" aria-label="Whitelist device">☆</button>`;
   // Latch state. latched_runtime is the server's authoritative answer
   // for "is the (rule, device) pair currently suppressing future
   // fires?" — true when the pair is in alert_service._latched, which
@@ -3780,18 +3801,20 @@ function renderAlertEvent(e) {
     // useful.
     latchBadge = `<span class="latch-tag cleared" title="Acknowledged">cleared</span>`;
   }
+  const deviceText = isGps ? "Sensor GPS" : e.device_id;
+  const rssiText = isGps ? "" : (e.rssi != null ? e.rssi + " dBm" : "");
   return `
     <div class="alert-item kind-${escapeHtml(e.device_kind)} ${!latched && ruleLatches ? "alert-cleared" : ""}">
       <div>
         <span class="alert-rule">${escapeHtml(e.rule_name || "rule " + e.rule_id)}</span>
         <span class="muted"> matched </span>
-        <span class="alert-device">${escapeHtml(e.device_id)}</span>
+        <span class="alert-device">${escapeHtml(deviceText)}</span>
         ${label ? `<span class="muted"> · </span><span>${escapeHtml(label)}</span>` : ""}
         ${vendor}
         ${latchBadge}
       </div>
       <div class="alert-meta">
-        <span class="alert-rssi">${e.rssi != null ? e.rssi + " dBm" : ""}</span>
+        <span class="alert-rssi">${rssiText}</span>
         · ${escapeHtml(where)}
         · ${formatTime(e.triggered_at)}
         ${latchBtn}${wlBtn}
@@ -4406,6 +4429,7 @@ const MATCH_TYPE_PLACEHOLDERS = {
   absence_gap: "30 — fire when this device hasn't been seen at the location for ≥30 min",
   sustained_presence: "10 (or 10/5) — flip-flop: 'present' after ≥N min continuous, 'absent' after >G min silent. N may be 0 to fire on the first sighting (no required continuous stay); G must be ≥1 min so the absence loop has a meaningful silence window. Add @aa:bb,cc:dd to bind multiple ids to one conceptual device (e.g. a phone's wifi+ble MACs share one state). For wifi_client (probe) devices, widen G — phones can idle silent for 10–30 min between probe bursts, e.g. 1/15 or 1/30.",
   wifi_association: "aa:bb:cc@MyNetwork — fires when this client (MAC or OUI prefix) either probes for OR links to (observed 802.11 frame exchange with one of the SSID's BSSIDs at the current location) this SSID. Leave either side blank for 'any'.",
+  gps_state: "lost — comma-separated list of GPS states to fire on. States: disconnected, no_fix, fix_2d, fix_3d. Aliases: any (every change), lost (= disconnected,no_fix), acquired (= fix_2d,fix_3d). Blank also means 'any'. Kind / Location filters are ignored — GPS is sensor-global. Latch is cleared on every state change so the next matching transition fires fresh.",
 };
 const MATCH_TYPE_DEFAULTS = {
   rssi_above: "-60",
@@ -4422,6 +4446,7 @@ const MATCH_TYPE_DEFAULTS = {
   absence_gap: "30",
   sustained_presence: "10",
   wifi_association: "@",
+  gps_state: "lost",
 };
 
 function applyMatchTypeUI(matchType) {

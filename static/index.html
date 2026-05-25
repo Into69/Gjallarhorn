@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260525d" />
+  <link rel="stylesheet" href="/static/style.css?v=20260525e" />
 </head>
 <body>
   <header>
@@ -714,6 +714,9 @@
                 </optgroup>
                 <optgroup label="WiFi">
                   <option value="wifi_association">wifi client probes for SSID (client → AP)</option>
+                </optgroup>
+                <optgroup label="Sensor">
+                  <option value="gps_state">GPS state change (acquired / lost / disconnected)</option>
                 </optgroup>
                 <optgroup label="Follower detection">
                   <option value="co_arrival_transit">co-arrival on transit: M of last N arrivals within W s</option>
@@ -1507,6 +1510,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260525d"></script>
+  <script src="/static/app.js?v=20260525e"></script>
 </body>
 </html>
