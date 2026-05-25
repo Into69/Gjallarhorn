@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260525a" />
+  <link rel="stylesheet" href="/static/style.css?v=20260525c" />
 </head>
 <body>
   <header>
@@ -269,6 +269,17 @@
           </div>
         </header>
 
+        <section id="mission-progress-panel" class="mission-progress-panel" hidden aria-live="polite">
+          <div class="mission-progress-head">
+            <span class="mission-progress-spinner" aria-hidden="true"></span>
+            <span class="mission-progress-title" id="mission-progress-title">Working…</span>
+            <span class="mission-progress-elapsed" id="mission-progress-elapsed">0.0s</span>
+          </div>
+          <ol class="mission-progress-steps" id="mission-progress-steps"></ol>
+          <div class="mission-progress-bar"><span></span></div>
+          <p class="mission-progress-result" id="mission-progress-result"></p>
+        </section>
+
         <section class="mission-card mission-ticker-card">
           <h3 class="section-h">Live activity</h3>
           <div class="mission-ticker-grid">
@@ -434,10 +445,6 @@
               Delete all Wi-Fi clients
               <span class="mission-action-hint">Removes every probe-request capture and their observations.</span>
             </button>
-          </div>
-          <div id="mission-locdev-progress-row" class="mission-locdev-progress" hidden>
-            <progress id="mission-locdev-progress"></progress>
-            <span class="muted small">Working… the page will refresh when done.</span>
           </div>
         </section>
 
@@ -1500,6 +1507,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260525a"></script>
+  <script src="/static/app.js?v=20260525c"></script>
 </body>
 </html>

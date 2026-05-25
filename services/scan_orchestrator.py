@@ -634,7 +634,9 @@ class ScanOrchestrator:
         """Handle a parsed BLE adv-channel packet from btle_rx. Decodes
         the raw AdvData blob into the bleak-shaped details dict so the
         per-MAC merge in db.upsert_bluetooth collapses HackRF + bleak
-        sightings into one row."""
+        sightings into one row, and applies the same address-type
+        based handling bleak's path uses (random-MAC filter, public-vs-
+        random label, cross-MAC signature linking)."""
         if self._paused:
             return
         s = await settings_store.load()
@@ -645,19 +647,46 @@ class ScanOrchestrator:
         rssi = pkt.get("rssi") if pkt.get("rssi") is not None else -100
         if rssi < s.min_rssi:
             return
+        # Derive the BLE address_type. Priority order:
+        #   1. TxAdd bit from the PHY header (ground truth from btle_rx)
+        #   2. Heuristic from the MAC's top 2 MSBs when TxAdd wasn't
+        #      surfaced — random BLE addresses use bits 7:6 of the
+        #      first octet to encode subtype (11=static, 01=RPA,
+        #      00=NRPA), and a static-random with the top two bits
+        #      set can be recognised even without TxAdd. Public
+        #      OUIs do exist in the same byte range (e.g. F0:xx:xx),
+        #      so we only mark as "random" when TxAdd=1 OR the top
+        #      2 bits are 11 (the unambiguous static-random pattern).
+        tx_add = pkt.get("tx_add")
+        address_type: Optional[str] = None
+        if tx_add == 1:
+            address_type = "random"
+        elif tx_add == 0:
+            address_type = "public"
+        else:
+            try:
+                first_byte = int(mac.split(":", 1)[0], 16)
+                if (first_byte & 0xC0) == 0xC0:
+                    address_type = "random"
+            except (ValueError, IndexError):
+                pass
+        # Same filter the bleak path applies — once we have an
+        # address_type, the operator's "hide random BT" toggle should
+        # work consistently regardless of which radio saw the device.
+        if s.hide_random_bt_addresses and address_type == "random":
+            return
         # Normalize AdvData into the same fields the bleak scanner
         # produces. Unknown TLVs survive as 'unknown_types' so any
         # future analysis can pick them up.
         parsed = parse_ble_adv_data(pkt.get("adv_data_hex") or "")
-        # Vendor lookup — same path bleak uses.
+        # Vendor lookup — same path bleak uses. Skip for random
+        # addresses since the OUI doesn't refer to a real vendor
+        # there (matches bleak's behaviour: vendor is only meaningful
+        # on public addresses).
         try:
-            vendor = await oui_service.lookup(mac)
+            vendor = await oui_service.lookup(mac) if address_type != "random" else None
         except Exception:
             vendor = None
-        # PDU_Type → address_type hint when btle_rx surfaces it. Most
-        # ADV_IND / ADV_NONCONN_IND traffic from a random MAC is the
-        # privacy-mode form; we don't have explicit RFU bits here so
-        # the hint is best-effort.
         details = {
             "vendor": vendor,
             "name": parsed.get("name"),
@@ -669,9 +698,16 @@ class ScanOrchestrator:
             # sighting from a bleak one when inspecting the row's JSON.
             "_source": "hackrf",
             "_hackrf_pdu_type": pkt.get("pdu_type"),
+            "_hackrf_tx_add": tx_add,
             "_hackrf_channel": pkt.get("channel"),
             "_adv_flags": parsed.get("flags"),
         }
+        # Only set address_type when we actually determined one — a None
+        # value would clobber a bleak-set address_type on the same MAC
+        # during the merge in upsert_bluetooth (which does
+        # {**merged, **details}).
+        if address_type is not None:
+            details["address_type"] = address_type
         if parsed.get("unknown_types"):
             details["_adv_unknown_types"] = parsed["unknown_types"]
         fix = self.gps.fix

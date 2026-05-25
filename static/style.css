@@ -1364,13 +1364,124 @@ body.stealth-mode .mission-status-grid dd { visibility: hidden; }
 .toolbar input[type="search"] { min-width: 220px; }
 .toolbar input[type="number"] { width: 70px; }
 
-.mission-locdev-progress {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  margin-top: 12px;
+.mission-progress-panel {
+  position: sticky;
+  top: 8px;
+  z-index: 4;
+  background: linear-gradient(135deg, rgba(184,163,255,0.10), rgba(91,74,138,0.16));
+  border: 1px solid var(--accent, #b8a3ff);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.30);
 }
-.mission-locdev-progress progress { flex: 1; height: 10px; }
+.mission-progress-head {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 600;
+}
+.mission-progress-title { flex: 1; }
+.mission-progress-elapsed {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.92em;
+}
+.mission-progress-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(184,163,255,0.30);
+  border-top-color: var(--accent, #b8a3ff);
+  border-radius: 50%;
+  display: inline-block;
+  animation: mission-spin 0.9s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes mission-spin { to { transform: rotate(360deg); } }
+.mission-progress-steps {
+  list-style: none; padding: 0; margin: 10px 0 10px;
+  display: flex; flex-wrap: wrap; gap: 6px 14px;
+}
+.mission-progress-steps li {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--muted);
+  font-size: 0.88em;
+}
+.mission-progress-steps li::before {
+  content: "○";
+  font-size: 0.85em;
+  color: var(--muted);
+  width: 1em; text-align: center;
+}
+.mission-progress-steps li.mission-step-active {
+  color: var(--accent, #b8a3ff);
+  font-weight: 600;
+}
+.mission-progress-steps li.mission-step-active::before {
+  content: "●";
+  color: var(--accent, #b8a3ff);
+}
+.mission-progress-steps li.mission-step-done {
+  color: var(--text, #e8e0ff);
+}
+.mission-progress-steps li.mission-step-done::before {
+  content: "✓";
+  color: #8fdc8f;
+}
+.mission-progress-steps li.mission-step-error::before {
+  content: "✕";
+  color: #ff8b8b;
+}
+.mission-progress-bar {
+  position: relative;
+  height: 6px;
+  background: var(--panel-2, #2a2438);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.mission-progress-bar span {
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--accent, #b8a3ff), transparent);
+  animation: mission-bar-slide 1.4s ease-in-out infinite;
+  border-radius: 999px;
+}
+@keyframes mission-bar-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.mission-progress-panel.mission-progress-done .mission-progress-spinner,
+.mission-progress-panel.mission-progress-done .mission-progress-bar span {
+  animation: none;
+}
+.mission-progress-panel.mission-progress-done .mission-progress-spinner {
+  border-color: #8fdc8f;
+  border-top-color: #8fdc8f;
+}
+.mission-progress-panel.mission-progress-done .mission-progress-bar span {
+  width: 100%;
+  background: #8fdc8f;
+  transform: none;
+}
+.mission-progress-panel.mission-progress-error {
+  border-color: #ff8b8b;
+  background: linear-gradient(135deg, rgba(255,139,139,0.10), rgba(139,40,40,0.16));
+}
+.mission-progress-panel.mission-progress-error .mission-progress-spinner {
+  border-color: rgba(255,139,139,0.30);
+  border-top-color: #ff8b8b;
+  animation: none;
+}
+.mission-progress-panel.mission-progress-error .mission-progress-bar span {
+  background: #ff8b8b;
+  animation: none;
+  width: 100%;
+  transform: none;
+}
+.mission-progress-result:not(:empty) {
+  margin: 8px 0 0;
+  font-size: 0.92em;
+  color: var(--muted);
+}
 
 /* Themed inline progress bar (used by the Locations "Merge contained"
    stepper). Plain <progress> is browser-styled, so we override both the

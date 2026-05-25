@@ -462,6 +462,17 @@ class HackRFBleScanner:
     _RE_PDU = re.compile(
         r"(?:PDU[_\s]?Type|type|PDU)[\s:=]+([A-Za-z][A-Za-z_]*)"
     )
+    # TxAdd is the address-type bit in the BLE PHY adv header:
+    #   TxAdd 0 → public address (IEEE OUI)
+    #   TxAdd 1 → random address (static / RPA / NRPA per top 2 MSBs)
+    # Mainline btle_rx prints it as `TxAdd 1` (space-separated), some
+    # forks use `TxAdd:1` or `TxAdd=1`. We propagate this all the way
+    # to the orchestrator so HackRF-captured devices get the same
+    # address_type tagging bleak sets, which in turn drives the
+    # 'Hide random BT' filter and the BLE-signature cross-MAC linker
+    # (signatures are skipped for public addresses since those don't
+    # rotate).
+    _RE_TXADD = re.compile(r"TxAdd[\s:=]+(\d)")
     # AdvData / Payload / Data — accept hex bytes separated by space
     # or run together, until we hit two consecutive whitespace runs or
     # end-of-line. Captures the rest of the line greedily; the
@@ -493,6 +504,8 @@ class HackRFBleScanner:
             return
         m_pdu = self._RE_PDU.search(line)
         pdu_type = m_pdu.group(1) if m_pdu else None
+        m_txadd = self._RE_TXADD.search(line)
+        tx_add = int(m_txadd.group(1)) if m_txadd else None
         m_data = self._RE_ADVDATA.search(line)
         adv_data = (m_data.group(1).replace(" ", "").replace(":", "")
                     if m_data else "")
@@ -505,6 +518,7 @@ class HackRFBleScanner:
                 "mac": mac,
                 "rssi": rssi,
                 "pdu_type": pdu_type,
+                "tx_add": tx_add,
                 "adv_data_hex": adv_data,
                 "channel": ch,
             })

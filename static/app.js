@@ -6161,10 +6161,26 @@ async function _endActiveMission() {
   }
 }
 
+function _renderMissionSteps(stepsEl, steps) {
+  if (!stepsEl) return;
+  stepsEl.innerHTML = "";
+  for (const s of steps) {
+    const li = document.createElement("li");
+    li.textContent = s.label;
+    if (s.state === "active") li.classList.add("mission-step-active");
+    else if (s.state === "done") li.classList.add("mission-step-done");
+    else if (s.state === "error") li.classList.add("mission-step-error");
+    stepsEl.appendChild(li);
+  }
+}
+
 async function _missionAction(btn, label, fn, opts = {}) {
   const status = document.getElementById("mission-action-status");
-  const progressRow = opts.progressRowId
-    ? document.getElementById(opts.progressRowId) : null;
+  const panel = document.getElementById("mission-progress-panel");
+  const titleEl = document.getElementById("mission-progress-title");
+  const elapsedEl = document.getElementById("mission-progress-elapsed");
+  const stepsEl = document.getElementById("mission-progress-steps");
+  const resultEl = document.getElementById("mission-progress-result");
   const otherBtns = opts.disableSiblings
     ? Array.from(opts.disableSiblings.querySelectorAll("button")).filter(b => b !== btn)
     : [];
@@ -6173,38 +6189,131 @@ async function _missionAction(btn, label, fn, opts = {}) {
   btn.textContent = label;
   otherBtns.forEach(b => { b.disabled = true; });
   if (status) status.textContent = "";
-  if (progressRow) progressRow.hidden = false;
+
+  // Build the phase strip from what's actually going to happen so the
+  // operator sees the real sequence (pause is opt-in, reload only on
+  // success). label loses its trailing ellipsis for the strip — it's
+  // already implied by the spinner.
+  const runLabel = label.replace(/[….]+$/, "");
+  const steps = [];
+  if (opts.pauseScanners) steps.push({ key: "pause", label: "Pause scanners", state: "pending" });
+  steps.push({ key: "run", label: runLabel, state: "pending" });
+  if (opts.pauseScanners) steps.push({ key: "resume", label: "Resume scanners", state: "pending" });
+  if (opts.reloadOnSuccess) steps.push({ key: "reload", label: "Reload UI", state: "pending" });
+  const setStep = (key, state) => {
+    const s = steps.find(x => x.key === key);
+    if (s) s.state = state;
+    _renderMissionSteps(stepsEl, steps);
+  };
+
+  if (panel) {
+    panel.hidden = false;
+    panel.classList.remove("mission-progress-error", "mission-progress-done");
+    if (titleEl) titleEl.textContent = label;
+    if (resultEl) resultEl.textContent = "";
+    _renderMissionSteps(stepsEl, steps);
+    try { panel.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch {}
+  }
+
+  const t0 = performance.now();
+  let elapsedTimer = null;
+  if (elapsedEl) {
+    const tick = () => {
+      const dt = (performance.now() - t0) / 1000;
+      elapsedEl.textContent = dt < 10 ? `${dt.toFixed(1)}s` : `${Math.round(dt)}s`;
+    };
+    tick();
+    elapsedTimer = setInterval(tick, 200);
+  }
+
+  // Optional scanner-pause guard: ensures no new scan-loop write hits
+  // the DB while the destructive action is running, so a mid-delete
+  // sighting can't create orphan rows or partially-deleted state.
+  // Only re-enables when we paused it — never overrides an
+  // operator-initiated pause that was already on.
+  let pausedByUs = false;
+  if (opts.pauseScanners) {
+    setStep("pause", "active");
+    try {
+      const prior = await api("/api/system/pause").catch(() => ({}));
+      if (!prior.paused) {
+        await api("/api/system/pause", {
+          method: "POST", body: JSON.stringify({ paused: true }),
+        });
+        pausedByUs = true;
+        renderPauseButton(true);
+      }
+      setStep("pause", "done");
+    } catch {
+      setStep("pause", "error");
+    }
+  }
+
   let ok = false;
+  let resultMsg = "";
+  setStep("run", "active");
   try {
     const msg = await fn();
+    resultMsg = msg || "";
     if (status && msg) status.textContent = msg;
+    setStep("run", "done");
     ok = true;
   } catch (e) {
-    if (status) status.textContent = "error: " + (e.message || String(e));
+    resultMsg = "error: " + (e.message || String(e));
+    if (status) status.textContent = resultMsg;
+    setStep("run", "error");
+    if (panel) panel.classList.add("mission-progress-error");
   } finally {
+    // Resume scanners FIRST so they're already ticking again by the
+    // time the page reloads — avoids a confusing 'paused' pill flash
+    // immediately after a destructive op.
+    if (pausedByUs) {
+      setStep("resume", "active");
+      try {
+        await api("/api/system/pause", {
+          method: "POST", body: JSON.stringify({ paused: false }),
+        });
+        renderPauseButton(false);
+        setStep("resume", "done");
+      } catch {
+        setStep("resume", "error");
+      }
+    }
+
+    if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+    if (resultEl) resultEl.textContent = resultMsg;
+    if (titleEl) titleEl.textContent = ok ? "Done" : "Failed";
+    if (panel && ok) panel.classList.add("mission-progress-done");
+
     if (ok && opts.reloadOnSuccess) {
-      // Keep the progress bar visible right up to the reload so the
-      // operator sees the action ran to completion. Buttons stay
-      // disabled too — the page is about to be replaced.
+      setStep("reload", "active");
+      // Keep the panel up through reload so the operator sees completion.
       window.location.reload();
       return;
     }
+
     btn.disabled = false;
     btn.textContent = orig;
     otherBtns.forEach(b => { b.disabled = false; });
-    if (progressRow) progressRow.hidden = true;
+    // Leave the panel up briefly so the final state is readable, then
+    // auto-hide. Errors linger longer.
+    setTimeout(() => {
+      if (panel) panel.hidden = true;
+    }, ok ? 2500 : 6000);
     await refreshMission();
   }
 }
 
 // Shared opts for every button in the Mission > Locations & devices
-// section: show the indeterminate progress bar, lock the sibling
-// buttons so a second action can't pile on, then hard-reload on
-// success so every tab/table re-derives from the new DB state.
+// section: lock the sibling buttons so a second action can't pile on,
+// pause scanners while the delete runs so a mid-write sighting can't
+// race with the wipe, then hard-reload on success so every tab/table
+// re-derives from the new DB state. The shared progress panel up top
+// is driven by _missionAction itself.
 const _LOCDEV_ACTION_OPTS = () => ({
-  progressRowId: "mission-locdev-progress-row",
   disableSiblings: document.getElementById("mission-locdev-grid"),
   reloadOnSuccess: true,
+  pauseScanners: true,
 });
 
 document.getElementById("mission-refresh")?.addEventListener("click", refreshMission);
@@ -6278,7 +6387,7 @@ document.getElementById("mission-clear-alerts")?.addEventListener("click", (e) =
   _missionAction(e.target, "Clearing…", async () => {
     const r = await api("/api/alerts/events", { method: "DELETE" });
     return `Cleared ${r.deleted || 0} alert event(s)`;
-  });
+  }, { pauseScanners: true });
 });
 
 document.getElementById("mission-unlatch-all")?.addEventListener("click", (e) => {
@@ -6286,7 +6395,7 @@ document.getElementById("mission-unlatch-all")?.addEventListener("click", (e) =>
   _missionAction(e.target, "Unlatching…", async () => {
     const r = await api("/api/alerts/clear-all", { method: "POST" });
     return `Unlatched ${r.cleared || 0} pair(s)`;
-  });
+  }, { pauseScanners: true });
 });
 
 document.getElementById("mission-vacuum")?.addEventListener("click", (e) => {
@@ -6296,7 +6405,7 @@ document.getElementById("mission-vacuum")?.addEventListener("click", (e) => {
     return `Size ${formatBytes(r.size_before_bytes || 0)} → `
          + `${formatBytes(r.size_after_bytes || 0)} `
          + `(saved ${formatBytes(r.saved_bytes || 0)})`;
-  });
+  }, { pauseScanners: true });
 });
 
 document.getElementById("mission-integrity")?.addEventListener("click", (e) => {
@@ -6305,7 +6414,7 @@ document.getElementById("mission-integrity")?.addEventListener("click", (e) => {
     return r.ok
       ? "DB integrity: ok"
       : `DB integrity issues: ${(r.findings || []).join(" · ")}`;
-  });
+  }, { pauseScanners: true });
 });
 
 document.getElementById("mission-backup")?.addEventListener("click", () => {
@@ -6353,7 +6462,7 @@ document.getElementById("mission-restore-file")?.addEventListener("change", asyn
     }
     const r = await resp.json();
     return `Restored ${formatBytes(r.bytes || 0)} — restart the app to pick up the new DB.`;
-  });
+  }, { pauseScanners: true });
   ev.target.value = "";
 });
 
