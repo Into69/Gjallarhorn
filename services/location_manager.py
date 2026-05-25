@@ -89,6 +89,23 @@ class LocationManager:
         dynamic_t_s: float = 60.0,
     ) -> Optional[int]:
         if fix.mode < 2 or fix.lat is None or fix.lon is None:
+            # Fall back to the singleton 'Unknown' location so scan
+            # loops still have a valid active_id and devices land in a
+            # clearly labelled no-GPS bucket instead of being dropped.
+            # The Unknown row has radius_m=0 so once a real fix arrives,
+            # _find_containing_location won't re-snap to it.
+            unknown_id = await db.get_or_create_unknown_location()
+            if self._active_id != unknown_id:
+                log.info(
+                    "GPS not fixed (mode=%s) — switching active to Unknown "
+                    "location id=%s",
+                    fix.mode, unknown_id,
+                )
+                self._record_arrival(unknown_id)
+            self._active_id = unknown_id
+            self._active_lat = None
+            self._active_lon = None
+            await db.touch_location(unknown_id)
             return self._active_id
 
         # If the fix falls inside an existing location's radius, snap to that one

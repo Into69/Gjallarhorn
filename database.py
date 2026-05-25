@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS sensor_locations (
     last_seen_at TEXT NOT NULL,
     label TEXT,
     fix_count INTEGER NOT NULL DEFAULT 0,
-    source TEXT NOT NULL DEFAULT 'auto'   -- 'auto' (clustered) | 'manual' (drawn geofence)
+    source TEXT NOT NULL DEFAULT 'auto'   -- 'auto' (clustered) | 'manual' (drawn geofence) | 'unknown' (singleton no-GPS bucket)
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -616,6 +616,31 @@ async def create_location(lat: float, lon: float, radius_m: float, label: str | 
         return cur.lastrowid
 
 
+async def get_or_create_unknown_location() -> int:
+    """Return the singleton 'no GPS fix' location id, creating it on
+    first call. Used as the active location whenever the GPS is not
+    fixed so devices/observations still get recorded under a clearly
+    labelled bucket instead of being dropped on the floor.
+
+    radius_m=0 makes _find_containing_location skip this row once a
+    real fix arrives, so the sensor never gets stuck inside Unknown
+    after GPS comes back. lat/lon are stored as 0,0 (the table forbids
+    NULL); the frontend filters source='unknown' out of map rendering
+    so the (0,0) coordinate doesn't show up off the coast of Africa."""
+    async with _connect() as db:
+        async with db.execute(
+            "SELECT id FROM sensor_locations WHERE source='unknown' "
+            "ORDER BY id LIMIT 1"
+        ) as cur:
+            row = await cur.fetchone()
+            if row:
+                return row[0]
+    return await create_location(
+        lat=0.0, lon=0.0, radius_m=0.0,
+        label="Unknown (no GPS fix)", source="unknown",
+    )
+
+
 async def touch_location(location_id: int) -> None:
     now = datetime.now().isoformat()
     async with _connect() as db:
@@ -628,11 +653,15 @@ async def touch_location(location_id: int) -> None:
 
 async def list_location_centroids() -> list[dict]:
     """Lightweight: id/lat/lon/radius for every location. Used by the
-    location manager to test 'am I inside an existing radius'."""
+    location manager to test 'am I inside an existing radius'. The
+    singleton no-GPS bucket (source='unknown') is excluded — it lives
+    at (0,0) with radius 0 so it should never participate in radius
+    matching, even defensively."""
     async with _connect() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT id, lat, lon, radius_m, source FROM sensor_locations"
+            "SELECT id, lat, lon, radius_m, source FROM sensor_locations "
+            "WHERE source <> 'unknown'"
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
@@ -1045,9 +1074,10 @@ async def auto_merge_contained(*, max_iterations: int = 1000) -> dict:
 async def delete_auto_locations() -> dict:
     """Reset: delete every auto-clustered sensor location and its
     devices/observations while leaving drawn geofences (source='manual')
-    in place. Whitelisted devices get archived into preserved_devices
-    first, same as delete_all_locations does. Temp whitelist is left
-    intact — Reset is a softer action than Delete all."""
+    and the singleton no-GPS bucket (source='unknown') in place.
+    Whitelisted devices get archived into preserved_devices first, same
+    as delete_all_locations does. Temp whitelist is left intact — Reset
+    is a softer action than Delete all."""
     await _flush_observations()
     async with _connect() as db:
         async with db.execute(

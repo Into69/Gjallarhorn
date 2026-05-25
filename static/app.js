@@ -550,6 +550,11 @@ async function refreshLocationMarkers() {
     for (const m of locationMarkers.values()) map.removeLayer(m);
     locationMarkers.clear();
     for (const loc of locations) {
+      // The Unknown (no-GPS) singleton lives at (0,0) — render it
+      // anywhere and the operator would see a stray marker off the
+      // coast of Africa. It's still surfaced on the Locations tab and
+      // the Mission active-location pill, just not on the map.
+      if (loc.source === "unknown") continue;
       const isActive = loc.id === active_id;
       const isManual = loc.source === "manual";
       const isMergeSource = mergeState && mergeState.sourceId === loc.id;
@@ -840,7 +845,12 @@ async function showDevicesOnMap() {
     return;
   }
   const wanted = new Set(locIds);
-  const matched = locations.filter(l => wanted.has(l.id) && l.lat != null && l.lon != null);
+  // Skip the no-GPS bucket — its (0,0) coords would drop a stray
+  // marker off the coast of Africa. Devices captured under it are
+  // still listed in the table, just not plottable on the map.
+  const matched = locations.filter(l =>
+    wanted.has(l.id) && l.source !== "unknown" && l.lat != null && l.lon != null
+  );
   if (!matched.length) {
     document.getElementById("dev-map-modal").innerHTML =
       `<div class="muted">None of the locations these devices appear at have GPS coordinates.</div>`;
@@ -5869,8 +5879,20 @@ async function refreshMission() {
     const isPaused = !!paused.paused;
     renderPauseButton(isPaused);
     const loc = document.getElementById("mission-stat-active-loc");
-    if (loc) loc.textContent = gps.active_location_id != null
-      ? `#${gps.active_location_id}` : "—";
+    if (loc) {
+      // When the orchestrator falls back to the singleton no-GPS
+      // bucket, surface that explicitly instead of just showing the
+      // row id — otherwise the operator sees "#N" with no hint that
+      // it's the Unknown sentinel.
+      const noFix = (gps?.fix?.mode ?? 0) < 2;
+      if (gps.active_location_id != null) {
+        loc.textContent = noFix
+          ? `#${gps.active_location_id} · no GPS fix`
+          : `#${gps.active_location_id}`;
+      } else {
+        loc.textContent = "—";
+      }
+    }
     _renderScannerStateTile(
       "mission-stat-wifi-state", _classifyScannerState({
         paused: isPaused,
