@@ -38,6 +38,17 @@ from typing import Awaitable, Callable, Optional
 
 log = logging.getLogger(__name__)
 
+# Runtime working directory for btle_rx. Some forks of btle_rx (and
+# the hackrf_* tools in general) drop a capture artifact named after
+# the dongle's 32-hex serial number into CWD on each invocation —
+# spawning from the project root meant those files kept landing in
+# the repo. Setting cwd= to a dedicated, gitignored subdirectory
+# corrals every per-session artifact in one place and keeps the
+# project tree clean. We mkdir -p on each scanner start in case the
+# operator wiped vendor/ between runs.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_RUNTIME_DIR = _REPO_ROOT / "vendor" / "hackrf-runtime"
+
 # Default dwell per advertising channel. 1000 ms is comfortable: BLE
 # advertisers cycle through 37→38→39 every adv_interval (default ~20 ms
 # but can be up to 10 s for low-power tags), so a 1 s window catches
@@ -245,6 +256,26 @@ class HackRFBleScanner:
         self._recent_stderr.clear()
         self._started_at = time.time()
         self._disabled_channels.clear()
+        # Make sure the runtime dir exists before we spawn btle_rx with
+        # cwd= pointing at it. Best-effort: a permission failure here
+        # falls back to the repo root (the file just lands where it
+        # used to) rather than blocking the scanner.
+        try:
+            _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            log.warning("hackrf scanner: could not create %s: %s",
+                        _RUNTIME_DIR, e)
+        # One-shot cleanup of any leftover serial-named artifact at
+        # the repo root from prior runs that spawned btle_rx with the
+        # repo as cwd. 32-hex-char files that look like a HackRF serial
+        # only — we don't sweep anything else.
+        try:
+            for p in _REPO_ROOT.iterdir():
+                if (p.is_file() and len(p.name) == 32
+                        and all(c in "0123456789abcdefABCDEF" for c in p.name)):
+                    p.unlink(missing_ok=True)
+        except OSError:
+            pass
         self._task = asyncio.create_task(self._run_loop(), name="hackrf-ble-scanner")
 
     async def stop(self) -> None:
@@ -333,11 +364,17 @@ class HackRFBleScanner:
         # is plugged in. Skipped when only one is attached.
         if self._serial:
             cmd.extend(["-s", self._serial])
+        # cwd= corrals any serial-named capture artifacts btle_rx
+        # drops in CWD (see _RUNTIME_DIR comment). Falls back to
+        # whatever the parent process's cwd is on permission errors —
+        # the spawn itself takes priority over keeping the tree clean.
+        cwd = str(_RUNTIME_DIR) if _RUNTIME_DIR.is_dir() else None
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
             )
         except FileNotFoundError:
             # Binary disappeared mid-run — log + halt the loop so we
