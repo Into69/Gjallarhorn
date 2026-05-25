@@ -6,20 +6,25 @@
 #
 # Re-running is safe — every step is idempotent.
 #
-#   ./setup.sh           # normal run; will sudo where needed
-#   ./setup.sh --no-sudo # skip every step that requires root
-#   ./setup.sh --dev     # also install pytest/ruff for local development
+#   ./setup.sh                 # normal run; will sudo where needed
+#   ./setup.sh --no-sudo       # skip every step that requires root
+#   ./setup.sh --dev           # also install pytest/ruff for local development
+#   ./setup.sh --with-hackrf   # also install hackrf-tools + build btle_rx
+#                              # from JiaoXianjun/BTLE into /usr/local/bin
+#                              # so the HackRF BLE scanner works
 
 set -euo pipefail
 
 NO_SUDO=0
 DEV=0
+WITH_HACKRF=0
 for arg in "$@"; do
     case "$arg" in
-        --no-sudo) NO_SUDO=1 ;;
-        --dev)     DEV=1 ;;
+        --no-sudo)     NO_SUDO=1 ;;
+        --dev)         DEV=1 ;;
+        --with-hackrf) WITH_HACKRF=1 ;;
         -h|--help)
-            sed -n '2,12p' "$0"
+            sed -n '2,16p' "$0"
             exit 0 ;;
         *) echo "unknown flag: $arg" >&2; exit 2 ;;
     esac
@@ -147,44 +152,85 @@ if have systemctl; then
     run_sudo systemctl enable --now gpsd        2>/dev/null || true
 fi
 
-# ---- 5b. HackRF BLE scanner (optional) --------------------------------------
+# ---- 5b. HackRF BLE scanner (optional, --with-hackrf) -----------------------
 #
 # The HackRF BLE scanner wraps `btle_rx` from JiaoXianjun/BTLE as an SDR-backed
 # BLE advertising sniffer. Strictly optional — the bleak-based BLE scanner
-# covers ~90% of what most operators need. If you have a HackRF One and want
-# PHY-level capture (devices the OS filters out, absolute-dBm RSSI, raw
-# advertising bytes), follow the manual steps below. We don't automate the
-# cmake/make/install because it requires sudo, pulls in two dev packages,
-# and clones a third-party repo — best done deliberately by the operator.
+# covers ~90% of what most operators need. Pass --with-hackrf to install the
+# build deps + hackrf user tools and build btle_rx into /usr/local/bin. Without
+# the flag, we just print a hint if a HackRF is detected.
 #
-#   1) Install the build deps + hackrf user tools:
-#        sudo apt install -y hackrf libhackrf-dev libfftw3-dev cmake build-essential git
-#
-#   2) Add yourself to the 'plugdev' group so libusb can talk to the HackRF
-#      without root, then log out / back in:
-#        sudo usermod -aG plugdev "$USER"
-#
-#   3) Confirm the HackRF is detected:
-#        hackrf_info       # should print 'Serial number: ...'
-#
-#   4) Clone + build btle_rx:
-#        git clone https://github.com/JiaoXianjun/BTLE.git
-#        cd BTLE/host
-#        mkdir build && cd build
-#        cmake ..
-#        make
-#        sudo make install   # installs btle_rx to /usr/local/bin
-#
-#   5) Toggle 'Enable HackRF BLE scanner' in Gjallarhorn's Settings →
-#      HackRF BLE section. The Settings panel auto-detects the binary;
-#      if it's not on PATH the scanner stays silently disabled.
-#
-# We detect HackRF presence here purely to print a hint — no install attempt.
-if have hackrf_info; then
+# The runtime detection in services/hackrf_ble_scanner.py probes a list of
+# standard install locations (incl. /usr/local/bin) directly, so PATH doesn't
+# need /usr/local/bin to be set in the gjallarhorn process's environment —
+# the binary will be found regardless of how the app is launched.
+HACKRF_BUILD_PKGS=(hackrf libhackrf-dev libfftw3-dev cmake build-essential git)
+BTLE_SRC_DIR="$SCRIPT_DIR/vendor/BTLE"
+
+install_hackrf_stack() {
+    log "installing HackRF build deps: ${HACKRF_BUILD_PKGS[*]}"
+    if have apt-get; then
+        run_sudo apt-get install -y "${HACKRF_BUILD_PKGS[@]}"
+    elif have dnf; then
+        run_sudo dnf install -y hackrf-devel fftw-devel cmake gcc-c++ git
+    elif have pacman; then
+        run_sudo pacman -S --needed --noconfirm hackrf fftw cmake base-devel git
+    else
+        warn "no supported package manager — install manually: ${HACKRF_BUILD_PKGS[*]}"
+    fi
+
+    # plugdev group so libusb can talk to the dongle without root.
+    if getent group plugdev >/dev/null 2>&1; then
+        if id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx plugdev; then
+            log "$TARGET_USER already in plugdev group"
+        else
+            log "adding $TARGET_USER to plugdev group (log out/in to take effect)"
+            run_sudo usermod -aG plugdev "$TARGET_USER" || \
+                warn "could not add $TARGET_USER to plugdev group"
+        fi
+    fi
+
+    # Clone JiaoXianjun/BTLE into ./vendor so the build stays inside the
+    # project tree and re-runs are stateless (we wipe + rebuild rather than
+    # carrying stale build state across runs).
+    mkdir -p "$(dirname "$BTLE_SRC_DIR")"
+    if [[ -d "$BTLE_SRC_DIR/.git" ]]; then
+        log "updating JiaoXianjun/BTLE clone at $BTLE_SRC_DIR"
+        git -C "$BTLE_SRC_DIR" fetch --depth 1 origin >/dev/null 2>&1 || \
+            warn "git fetch failed — using existing clone"
+        git -C "$BTLE_SRC_DIR" reset --hard origin/HEAD >/dev/null 2>&1 || true
+    else
+        log "cloning JiaoXianjun/BTLE → $BTLE_SRC_DIR"
+        rm -rf "$BTLE_SRC_DIR"
+        git clone --depth 1 https://github.com/JiaoXianjun/BTLE.git "$BTLE_SRC_DIR"
+    fi
+
+    # cmake + make + install. Wipe and recreate the build dir so a partial
+    # prior run doesn't trip cmake's cache.
+    local build_dir="$BTLE_SRC_DIR/host/build"
+    log "building btle_rx (cmake + make in $build_dir)"
+    rm -rf "$build_dir"
+    mkdir -p "$build_dir"
+    ( cd "$build_dir" && cmake .. && make -j"$(nproc 2>/dev/null || echo 2)" )
+
+    # Install to /usr/local/bin where the runtime resolver looks first.
+    log "installing btle_rx to /usr/local/bin (needs sudo)"
+    ( cd "$build_dir" && run_sudo make install )
+
+    if have btle_rx || [[ -x /usr/local/bin/btle_rx ]]; then
+        log "btle_rx installed at: $(command -v btle_rx 2>/dev/null || echo /usr/local/bin/btle_rx)"
+    else
+        warn "btle_rx still not found after install — check the make output above"
+    fi
+}
+
+if [[ "$WITH_HACKRF" -eq 1 ]]; then
+    install_hackrf_stack
+elif have hackrf_info; then
     log "hackrf_info detected — HackRF BLE scanner is available"
-    if ! have btle_rx; then
-        warn "btle_rx not on PATH — install JiaoXianjun/BTLE to enable the"
-        warn "  HackRF BLE scanner (see comments in setup.sh section 5b)"
+    if ! have btle_rx && [[ ! -x /usr/local/bin/btle_rx ]]; then
+        warn "btle_rx not installed — re-run with --with-hackrf to build it"
+        warn "  (or follow the manual steps in JiaoXianjun/BTLE's README)"
     fi
 fi
 
@@ -219,4 +265,9 @@ EOF
 if ! id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx bluetooth; then
     warn "you were just added to the bluetooth group — log out and back in"
     warn "(or run: newgrp bluetooth) before starting the app."
+fi
+if [[ "$WITH_HACKRF" -eq 1 ]] \
+   && ! id -nG "$TARGET_USER" | tr ' ' '\n' | grep -qx plugdev; then
+    warn "you were just added to the plugdev group — log out and back in"
+    warn "(or run: newgrp plugdev) before the HackRF will be accessible."
 fi

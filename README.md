@@ -59,30 +59,37 @@ is in the `bluetooth` group; otherwise run as root.
 ### Optional: HackRF BLE scanner
 
 To enable the SDR-driven BLE path (HackRF One + `btle_rx` from
-[JiaoXianjun/BTLE](https://github.com/JiaoXianjun/BTLE)):
+[JiaoXianjun/BTLE](https://github.com/JiaoXianjun/BTLE)), pass
+`--with-hackrf` to setup.sh:
 
 ```bash
-# 1. Build deps + hackrf user tools
+./setup.sh --with-hackrf
+```
+
+That installs `hackrf` + the build deps, adds you to the `plugdev`
+group, clones the BTLE repo to `vendor/BTLE`, builds `btle_rx`, and
+installs it to `/usr/local/bin`. (Re-running is safe — the clone
+is refreshed and the build dir is wiped each time.)
+
+If you'd rather do it by hand:
+
+```bash
 sudo apt install -y hackrf libhackrf-dev libfftw3-dev cmake build-essential git
-
-# 2. USB access without root (log out / back in after)
-sudo usermod -aG plugdev "$USER"
-
-# 3. Confirm the dongle is detected
-hackrf_info        # should print 'Serial number: ...'
-
-# 4. Build + install btle_rx
+sudo usermod -aG plugdev "$USER"   # log out / back in after
+hackrf_info                         # confirm dongle visible
 git clone https://github.com/JiaoXianjun/BTLE.git
 cd BTLE/host && mkdir build && cd build
 cmake .. && make
-sudo make install  # installs btle_rx to /usr/local/bin
+sudo make install                   # → /usr/local/bin/btle_rx
 ```
 
 Then in **Settings → HackRF BLE**: toggle **Enable HackRF BLE scanner**,
 optionally pick a serial (auto-detected via `hackrf_info`), and tune
-gain / minimum RSSI / channel dwell. The scanner stays silently
-disabled while `btle_rx` isn't on `PATH`, so it's safe to leave the
-toggle off on hosts without the SDR toolchain.
+gain / minimum RSSI / channel dwell. The runtime resolves `btle_rx`
+through `/usr/local/bin` even when `$PATH` doesn't include it, so
+the scanner works under systemd's stripped service environment too.
+The toggle stays locked until a HackRF is detected so you can't
+arm an empty capture.
 
 ## Run
 
