@@ -25,11 +25,34 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 
+# Strict MAC validator. We reject placeholder / sentinel values that
+# would otherwise badge every nearby device:
+#   00:00:00:00:00:00  — unconfigured / disabled adapter sysfs default
+#   FF:FF:FF:FF:FF:FF  — L2 broadcast
+# A 'sensor identity' that matched either would silently flag every
+# row whose MAC happened to equal the sentinel — which is exactly
+# the bug the user hit ("lots of devices have the sensor badge").
+import re as _re
+_MAC_RE = _re.compile(r"^[0-9A-F]{2}(?::[0-9A-F]{2}){5}$")
+_MAC_BLACKLIST = {"00:00:00:00:00:00", "FF:FF:FF:FF:FF:FF"}
+
+
+def _valid_sensor_mac(mac: Optional[str]) -> bool:
+    """True for full-format MACs that aren't reserved sentinels."""
+    if not mac or len(mac) != 17:
+        return False
+    if not _MAC_RE.match(mac):
+        return False
+    return mac not in _MAC_BLACKLIST
+
+
 def _read_iface_mac(iface: Optional[str]) -> Optional[str]:
     """Read the hardware MAC of a Linux network interface from sysfs.
     Returns uppercase XX:XX:... or None. Tolerates the special
     'default' / 'auto' placeholders, missing sysfs entries, and the
-    monitor-mode suffix some tools append (wlan1 → wlan1mon)."""
+    monitor-mode suffix some tools append (wlan1 → wlan1mon). Rejects
+    placeholder MACs (all-zero, broadcast) so an unconfigured /
+    disabled adapter doesn't get registered as the sensor's own."""
     if not iface or iface in ("default", "auto"):
         return None
     candidates = [iface]
@@ -40,7 +63,7 @@ def _read_iface_mac(iface: Optional[str]) -> Optional[str]:
             mac = Path(f"/sys/class/net/{name}/address").read_text().strip().upper()
         except OSError:
             continue
-        if len(mac) == 17:
+        if _valid_sensor_mac(mac):
             return mac
     return None
 
@@ -48,13 +71,15 @@ def _read_iface_mac(iface: Optional[str]) -> Optional[str]:
 def _read_bluetooth_mac(adapter: Optional[str]) -> Optional[str]:
     """Read the BR/EDR address of a BlueZ adapter from sysfs. Falls
     back to hci0 when no specific adapter is configured — matches
-    bluetooth_classic_scanner's _resolve_adapter_path default."""
+    bluetooth_classic_scanner's _resolve_adapter_path default.
+    Rejects placeholder MACs for the same reason _read_iface_mac
+    does."""
     name = adapter if adapter and adapter not in ("default", "auto") else "hci0"
     try:
         mac = Path(f"/sys/class/bluetooth/{name}/address").read_text().strip().upper()
     except OSError:
         return None
-    return mac if len(mac) == 17 else None
+    return mac if _valid_sensor_mac(mac) else None
 
 
 class SensorIdentity:

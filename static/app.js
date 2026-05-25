@@ -4579,18 +4579,42 @@ let isWhitelisted = (_k, _d) => false;
 // tooltip. Built up by refreshSensorIdentity() at boot and after any
 // settings change that touches the adapter fields.
 let _sensorIdentity = new Map();
+// Strict 17-char MAC regex used to gate both what enters the map and
+// what we'll attempt to look up. Without this, a malformed sensor
+// entry (e.g. empty string or short prefix) would silently match
+// many devices when their device_id starts with the same characters,
+// and a malformed lookup (random short string) would risk matching
+// the wrong entry. The earlier 'lots of devices badged' bug was the
+// backend registering a placeholder MAC (00:00:00... from a disabled
+// interface); the regex here is the second line of defense.
+const _MAC_RE = /^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$/;
+// Also blacklisted on the JS side so a stale cached page can't keep
+// applying the badge if the backend gets re-deployed first.
+const _MAC_BLACKLIST = new Set([
+  "00:00:00:00:00:00",
+  "ff:ff:ff:ff:ff:ff",
+]);
+function _normMacForSensor(s) {
+  const lower = String(s || "").toLowerCase();
+  if (!_MAC_RE.test(lower)) return null;
+  if (_MAC_BLACKLIST.has(lower)) return null;
+  return lower;
+}
 function isSensor(deviceId) {
-  return _sensorIdentity.has((deviceId || "").toLowerCase());
+  const mac = _normMacForSensor(deviceId);
+  return mac != null && _sensorIdentity.has(mac);
 }
 function sensorLabel(deviceId) {
-  return _sensorIdentity.get((deviceId || "").toLowerCase()) || null;
+  const mac = _normMacForSensor(deviceId);
+  return (mac && _sensorIdentity.get(mac)) || null;
 }
 async function refreshSensorIdentity() {
   try {
     const r = await api("/api/sensors/identity");
     const next = new Map();
     for (const e of (r.sensors || [])) {
-      if (e && e.mac) next.set(e.mac.toLowerCase(), e.label || "Sensor");
+      const mac = _normMacForSensor(e?.mac);
+      if (mac) next.set(mac, e.label || "Sensor");
     }
     _sensorIdentity = next;
   } catch {
