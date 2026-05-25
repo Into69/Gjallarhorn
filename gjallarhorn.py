@@ -468,15 +468,19 @@ async def api_hackrf_devices():
     Settings tab's serial picker. Returns an empty list (with a
     diagnostic 'error' string) when hackrf_info isn't installed
     or the call fails — the UI can render that as a hint."""
-    from services.hackrf_ble_scanner import hackrf_info_available
-    if not hackrf_info_available():
+    from services.hackrf_ble_scanner import hackrf_info_path
+    binary = hackrf_info_path()
+    if not binary:
         return {
             "devices": [],
-            "error": "hackrf_info not on PATH (install the hackrf-tools package)",
+            "error": (
+                "hackrf_info not found on PATH or in /usr/local/bin "
+                "(install the hackrf-tools package: sudo apt install hackrf)"
+            ),
         }
     try:
         proc = await asyncio.create_subprocess_exec(
-            "hackrf_info",
+            binary,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

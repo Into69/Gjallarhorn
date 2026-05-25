@@ -28,9 +28,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import shutil
 import time
+from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 log = logging.getLogger(__name__)
@@ -51,14 +53,58 @@ _RESTART_BACKOFF_S = 5.0
 HackRFBleCallback = Callable[[dict], Awaitable[None]]
 
 
+# Standard install locations to probe when the binary isn't on PATH.
+# `sudo make install` from JiaoXianjun/BTLE drops btle_rx into
+# /usr/local/bin, which is not on PATH for processes spawned by
+# systemd's default service environment (PATH is stripped to
+# /usr/bin:/bin). Falling back to these explicit paths makes the
+# detection work even when the operator runs gjallarhorn under
+# systemd without a custom PATH= line in the unit file.
+_BTLE_RX_CANDIDATES = (
+    "/usr/local/bin/btle_rx",
+    "/usr/bin/btle_rx",
+    "/opt/btle/btle_rx",
+    str(Path.home() / "BTLE/host/build/btle_rx"),
+)
+_HACKRF_INFO_CANDIDATES = (
+    "/usr/local/bin/hackrf_info",
+    "/usr/bin/hackrf_info",
+)
+
+
+def _resolve_binary(name: str, candidates: tuple) -> Optional[str]:
+    """Find an executable by name. Checks $PATH first via shutil.which,
+    then falls through to the candidate list for the systemd-stripped-
+    PATH case. Returns the first hit (or None)."""
+    hit = shutil.which(name)
+    if hit:
+        return hit
+    for p in candidates:
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def btle_rx_path() -> Optional[str]:
+    """Resolved path to the btle_rx binary, or None if not found.
+    Use this when spawning the subprocess — passing an absolute path
+    survives PATH variance between interactive shells and service
+    managers."""
+    return _resolve_binary("btle_rx", _BTLE_RX_CANDIDATES)
+
+
+def hackrf_info_path() -> Optional[str]:
+    return _resolve_binary("hackrf_info", _HACKRF_INFO_CANDIDATES)
+
+
 def btle_rx_available() -> bool:
-    """True iff the btle_rx binary is on PATH. The scanner stays
-    disabled when this is False — there's nothing to wrap."""
-    return shutil.which("btle_rx") is not None
+    """True iff the btle_rx binary is resolvable, either via PATH or
+    via the standard /usr/local/bin install location."""
+    return btle_rx_path() is not None
 
 
 def hackrf_info_available() -> bool:
-    return shutil.which("hackrf_info") is not None
+    return hackrf_info_path() is not None
 
 
 class HackRFBleScanner:
@@ -121,9 +167,11 @@ class HackRFBleScanner:
 
     def stats(self) -> dict:
         """Snapshot for the /api status surface + Mission tile."""
+        bin_path = btle_rx_path()
         return {
             "running": self._running,
-            "binary_available": btle_rx_available(),
+            "binary_available": bin_path is not None,
+            "binary_path": bin_path,
             "serial": self._serial,
             "gain": self._gain,
             "min_rssi": self._min_rssi,
@@ -248,7 +296,15 @@ class HackRFBleScanner:
     async def _scan_channel(self, ch: int) -> None:
         """Spawn btle_rx pinned to one advertising channel; drain its
         output for hop_ms milliseconds; tear down."""
-        cmd: list[str] = ["btle_rx", "-c", str(ch), "-g", str(self._gain)]
+        # Always use the resolved absolute path so the spawn works
+        # under systemd's stripped PATH (only /usr/bin:/bin by default;
+        # btle_rx typically lives in /usr/local/bin).
+        binary = btle_rx_path()
+        if not binary:
+            self._last_error = "btle_rx not resolvable on PATH or in /usr/local/bin"
+            self._stop.set()
+            return
+        cmd: list[str] = [binary, "-c", str(ch), "-g", str(self._gain)]
         # btle_rx's `-s` selects a HackRF by serial when more than one
         # is plugged in. Skipped when only one is attached.
         if self._serial:

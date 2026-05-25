@@ -2560,9 +2560,21 @@ async function refreshHackrfStatus() {
   }
   const binEl = $("#hackrf-binary");
   if (binEl) {
-    binEl.innerHTML = s.binary_available
-      ? `<span class="pill ok">on PATH</span>`
-      : `<span class="pill warn">missing — install JiaoXianjun/BTLE</span>`;
+    if (s.binary_available) {
+      // Show the resolved path so the operator can confirm we're
+      // picking up the right install (e.g. /usr/local/bin vs a
+      // stale copy elsewhere on PATH).
+      const path = s.binary_path || "";
+      binEl.innerHTML = path
+        ? `<span class="pill ok">found</span> <span class="mono small">${escapeHtml(path)}</span>`
+        : `<span class="pill ok">found</span>`;
+    } else {
+      binEl.innerHTML = (
+        `<span class="pill warn">not found on PATH or /usr/local/bin</span>` +
+        ` <span class="muted small">— install JiaoXianjun/BTLE, ` +
+        `or run gjallarhorn under a shell that includes the install dir.</span>`
+      );
+    }
   }
   const errEl = $("#hackrf-last-error");
   if (errEl) {
@@ -2573,15 +2585,22 @@ async function refreshHackrfStatus() {
 
 // Populate the HackRF serial dropdown from /api/hackrf/devices. Called
 // when the operator opens the HackRF settings section, since serials
-// don't change often — no need to poll.
+// don't change often — no need to poll. Also gates the 'Enable
+// HackRF BLE scanner' toggle on hardware presence: if no dongle is
+// detected the toggle is locked (.disabled switch styling + a hint
+// paragraph), since flipping it on without hardware just produces a
+// 'btle_rx exited' error and confuses the operator.
 async function refreshHackrfSerials() {
   const sel = $("#set-hackrf-serial");
   if (!sel) return;
   const prev = sel.value;
+  let detected = false;
+  let errText = null;
   try {
     const r = await api("/api/hackrf/devices");
     sel.innerHTML = `<option value="">— first detected —</option>`;
     for (const dev of (r.devices || [])) {
+      detected = true;
       const opt = document.createElement("option");
       opt.value = dev.serial;
       // Truncate long serials in the visible label but keep the
@@ -2592,6 +2611,7 @@ async function refreshHackrfSerials() {
       sel.appendChild(opt);
     }
     if (r.error) {
+      errText = r.error;
       const opt = document.createElement("option");
       opt.value = "";
       opt.disabled = true;
@@ -2604,7 +2624,44 @@ async function refreshHackrfSerials() {
       sel.value = prev;
     }
   } catch (e) {
-    // Leave the dropdown as-is on transient errors.
+    errText = e.message;
+  }
+  // The serial dropdown itself is meaningless without a detected
+  // dongle — lock it alongside the toggle.
+  sel.disabled = !detected;
+  // Gate the enable toggle on hardware presence.
+  const enableCb = document.querySelector('input[name="hackrf_ble_enabled"]');
+  const sw = enableCb?.closest(".mission-switch");
+  if (enableCb) {
+    enableCb.disabled = !detected;
+    if (sw) sw.classList.toggle("disabled", !detected);
+    enableCb.title = detected
+      ? ""
+      : (errText
+        ? `No HackRF detected (${errText}) — toggle locked`
+        : "No HackRF detected — toggle locked. Plug a dongle in and reopen this Settings section.");
+  }
+  // Surface a hint paragraph under the toggle when locked so the
+  // operator can see why the switch won't move without having to
+  // hover.
+  let hint = document.getElementById("hackrf-toggle-hint");
+  if (!detected) {
+    const note = errText
+      ? `Locked — ${errText}. Plug a HackRF in and reopen this section to retry.`
+      : "Locked — no HackRF detected. Plug a dongle in and reopen this Settings section to retry.";
+    if (!hint && sw && sw.parentNode) {
+      hint = document.createElement("p");
+      hint.id = "hackrf-toggle-hint";
+      hint.className = "hint";
+      hint.style.color = "var(--warn)";
+      sw.insertAdjacentElement("afterend", hint);
+    }
+    if (hint) {
+      hint.textContent = note;
+      hint.hidden = false;
+    }
+  } else if (hint) {
+    hint.hidden = true;
   }
 }
 
