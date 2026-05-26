@@ -2111,6 +2111,32 @@ fieldset .code-block {
   word-break: break-word;
   color: var(--fg);
 }
+/* Compact, tightly-spaced table for inline panel summaries (HackRF
+   top-advertisers list, etc). Keeps padding small enough to fit ~10
+   rows in a fieldset without scrolling, with a subtle row hover so
+   the operator can track across columns. */
+.compact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 6px 0 4px;
+}
+.compact-table th, .compact-table td {
+  padding: 3px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.compact-table th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.compact-table tbody tr:hover {
+  background: var(--panel-2);
+}
+.compact-table tbody tr:last-child td { border-bottom: none; }
 #oui-panel p { margin: 0 0 10px; }
 #oui-test-mac { font-family: ui-monospace, "JetBrains Mono", Consolas, monospace; min-width: 200px; }
 #oui-stats { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px;

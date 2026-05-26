@@ -61,6 +61,17 @@ _AD_CHANNELS = (37, 38, 39)
 _PROC_TERMINATE_TIMEOUT_S = 1.5
 # Backoff before the loop tries to spawn again after a fatal error.
 _RESTART_BACKOFF_S = 5.0
+# Hard cap on the per-MAC tracking dict. BLE adv traffic in a dense
+# area can produce hundreds of distinct addresses an hour (Apple device
+# RPA rotation in particular); without a cap the per-MAC dict grows
+# unbounded across a long session. When we hit the cap we evict the
+# bottom 25% by last-seen time so the most-recently-active entries
+# survive — that's what the Settings panel's top-MACs widget cares
+# about.
+_MAX_TRACKED_MACS = 500
+# How many entries to surface in the 'top MACs' widget. Bigger doesn't
+# help — the operator scans the list visually.
+_TOP_MACS_SHOWN = 10
 
 HackRFBleCallback = Callable[[dict], Awaitable[None]]
 
@@ -157,6 +168,36 @@ class HackRFBleScanner:
         self._stdout_line_count: int = 0
         self._stderr_line_count: int = 0
         self._recent_stderr: deque = deque(maxlen=20)
+        # Per-session breakdown counters for the Settings panel. All
+        # populated in _handle_line after a successful parse so we never
+        # double-count a line the regex didn't match. Capped at sensible
+        # limits to keep the dict sizes bounded on long-running sensors
+        # (BLE adv traffic can produce hundreds of MACs / hour in a busy
+        # area).
+        self._per_channel_count: dict[int, int] = {}
+        self._per_pdu_count: dict[str, int] = {}
+        # Address-type bucket from TxAdd (0=public, 1=random) — anything
+        # else (parser miss / fork that doesn't print TxAdd) lands in
+        # 'unknown' so the operator can see how many sightings we can't
+        # classify.
+        self._per_address_type: dict[str, int] = {}
+        # Per-MAC sighting stats. Capped at _MAX_TRACKED_MACS — when we
+        # blow past the cap the least-recently-seen 25% are evicted.
+        # 500 is enough to cover the entire active population in most
+        # locations while still bounding memory.
+        self._per_mac_count: dict[str, int] = {}
+        self._per_mac_last_rssi: dict[str, int] = {}
+        self._per_mac_last_at: dict[str, float] = {}
+        # Aggregate RSSI distribution — min/max/sum/count → derive avg.
+        self._rssi_min: Optional[int] = None
+        self._rssi_max: Optional[int] = None
+        self._rssi_sum: int = 0
+        self._rssi_count: int = 0
+        # Wall-clock of the most recent channel hop (a new btle_rx
+        # process spawn). Useful sanity check that the hop loop hasn't
+        # frozen — if last_hop_at falls behind by much more than hop_ms,
+        # something is wrong.
+        self._last_hop_at: Optional[float] = None
 
     # ── status surface ──────────────────────────────────────────────
     @property
@@ -190,6 +231,34 @@ class HackRFBleScanner:
     def stats(self) -> dict:
         """Snapshot for the /api status surface + Mission tile."""
         bin_path = btle_rx_path()
+        now = time.time()
+        uptime_s = (now - self._started_at) if self._started_at else None
+        parse_rate_pct = (
+            (self._packet_count / self._stdout_line_count) * 100.0
+            if self._stdout_line_count else None
+        )
+        rssi_avg = (
+            self._rssi_sum / self._rssi_count
+            if self._rssi_count else None
+        )
+        # Top MACs sorted by sighting count, with the per-MAC last RSSI
+        # and "seconds since last" so the operator can spot active
+        # advertisers at a glance.
+        top_macs = sorted(
+            self._per_mac_count.items(), key=lambda kv: kv[1], reverse=True,
+        )[:_TOP_MACS_SHOWN]
+        top_macs_out = [
+            {
+                "mac": mac,
+                "count": count,
+                "last_rssi": self._per_mac_last_rssi.get(mac),
+                "ago_s": (
+                    now - self._per_mac_last_at[mac]
+                    if mac in self._per_mac_last_at else None
+                ),
+            }
+            for mac, count in top_macs
+        ]
         return {
             "running": self._running,
             "binary_available": bin_path is not None,
@@ -204,6 +273,7 @@ class HackRFBleScanner:
             "packet_count": self._packet_count,
             "last_packet_at": self._last_packet_at,
             "started_at": self._started_at,
+            "uptime_s": uptime_s,
             "last_error": self._last_error,
             # Debug surface: total stdout / stderr lines seen since
             # start(), and a ring of the most recent ones. Lets the
@@ -212,8 +282,21 @@ class HackRFBleScanner:
             # matching the actual format).
             "stdout_line_count": self._stdout_line_count,
             "stderr_line_count": self._stderr_line_count,
+            "parse_rate_pct": parse_rate_pct,
             "recent_lines": list(self._recent_lines),
             "recent_stderr": list(self._recent_stderr),
+            # Per-session breakdown: distribution of parsed packets by
+            # channel, PDU type, and BLE address type. Each is a small
+            # dict the UI renders as a one-line summary.
+            "per_channel": dict(self._per_channel_count),
+            "per_pdu_type": dict(self._per_pdu_count),
+            "per_address_type": dict(self._per_address_type),
+            "unique_macs": len(self._per_mac_count),
+            "top_macs": top_macs_out,
+            "rssi_min": self._rssi_min,
+            "rssi_max": self._rssi_max,
+            "rssi_avg": rssi_avg,
+            "last_hop_at": self._last_hop_at,
         }
 
     # ── lifecycle ───────────────────────────────────────────────────
@@ -256,6 +339,20 @@ class HackRFBleScanner:
         self._recent_stderr.clear()
         self._started_at = time.time()
         self._disabled_channels.clear()
+        # Per-session breakdown counters — start() is a fresh session so
+        # the operator sees stats scoped to this run, not a lifetime sum
+        # across config changes.
+        self._per_channel_count.clear()
+        self._per_pdu_count.clear()
+        self._per_address_type.clear()
+        self._per_mac_count.clear()
+        self._per_mac_last_rssi.clear()
+        self._per_mac_last_at.clear()
+        self._rssi_min = None
+        self._rssi_max = None
+        self._rssi_sum = 0
+        self._rssi_count = 0
+        self._last_hop_at = None
         # Make sure the runtime dir exists before we spawn btle_rx with
         # cwd= pointing at it. Best-effort: a permission failure here
         # falls back to the repo root (the file just lands where it
@@ -383,6 +480,9 @@ class HackRFBleScanner:
             self._stop.set()
             return
         self._current_channel = ch
+        # Record the hop timestamp so the operator can spot a frozen
+        # hop loop (last_hop_at falling behind by much more than hop_ms).
+        self._last_hop_at = time.time()
         # Drain stderr concurrently so its buffer doesn't fill (and so
         # we can surface a hardware error message if the spawn was
         # accepted but the device is busy).
@@ -481,6 +581,25 @@ class HackRFBleScanner:
         r"(?:AdvData|Adv_Data|Payload|Data)[\s:=]+([0-9A-Fa-f\s]+?)\s*$"
     )
 
+    def _evict_stale_macs(self) -> None:
+        """Drop the oldest-last-seen 25% of per-MAC entries when the
+        tracker dict blows past _MAX_TRACKED_MACS. Called from the
+        parser hot path, so we trim aggressively (25% rather than 1
+        entry at a time) to amortise the sort cost across many
+        sightings."""
+        if not self._per_mac_last_at:
+            return
+        cutoff = len(self._per_mac_last_at) // 4
+        if cutoff <= 0:
+            return
+        oldest = sorted(
+            self._per_mac_last_at.items(), key=lambda kv: kv[1],
+        )[:cutoff]
+        for mac, _ in oldest:
+            self._per_mac_count.pop(mac, None)
+            self._per_mac_last_rssi.pop(mac, None)
+            self._per_mac_last_at.pop(mac, None)
+
     @staticmethod
     def _normalize_mac(raw: str) -> str:
         """Accept aa:bb:cc:dd:ee:ff or aabbccddeeff, return upper-colon."""
@@ -510,7 +629,32 @@ class HackRFBleScanner:
         adv_data = (m_data.group(1).replace(" ", "").replace(":", "")
                     if m_data else "")
         self._packet_count += 1
-        self._last_packet_at = time.time()
+        now = time.time()
+        self._last_packet_at = now
+        # Per-channel / per-PDU / per-address-type breakdown.
+        self._per_channel_count[ch] = self._per_channel_count.get(ch, 0) + 1
+        pdu_key = pdu_type or "unknown"
+        self._per_pdu_count[pdu_key] = self._per_pdu_count.get(pdu_key, 0) + 1
+        addr_bucket = ("public" if tx_add == 0
+                       else "random" if tx_add == 1
+                       else "unknown")
+        self._per_address_type[addr_bucket] = (
+            self._per_address_type.get(addr_bucket, 0) + 1
+        )
+        # RSSI distribution — derive avg lazily in stats().
+        if self._rssi_min is None or rssi < self._rssi_min:
+            self._rssi_min = rssi
+        if self._rssi_max is None or rssi > self._rssi_max:
+            self._rssi_max = rssi
+        self._rssi_sum += rssi
+        self._rssi_count += 1
+        # Per-MAC tracking with bounded eviction so a long-running
+        # session in a busy area doesn't grow the dict without limit.
+        self._per_mac_count[mac] = self._per_mac_count.get(mac, 0) + 1
+        self._per_mac_last_rssi[mac] = rssi
+        self._per_mac_last_at[mac] = now
+        if len(self._per_mac_count) > _MAX_TRACKED_MACS:
+            self._evict_stale_macs()
         if self._cb is None:
             return
         try:

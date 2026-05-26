@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260525f" />
+  <link rel="stylesheet" href="/static/style.css?v=20260525g" />
 </head>
 <body>
   <header>
@@ -1122,13 +1122,35 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
           </label>
           <dl id="hackrf-stats">
             <dt>Status</dt><dd id="hackrf-state">—</dd>
+            <dt>Uptime</dt><dd id="hackrf-uptime">—</dd>
             <dt>Current channel</dt><dd id="hackrf-current-channel">—</dd>
+            <dt>Last channel hop</dt><dd id="hackrf-last-hop">—</dd>
             <dt>Packets</dt><dd id="hackrf-packet-count">—</dd>
             <dt>Last packet</dt><dd id="hackrf-last-packet">—</dd>
+            <dt>Unique devices</dt><dd id="hackrf-unique-macs">—</dd>
+            <dt>RSSI distribution</dt><dd id="hackrf-rssi-dist">—</dd>
+            <dt>By channel</dt><dd id="hackrf-per-channel">—</dd>
+            <dt>By PDU type</dt><dd id="hackrf-per-pdu">—</dd>
+            <dt>By address type</dt><dd id="hackrf-per-addr">—</dd>
             <dt>btle_rx binary</dt><dd id="hackrf-binary">—</dd>
             <dt>btle_rx output</dt><dd id="hackrf-line-counts">—</dd>
             <dt>Last error</dt><dd id="hackrf-last-error" class="muted">—</dd>
           </dl>
+          <details id="hackrf-top-macs-wrap">
+            <summary>Top advertisers (this session)</summary>
+            <p class="hint small">
+              Most-active MACs since the scanner started, sorted by
+              sighting count. Per-MAC last-seen RSSI gives a quick
+              proximity hint; "ago" is wall-time since the last packet.
+              The full per-device list lives on the Devices tab.
+            </p>
+            <table id="hackrf-top-macs" class="compact-table">
+              <thead>
+                <tr><th>MAC</th><th>Packets</th><th>Last RSSI</th><th>Ago</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </details>
           <details id="hackrf-debug">
             <summary>Recent btle_rx output (debug)</summary>
             <p class="hint small">
@@ -1521,6 +1543,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260525f"></script>
+  <script src="/static/app.js?v=20260525g"></script>
 </body>
 </html>

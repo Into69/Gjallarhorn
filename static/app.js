@@ -2547,6 +2547,35 @@ let _hackrfPrevCount = null;
 let _hackrfPrevAt = null;
 let _hackrfRateText = "—";
 
+function _fmtHackrfDuration(seconds) {
+  // Same shape the Mission uptime pill uses — short for sub-minute,
+  // h:mm:ss past an hour. Bare seconds for the in-between range so
+  // the operator can see early-session growth at a glance.
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s} s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (h) return `${h}h ${m}m ${ss}s`;
+  return `${m}m ${ss}s`;
+}
+
+function _fmtHackrfBreakdown(obj, prefix = "") {
+  // Render a {key: count} dict as a sorted, comma-separated inline
+  // summary. Always sort by count descending so the busiest bucket
+  // surfaces first — operator scans left-to-right and gets the
+  // dominant traffic shape from the first token. Returns a styled
+  // mono string; empty input → "—".
+  if (!obj) return "—";
+  const entries = Object.entries(obj);
+  if (!entries.length) return "—";
+  entries.sort((a, b) => b[1] - a[1]);
+  const parts = entries.map(([k, v]) =>
+    `${prefix}${escapeHtml(String(k))}: ${v.toLocaleString()}`
+  );
+  return `<span class="mono small">${parts.join(" · ")}</span>`;
+}
+
 async function refreshHackrfStatus() {
   let s;
   try {
@@ -2665,6 +2694,77 @@ async function refreshHackrfStatus() {
   if (stderrEl) {
     const lines = s.recent_stderr || [];
     stderrEl.textContent = lines.length ? lines.join("\n") : "(no stderr lines captured)";
+  }
+
+  // ── Per-session breakdown panels ──
+  // Uptime — running since started_at. Useful sanity check that the
+  // session is fresh after a config change vs. has been racking up
+  // stats for hours.
+  const upEl = $("#hackrf-uptime");
+  if (upEl) {
+    upEl.textContent = (s.running && s.uptime_s != null)
+      ? _fmtHackrfDuration(s.uptime_s) : "—";
+  }
+  // Time since the last channel hop. If this falls much past hop_ms,
+  // the hop loop is wedged (process won't die, etc).
+  const hopEl = $("#hackrf-last-hop");
+  if (hopEl) {
+    if (s.running && s.last_hop_at) {
+      const ago = Math.max(0, Date.now() / 1000 - s.last_hop_at);
+      const expected = (s.hop_ms || 0) / 1000;
+      const overdue = expected && ago > expected * 3;
+      hopEl.innerHTML = overdue
+        ? `<span class="pill warn">${ago.toFixed(1)} s ago (hop ${expected}s)</span>`
+        : `${ago.toFixed(1)} s ago`;
+    } else {
+      hopEl.textContent = "—";
+    }
+  }
+  // Unique device count + RSSI distribution. Honest both/all-zero
+  // when no packets have parsed yet.
+  const uniqEl = $("#hackrf-unique-macs");
+  if (uniqEl) uniqEl.textContent = (s.unique_macs ?? 0).toLocaleString();
+  const rssiEl = $("#hackrf-rssi-dist");
+  if (rssiEl) {
+    if (s.rssi_min != null && s.rssi_max != null && s.rssi_avg != null) {
+      rssiEl.innerHTML =
+        `<span class="mono">min ${s.rssi_min} · max ${s.rssi_max} · avg ${s.rssi_avg.toFixed(1)} dBm</span>`;
+    } else {
+      rssiEl.textContent = "—";
+    }
+  }
+  const chBreakEl = $("#hackrf-per-channel");
+  if (chBreakEl) chBreakEl.innerHTML = _fmtHackrfBreakdown(s.per_channel, "ch ");
+  const pduEl = $("#hackrf-per-pdu");
+  if (pduEl) pduEl.innerHTML = _fmtHackrfBreakdown(s.per_pdu_type);
+  const addrEl = $("#hackrf-per-addr");
+  if (addrEl) addrEl.innerHTML = _fmtHackrfBreakdown(s.per_address_type);
+  // Top-MACs table — repaints from scratch every poll. Bounded at 10
+  // rows server-side so the DOM churn is trivial.
+  const topBody = document.querySelector("#hackrf-top-macs tbody");
+  if (topBody) {
+    const rows = s.top_macs || [];
+    if (!rows.length) {
+      topBody.innerHTML =
+        `<tr><td colspan="4" class="muted">No packets parsed yet.</td></tr>`;
+    } else {
+      topBody.innerHTML = rows.map(r => {
+        const ago = r.ago_s != null ? `${r.ago_s.toFixed(1)} s` : "—";
+        const rssi = r.last_rssi != null ? `${r.last_rssi} dBm` : "—";
+        return `<tr>
+          <td class="mono">${escapeHtml(r.mac)}</td>
+          <td>${r.count.toLocaleString()}</td>
+          <td>${rssi}</td>
+          <td>${ago}</td>
+        </tr>`;
+      }).join("");
+    }
+  }
+  // Append parse-rate to the existing line-counts row so the operator
+  // sees both the absolute parsed/total and the % at a glance.
+  if (lineCountsEl && s.parse_rate_pct != null) {
+    const pct = s.parse_rate_pct.toFixed(1);
+    lineCountsEl.innerHTML += ` <span class="muted small">(${pct}% parsed)</span>`;
   }
 
   // ── Map sidebar card ──
