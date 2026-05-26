@@ -1222,8 +1222,8 @@ function renderDeviceRow(d) {
     <td>${idCell}</td>
     <td>${escapeHtml(nameOrSsid)}</td>
     <td>${escapeHtml(det.vendor || "")}</td>
-    <td>${d.best_rssi}</td>
-    <td>${d.last_rssi ?? ""}</td>
+    <td>${det._rssi_unknown ? `<span class="muted" title="HackRF source — btle_rx didn't emit a signal-strength field">—</span>` : d.best_rssi}</td>
+    <td>${det._rssi_unknown ? `<span class="muted" title="HackRF source — btle_rx didn't emit a signal-strength field">—</span>` : (d.last_rssi ?? "")}</td>
     <td>${d.seen_count}</td>
     <td class="mono">${formatTime(d.first_seen)}</td>
     <td class="mono">${formatTime(d.last_seen)}</td>

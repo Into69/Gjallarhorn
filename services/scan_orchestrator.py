@@ -654,9 +654,19 @@ class ScanOrchestrator:
         if loc_id is None:
             return
         mac = pkt["mac"]
-        rssi = pkt.get("rssi") if pkt.get("rssi") is not None else -100
-        if rssi < s.min_rssi:
+        # Mainline btle_rx doesn't print signal strength, so the
+        # scanner-side parser returns rssi=None for those packets. We
+        # treat 'unknown' as 'cannot be filtered' — otherwise the
+        # min_rssi noise floor would silently drop every HackRF hit on
+        # a forkless install. The DB schema requires an int (rssi col
+        # is NOT NULL), so we still write -100 as a sentinel, but the
+        # device details get _rssi_unknown=True so the UI renders it
+        # as '—' instead of a fabricated reading.
+        raw_rssi = pkt.get("rssi")
+        rssi_known = raw_rssi is not None
+        if rssi_known and raw_rssi < s.min_rssi:
             return
+        rssi = int(raw_rssi) if rssi_known else -100
         # Derive the BLE address_type. Priority order:
         #   1. TxAdd bit from the PHY header (ground truth from btle_rx)
         #   2. Heuristic from the MAC's top 2 MSBs when TxAdd wasn't
@@ -718,6 +728,17 @@ class ScanOrchestrator:
         # {**merged, **details}).
         if address_type is not None:
             details["address_type"] = address_type
+        # Flag rows whose RSSI is the sentinel rather than a real
+        # reading so the UI can render '—' instead of '-100 dBm'. Same
+        # row may later get a real reading from bleak; upsert_bluetooth
+        # merges details so the marker is overwritten implicitly only
+        # if the bleak path stamps something — but since bleak never
+        # stamps this key, we explicitly delete the marker on a known
+        # reading to keep the merged row honest.
+        if rssi_known:
+            details["_rssi_unknown"] = False
+        else:
+            details["_rssi_unknown"] = True
         if parsed.get("unknown_types"):
             details["_adv_unknown_types"] = parsed["unknown_types"]
         fix = self.gps.fix

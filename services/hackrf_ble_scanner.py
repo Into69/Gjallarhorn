@@ -558,7 +558,22 @@ class HackRFBleScanner:
         r"(?:AdvA|ADV_?A|ADDR(?:ESS)?|Mac|MAC)[\s:=]+"
         r"((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|[0-9A-Fa-f]{12})"
     )
-    _RE_RSSI = re.compile(r"RSSI[\s:=]+(-?\d+)")
+    # Mainline JiaoXianjun/BTLE btle_rx does NOT emit any signal-
+    # strength field — its packet lines are
+    #   Time .. PDU_Type .. TxAdd .. RxAdd .. PayloadLen .. AdvA .. Data ..
+    # so a hard fallback to a fake number (the previous behaviour was
+    # `-100` as a sentinel) silently propagated a fabricated dBm value
+    # into every device row, observation, and rssi-scoped alert. Some
+    # forks DO compute it from IQ magnitude and print it under names
+    # like 'rssi', 'magnitude', 'signal', 'pwr', or 'power'; this regex
+    # accepts any of those, case-insensitive. When no match is found
+    # we propagate `None` to the orchestrator and stamp _rssi_unknown
+    # on the device's details so the UI renders '—' instead of
+    # pretending to know the value.
+    _RE_RSSI = re.compile(
+        r"(?:rssi|magnitude|signal|pwr|power)[\s:=]+(-?\d+)",
+        re.IGNORECASE,
+    )
     _RE_PDU = re.compile(
         r"(?:PDU[_\s]?Type|type|PDU)[\s:=]+([A-Za-z][A-Za-z_]*)"
     )
@@ -618,8 +633,14 @@ class HackRFBleScanner:
             return
         mac = self._normalize_mac(m_mac.group(1))
         m_rssi = self._RE_RSSI.search(line)
-        rssi = int(m_rssi.group(1)) if m_rssi else -100
-        if rssi < self._min_rssi:
+        rssi: Optional[int] = int(m_rssi.group(1)) if m_rssi else None
+        # Apply the noise-floor filter only when the rssi is actually
+        # known. Treating 'unknown' as 'below floor' would silently
+        # drop every packet from a mainline btle_rx build (which never
+        # emits an RSSI field) — the whole point of the SDR backend is
+        # to surface advertisements the host stack can't see, so the
+        # filter has to be opt-in to a real measurement.
+        if rssi is not None and rssi < self._min_rssi:
             return
         m_pdu = self._RE_PDU.search(line)
         pdu_type = m_pdu.group(1) if m_pdu else None
@@ -641,17 +662,24 @@ class HackRFBleScanner:
         self._per_address_type[addr_bucket] = (
             self._per_address_type.get(addr_bucket, 0) + 1
         )
-        # RSSI distribution — derive avg lazily in stats().
-        if self._rssi_min is None or rssi < self._rssi_min:
-            self._rssi_min = rssi
-        if self._rssi_max is None or rssi > self._rssi_max:
-            self._rssi_max = rssi
-        self._rssi_sum += rssi
-        self._rssi_count += 1
+        # RSSI distribution — derive avg lazily in stats(). Only feed
+        # the aggregates when the value is real; an 'unknown' from a
+        # forkless btle_rx build would otherwise drag the min/avg
+        # toward whatever sentinel we used.
+        if rssi is not None:
+            if self._rssi_min is None or rssi < self._rssi_min:
+                self._rssi_min = rssi
+            if self._rssi_max is None or rssi > self._rssi_max:
+                self._rssi_max = rssi
+            self._rssi_sum += rssi
+            self._rssi_count += 1
         # Per-MAC tracking with bounded eviction so a long-running
         # session in a busy area doesn't grow the dict without limit.
+        # last_rssi stays as the most recent KNOWN value — we only
+        # update it when the parser produced a number.
         self._per_mac_count[mac] = self._per_mac_count.get(mac, 0) + 1
-        self._per_mac_last_rssi[mac] = rssi
+        if rssi is not None:
+            self._per_mac_last_rssi[mac] = rssi
         self._per_mac_last_at[mac] = now
         if len(self._per_mac_count) > _MAX_TRACKED_MACS:
             self._evict_stale_macs()

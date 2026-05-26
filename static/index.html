@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260525i" />
+  <link rel="stylesheet" href="/static/style.css?v=20260525j" />
 </head>
 <body>
   <header>
@@ -1092,6 +1092,18 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             disabled when the binary isn't installed — toggle on after
             install to retry without restarting.
           </p>
+          <p class="hint">
+            <strong>RSSI note:</strong> mainline
+            <code>btle_rx</code> (JiaoXianjun/BTLE) does not emit a
+            signal-strength field — its packet lines are time / PDU
+            type / addresses / payload only. HackRF-only sightings on a
+            forkless install show <code>—</code> in the RSSI column
+            rather than a fabricated value. The
+            <code>min_rssi</code> filter above is skipped on packets
+            whose RSSI is unknown so the SDR backend still surfaces
+            them; set the filter to taste only if you're running a
+            fork that does compute RSSI.
+          </p>
           <h4 class="subsection-h">Configuration</h4>
           <label class="mission-switch">
             <span class="mission-switch-label">Enable HackRF BLE scanner</span>
@@ -1583,6 +1595,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260525i"></script>
+  <script src="/static/app.js?v=20260525j"></script>
 </body>
 </html>
