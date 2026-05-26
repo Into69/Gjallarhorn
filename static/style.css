@@ -2111,6 +2111,50 @@ fieldset .code-block {
   word-break: break-word;
   color: var(--fg);
 }
+/* Two-column dl grid used by the HackRF Settings status / traffic
+   blocks. Same shape as #oui-stats but scoped to its own class so it
+   can sit alongside future panels with different widths. */
+.hackrf-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 8px 0 12px;
+  font-size: 12px;
+}
+.hackrf-grid dt { color: var(--muted); }
+.hackrf-grid dd { margin: 0; }
+
+/* Three-column distribution grid (by channel / PDU / address type).
+   Collapses to two columns on tablet width, single column on phones
+   so each table stays wide enough to read on a touch device. */
+.hackrf-breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 6px 0 14px;
+}
+@media (max-width: 1100px) {
+  .hackrf-breakdown-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .hackrf-breakdown-grid { grid-template-columns: 1fr; }
+}
+.hackrf-breakdown-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.hackrf-breakdown-card h5 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.hackrf-breakdown-card .compact-table { margin: 0; }
+
 /* Compact, tightly-spaced table for inline panel summaries (HackRF
    top-advertisers list, etc). Keeps padding small enough to fit ~10
    rows in a fieldset without scrolling, with a subtle row hover so

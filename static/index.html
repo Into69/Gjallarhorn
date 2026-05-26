@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260525g" />
+  <link rel="stylesheet" href="/static/style.css?v=20260525h" />
 </head>
 <body>
   <header>
@@ -1092,6 +1092,7 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
             disabled when the binary isn't installed — toggle on after
             install to retry without restarting.
           </p>
+          <h4 class="subsection-h">Configuration</h4>
           <label class="mission-switch">
             <span class="mission-switch-label">Enable HackRF BLE scanner</span>
             <input type="checkbox" name="hackrf_ble_enabled" role="switch" />
@@ -1104,38 +1105,77 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
               <option value="">— first detected —</option>
             </select>
           </label>
-          <label>VGA gain (0–62 dB, 2 dB steps)
-            <input type="number" name="hackrf_ble_gain" min="0" max="62" step="2"
-                   data-help="HackRF variable-gain amp setting. Higher = more sensitivity (more reach) but also more noise. 40 is a good starting point indoors; drop to 20–30 in dense RF environments to keep packet decoding clean." />
-          </label>
-          <label>Minimum RSSI (dBm)
-            <input type="number" name="hackrf_ble_min_rssi" min="-120" max="-20"
-                   data-help="Drop packets weaker than this. SDR captures pull in everything the antenna sees including chip-edge noise; -90 keeps the signal-to-noise ratio reasonable." />
-          </label>
-          <label>Channel dwell (ms)
-            <input type="number" name="hackrf_ble_hop_ms" min="200" max="5000" step="50"
-                   data-help="Time spent on each advertising channel before hopping. Must be ≥200 ms (the btle_rx spawn cost is ~50–100 ms, so below that the loop is mostly waiting for the process to come up). 1000 ms is comfortable: catches advertisers with intervals up to ~1 s on each channel. Bump higher for low-power tags that advertise every few seconds." />
-          </label>
-          <label>Channels (CSV — BLE advertising indexes 37, 38, 39)
-            <input type="text" name="hackrf_ble_channels"
-                   data-help="Which advertising channels to scan. BLE defines exactly three: 37 (2.402 GHz), 38 (2.426 GHz), 39 (2.480 GHz). Leave as 37,38,39 unless you have a reason to focus on one band (e.g. 37 only is the most aggressively-used in some peripherals)." />
-          </label>
-          <dl id="hackrf-stats">
+          <div class="field-row">
+            <label>VGA gain (0–62 dB, 2 dB steps)
+              <input type="number" name="hackrf_ble_gain" min="0" max="62" step="2"
+                     data-help="HackRF variable-gain amp setting. Higher = more sensitivity (more reach) but also more noise. 40 is a good starting point indoors; drop to 20–30 in dense RF environments to keep packet decoding clean." />
+            </label>
+            <label>Minimum RSSI (dBm)
+              <input type="number" name="hackrf_ble_min_rssi" min="-120" max="-20"
+                     data-help="Drop packets weaker than this. SDR captures pull in everything the antenna sees including chip-edge noise; -90 keeps the signal-to-noise ratio reasonable." />
+            </label>
+          </div>
+          <div class="field-row">
+            <label>Channel dwell (ms)
+              <input type="number" name="hackrf_ble_hop_ms" min="200" max="5000" step="50"
+                     data-help="Time spent on each advertising channel before hopping. Must be ≥200 ms (the btle_rx spawn cost is ~50–100 ms, so below that the loop is mostly waiting for the process to come up). 1000 ms is comfortable: catches advertisers with intervals up to ~1 s on each channel. Bump higher for low-power tags that advertise every few seconds." />
+            </label>
+            <label>Channels (CSV — 37, 38, 39)
+              <input type="text" name="hackrf_ble_channels"
+                     data-help="Which advertising channels to scan. BLE defines exactly three: 37 (2.402 GHz), 38 (2.426 GHz), 39 (2.480 GHz). Leave as 37,38,39 unless you have a reason to focus on one band (e.g. 37 only is the most aggressively-used in some peripherals)." />
+            </label>
+          </div>
+
+          <h4 class="subsection-h">Scanner status</h4>
+          <dl class="hackrf-grid">
             <dt>Status</dt><dd id="hackrf-state">—</dd>
+            <dt>btle_rx binary</dt><dd id="hackrf-binary">—</dd>
             <dt>Uptime</dt><dd id="hackrf-uptime">—</dd>
             <dt>Current channel</dt><dd id="hackrf-current-channel">—</dd>
             <dt>Last channel hop</dt><dd id="hackrf-last-hop">—</dd>
-            <dt>Packets</dt><dd id="hackrf-packet-count">—</dd>
-            <dt>Last packet</dt><dd id="hackrf-last-packet">—</dd>
-            <dt>Unique devices</dt><dd id="hackrf-unique-macs">—</dd>
-            <dt>RSSI distribution</dt><dd id="hackrf-rssi-dist">—</dd>
-            <dt>By channel</dt><dd id="hackrf-per-channel">—</dd>
-            <dt>By PDU type</dt><dd id="hackrf-per-pdu">—</dd>
-            <dt>By address type</dt><dd id="hackrf-per-addr">—</dd>
-            <dt>btle_rx binary</dt><dd id="hackrf-binary">—</dd>
-            <dt>btle_rx output</dt><dd id="hackrf-line-counts">—</dd>
             <dt>Last error</dt><dd id="hackrf-last-error" class="muted">—</dd>
           </dl>
+
+          <h4 class="subsection-h">Traffic (this session)</h4>
+          <dl class="hackrf-grid">
+            <dt>Packets</dt><dd id="hackrf-packet-count">—</dd>
+            <dt>Unique devices</dt><dd id="hackrf-unique-macs">—</dd>
+            <dt>Last packet</dt><dd id="hackrf-last-packet">—</dd>
+            <dt>RSSI distribution</dt><dd id="hackrf-rssi-dist">—</dd>
+            <dt>btle_rx output</dt><dd id="hackrf-line-counts">—</dd>
+          </dl>
+
+          <h4 class="subsection-h">Packet breakdown</h4>
+          <div class="hackrf-breakdown-grid">
+            <div class="hackrf-breakdown-card">
+              <h5>By channel</h5>
+              <table class="compact-table">
+                <thead><tr><th>Channel</th><th>Packets</th><th>%</th></tr></thead>
+                <tbody id="hackrf-per-channel-tbody">
+                  <tr><td colspan="3" class="muted">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="hackrf-breakdown-card">
+              <h5>By PDU type</h5>
+              <table class="compact-table">
+                <thead><tr><th>PDU</th><th>Packets</th><th>%</th></tr></thead>
+                <tbody id="hackrf-per-pdu-tbody">
+                  <tr><td colspan="3" class="muted">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="hackrf-breakdown-card">
+              <h5>By address type</h5>
+              <table class="compact-table">
+                <thead><tr><th>Type</th><th>Packets</th><th>%</th></tr></thead>
+                <tbody id="hackrf-per-addr-tbody">
+                  <tr><td colspan="3" class="muted">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           <details id="hackrf-top-macs-wrap">
             <summary>Top advertisers (this session)</summary>
             <p class="hint small">
@@ -1543,6 +1583,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260525g"></script>
+  <script src="/static/app.js?v=20260525h"></script>
 </body>
 </html>

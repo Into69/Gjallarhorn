@@ -2560,20 +2560,28 @@ function _fmtHackrfDuration(seconds) {
   return `${m}m ${ss}s`;
 }
 
-function _fmtHackrfBreakdown(obj, prefix = "") {
-  // Render a {key: count} dict as a sorted, comma-separated inline
-  // summary. Always sort by count descending so the busiest bucket
-  // surfaces first — operator scans left-to-right and gets the
-  // dominant traffic shape from the first token. Returns a styled
-  // mono string; empty input → "—".
-  if (!obj) return "—";
-  const entries = Object.entries(obj);
-  if (!entries.length) return "—";
+function _paintHackrfBreakdownTable(tbody, obj, keyPrefix = "") {
+  // Render a {key: count} dict into a 3-column tbody (key / count /
+  // percent of total). Always sort by count descending so the busiest
+  // bucket sits on top. Empty input → single 'no data' row so the
+  // table doesn't collapse to a header-only shape.
+  if (!tbody) return;
+  const entries = obj ? Object.entries(obj) : [];
+  if (!entries.length) {
+    tbody.innerHTML = `<tr><td colspan="3" class="muted">no packets yet</td></tr>`;
+    return;
+  }
   entries.sort((a, b) => b[1] - a[1]);
-  const parts = entries.map(([k, v]) =>
-    `${prefix}${escapeHtml(String(k))}: ${v.toLocaleString()}`
-  );
-  return `<span class="mono small">${parts.join(" · ")}</span>`;
+  const total = entries.reduce((acc, [, v]) => acc + v, 0);
+  tbody.innerHTML = entries.map(([k, v]) => {
+    const pct = total ? ((v / total) * 100) : 0;
+    const pctStr = pct >= 10 ? pct.toFixed(0) : pct.toFixed(1);
+    return `<tr>
+      <td class="mono">${keyPrefix}${escapeHtml(String(k))}</td>
+      <td>${v.toLocaleString()}</td>
+      <td class="muted">${pctStr}%</td>
+    </tr>`;
+  }).join("");
 }
 
 async function refreshHackrfStatus() {
@@ -2733,12 +2741,18 @@ async function refreshHackrfStatus() {
       rssiEl.textContent = "—";
     }
   }
-  const chBreakEl = $("#hackrf-per-channel");
-  if (chBreakEl) chBreakEl.innerHTML = _fmtHackrfBreakdown(s.per_channel, "ch ");
-  const pduEl = $("#hackrf-per-pdu");
-  if (pduEl) pduEl.innerHTML = _fmtHackrfBreakdown(s.per_pdu_type);
-  const addrEl = $("#hackrf-per-addr");
-  if (addrEl) addrEl.innerHTML = _fmtHackrfBreakdown(s.per_address_type);
+  _paintHackrfBreakdownTable(
+    document.querySelector("#hackrf-per-channel-tbody"),
+    s.per_channel, "ch ",
+  );
+  _paintHackrfBreakdownTable(
+    document.querySelector("#hackrf-per-pdu-tbody"),
+    s.per_pdu_type,
+  );
+  _paintHackrfBreakdownTable(
+    document.querySelector("#hackrf-per-addr-tbody"),
+    s.per_address_type,
+  );
   // Top-MACs table — repaints from scratch every poll. Bounded at 10
   // rows server-side so the DOM churn is trivial.
   const topBody = document.querySelector("#hackrf-top-macs tbody");
