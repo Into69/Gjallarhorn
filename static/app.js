@@ -3917,12 +3917,22 @@ function renderAlertEvent(e) {
   }
   const deviceText = isGps ? "Sensor GPS" : e.device_id;
   const rssiText = isGps ? "" : (e.rssi != null ? e.rssi + " dBm" : "");
+  // Make the device id a clickable link that jumps to Devices →
+  // location 'All' with the MAC pre-filled into the search box.
+  // Skip the link wrapping for the GPS sentinel (not a device) and
+  // for any non-MAC-shaped id so we don't pretend a stray string is
+  // searchable. Matches `aa:bb:cc:dd:ee:ff` (17 chars, hex octets +
+  // colons), case-insensitive.
+  const isMac = !isGps && /^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$/i.test(e.device_id || "");
+  const deviceCell = isMac
+    ? `<span class="alert-device alert-device-link" data-id="${escapeAttr(e.device_id)}" role="button" tabindex="0" title="Open this MAC on the Devices tab (location → All, search pre-filled)">${escapeHtml(deviceText)}</span>`
+    : `<span class="alert-device">${escapeHtml(deviceText)}</span>`;
   return `
     <div class="alert-item kind-${escapeHtml(e.device_kind)} ${!latched && ruleLatches ? "alert-cleared" : ""}">
       <div>
         <span class="alert-rule">${escapeHtml(e.rule_name || "rule " + e.rule_id)}</span>
         <span class="muted"> matched </span>
-        <span class="alert-device">${escapeHtml(deviceText)}</span>
+        ${deviceCell}
         ${label ? `<span class="muted"> · </span><span>${escapeHtml(label)}</span>` : ""}
         ${vendor}
         ${latchBadge}
@@ -3938,10 +3948,48 @@ function renderAlertEvent(e) {
   `;
 }
 
+// Pivot to the Devices tab with location set to 'All' and the search
+// box pre-filled to the given MAC. Shared by the alerts-feed device
+// link and any future caller that wants the same gesture. Uses the
+// existing findDeviceAcrossLocations helper (which also wipes the
+// since / RSSI / hide-WL filters) so the operator actually sees the
+// rows they were trying to find.
+function jumpToDeviceById(deviceId) {
+  if (!deviceId) return;
+  const switched = activateTab("devices");
+  // Run after the tab swap so the Devices controls exist in the DOM.
+  // activateTab also fires refreshDevices(); calling findDevice…
+  // synchronously after queues a second refresh with the new filters
+  // applied — fine, cheap.
+  if (switched) {
+    findDeviceAcrossLocations(deviceId);
+  }
+}
+
+// Keyboard activation for the MAC link span — span isn't focusable by
+// default, so we set tabindex=0 on render and trap Enter/Space here
+// to mirror the click behaviour for keyboard-only operators.
+$("#alerts-list")?.addEventListener("keydown", (ev) => {
+  if (ev.key !== "Enter" && ev.key !== " ") return;
+  const devLink = ev.target.closest(".alert-device-link");
+  if (!devLink) return;
+  ev.preventDefault();
+  jumpToDeviceById(devLink.dataset.id);
+});
+
 // Single delegated handler — the alert list is re-rendered on filter
 // changes and on every poll, so per-row listeners would churn. Handles
 // both the whitelist (★) and unlatch (🔓) buttons.
 $("#alerts-list")?.addEventListener("click", async (ev) => {
+  // MAC-shaped device id in the row → jump to Devices tab with this
+  // MAC pre-searched. Caught before any of the button branches
+  // since the link is a plain span, not a button.
+  const devLink = ev.target.closest(".alert-device-link");
+  if (devLink) {
+    ev.preventDefault();
+    jumpToDeviceById(devLink.dataset.id);
+    return;
+  }
   const wlBtn = ev.target.closest(".alert-wl");
   if (wlBtn && !wlBtn.disabled) {
     const kind = wlBtn.dataset.kind;

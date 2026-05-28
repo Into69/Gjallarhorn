@@ -1771,6 +1771,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .alert-item.alert-cleared { opacity: 0.55; }
 .alert-item.alert-cleared:hover { opacity: 0.85; }
 .alert-device { font-family: ui-monospace, Consolas, monospace; color: var(--fg); }
+/* When the device id is a MAC the renderer wraps it in this class to
+   advertise the jump-to-Devices behaviour. Subtle accent so it reads
+   as interactive without shouting; underline-on-hover follows the
+   convention everywhere else in the UI. tabindex=0 brings keyboard
+   focus, so we mirror the visual treatment on :focus-visible too. */
+.alert-device-link {
+  color: var(--accent, #b8a3ff);
+  cursor: pointer;
+  border-radius: 3px;
+}
+.alert-device-link:hover { text-decoration: underline; }
+.alert-device-link:focus-visible {
+  outline: 2px solid var(--accent, #b8a3ff);
+  outline-offset: 2px;
+  text-decoration: underline;
+}
 .alert-rssi { color: var(--warn); font-family: ui-monospace, Consolas, monospace; }
 
 /* Settings tab: sidebar nav on the left, one section at a time on the
