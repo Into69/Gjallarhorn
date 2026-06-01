@@ -5327,12 +5327,25 @@ async function waitForRestart() {
 // ---------- pause toggle (map tab floating control) ----------
 let _pausedState = false;
 
-function renderPauseButton(paused) {
+// missionActive defaults to true so legacy callers that don't pass the
+// flag (e.g. the optimistic flip in the click handler) keep working
+// exactly as before. The flag drives a single UX rule: when no mission
+// is active, scanners are already off — pause is meaningless, so we
+// disable the button and relabel to make that visible.
+function renderPauseButton(paused, opts = {}) {
   _pausedState = paused;
+  const missionActive = opts.missionActive !== false;
   const btn = $("#map-pause");
   const icon = $("#map-pause-icon");
   if (btn && icon) {
-    if (paused) {
+    btn.disabled = !missionActive;
+    btn.classList.toggle("disabled", !missionActive);
+    if (!missionActive) {
+      btn.classList.remove("paused");
+      btn.title = "No mission running — start one to begin scanning";
+      btn.setAttribute("aria-label", "No mission running");
+      icon.innerHTML = ICON_PAUSE;
+    } else if (paused) {
       btn.classList.add("paused");
       btn.title = "PAUSED — scanning, alerts, and new locations are suspended. Click to resume.";
       btn.setAttribute("aria-label", "Resume scanning");
@@ -5346,14 +5359,22 @@ function renderPauseButton(paused) {
   }
   const missionBtn = $("#mission-pause");
   if (missionBtn) {
-    missionBtn.textContent = paused ? "Resume scanning" : "Pause scanning";
+    missionBtn.disabled = !missionActive;
+    missionBtn.classList.toggle("disabled", !missionActive);
+    if (!missionActive) {
+      missionBtn.textContent = "No mission running";
+      missionBtn.title = "Start a mission to begin scanning";
+    } else {
+      missionBtn.textContent = paused ? "Resume scanning" : "Pause scanning";
+      missionBtn.title = "";
+    }
   }
 }
 
 async function refreshPauseStatus() {
   try {
     const r = await api("/api/system/pause");
-    renderPauseButton(!!r.paused);
+    renderPauseButton(!!r.paused, { missionActive: r.mission_active !== false });
   } catch { /* leave whatever was last shown */ }
 }
 
@@ -5366,7 +5387,7 @@ $("#map-pause").addEventListener("click", async () => {
     const r = await api("/api/system/pause", {
       method: "POST", body: JSON.stringify({ paused: next }),
     });
-    renderPauseButton(!!r.paused);
+    renderPauseButton(!!r.paused, { missionActive: r.mission_active !== false });
   } catch (e) {
     // Roll back the optimistic flip on failure.
     renderPauseButton(!next);
@@ -6108,7 +6129,8 @@ async function refreshMission() {
       api("/api/hackrf/status").catch(() => ({})),
     ]);
     const isPaused = !!paused.paused;
-    renderPauseButton(isPaused);
+    const missionActive = paused.mission_active !== false;
+    renderPauseButton(isPaused, { missionActive });
     const loc = document.getElementById("mission-stat-active-loc");
     if (loc) {
       // When the orchestrator falls back to the singleton no-GPS
@@ -6127,6 +6149,7 @@ async function refreshMission() {
     _renderScannerStateTile(
       "mission-stat-wifi-state", _classifyScannerState({
         paused: isPaused,
+        mission_active: missionActive,
         running: scanners?.wifi?.running,
         last_error: scanners?.wifi?.last_error,
         enabled: !!scanners?.wifi?.configured_iface,
@@ -6135,6 +6158,7 @@ async function refreshMission() {
     _renderScannerStateTile(
       "mission-stat-ble-state", _classifyScannerState({
         paused: isPaused,
+        mission_active: missionActive,
         running: scanners?.bluetooth?.running,
         last_error: scanners?.bluetooth?.last_error,
         // BLE has no off switch — it tries whatever adapter is configured.
@@ -6144,6 +6168,7 @@ async function refreshMission() {
     _renderScannerStateTile(
       "mission-stat-btc-state", _classifyScannerState({
         paused: isPaused,
+        mission_active: missionActive,
         running: scanners?.bluetooth?.classic_running,
         last_error: null,
         enabled: !!scanners?.bluetooth?.classic_enabled,
@@ -6160,6 +6185,7 @@ async function refreshMission() {
     _renderScannerStateTile(
       "mission-stat-probe-state", _classifyScannerState({
         paused: isPaused,
+        mission_active: missionActive,
         running: probe?.running,
         last_error: probe?.last_error,
         enabled: !!probe?.interface,
@@ -6182,6 +6208,7 @@ async function refreshMission() {
       _renderScannerStateTile(
         "mission-stat-hackrf-state", _classifyScannerState({
           paused: isPaused,
+          mission_active: missionActive,
           running: hackrf?.running,
           last_error: hackrf?.last_error,
           enabled: hackrf?.binary_available && (
@@ -6198,8 +6225,14 @@ async function refreshMission() {
   try { await _refreshMissionTicker(); } catch {}
 }
 
-function _classifyScannerState({ paused, running, last_error, enabled }) {
+function _classifyScannerState({ paused, running, last_error, enabled, mission_active }) {
   if (!enabled) return "disabled";
+  // 'No mission' is checked AFTER 'disabled' so an explicitly
+  // disabled scanner still reads as disabled (more specific reason)
+  // but BEFORE the running/error/paused flags, since when no mission
+  // is active the scanner shouldn't be ticking at all and any
+  // running/error state on the server is stale.
+  if (mission_active === false) return "no-mission";
   if (paused) return "paused";
   if (last_error) return "error";
   if (running) return "scanning";
@@ -6578,7 +6611,7 @@ document.getElementById("mission-pause")?.addEventListener("click", async () => 
     const r = await api("/api/system/pause", {
       method: "POST", body: JSON.stringify({ paused: next }),
     });
-    renderPauseButton(!!r.paused);
+    renderPauseButton(!!r.paused, { missionActive: r.mission_active !== false });
   } catch (e) {
     renderPauseButton(!next);
     alert("Could not toggle pause: " + (e.message || e));

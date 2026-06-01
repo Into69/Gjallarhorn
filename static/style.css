@@ -961,6 +961,14 @@ details.wap-group[open] > summary { border-bottom: 1px solid var(--border); }
 .mission-scanner-state.state-paused   { color: var(--warn); }
 .mission-scanner-state.state-error    { color: var(--err); }
 .mission-scanner-state.state-disabled { color: var(--muted); opacity: 0.6; }
+/* 'no-mission' reads as gated-off rather than disabled — scanners are
+   functional, the operator just hasn't opened a mission yet. Lavender
+   accent so it visually echoes the Start-mission CTA in the lifecycle
+   card. */
+.mission-scanner-state.state-no-mission {
+  color: var(--accent, #b8a3ff);
+  opacity: 0.8;
+}
 
 /* Live activity ticker — three side-by-side tiles on the Mission tab
    header showing the most-recent alert / device / location. Matches

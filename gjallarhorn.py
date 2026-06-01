@@ -67,6 +67,13 @@ async def lifespan(app: FastAPI):
     await alert_service.load_latches()
     await alert_service.load_presence_state()
     orchestrator = ScanOrchestrator(gps)
+    # Mirror the persisted mission state into the orchestrator so the
+    # scan loops start gated correctly. Without this, every restart
+    # would leave the scanners off until the operator hit Start —
+    # even if a mission was already open when the process crashed /
+    # was rebooted mid-trip.
+    active_mission_row = await db.active_mission()
+    orchestrator.set_mission_active(bool(active_mission_row))
     await orchestrator.start()
     log.info("Gjallarhorn started")
     try:
@@ -330,7 +337,13 @@ async def api_scanners_status():
 # ---------- Pause / resume ----------
 @app.get("/api/system/pause")
 async def api_pause_status():
-    return {"paused": orchestrator.paused if orchestrator else False}
+    # mission_active is included so the UI can disable the Pause button
+    # when no mission is running — pause only matters while the scan
+    # loops are actually running.
+    return {
+        "paused": orchestrator.paused if orchestrator else False,
+        "mission_active": orchestrator.mission_active if orchestrator else False,
+    }
 
 
 @app.post("/api/system/pause")
@@ -344,7 +357,10 @@ async def api_set_pause(payload: dict | None = None):
     else:
         target = bool(payload.get("paused"))
     orchestrator.set_paused(target)
-    return {"paused": orchestrator.paused}
+    return {
+        "paused": orchestrator.paused,
+        "mission_active": orchestrator.mission_active,
+    }
 
 
 @app.get("/api/system/recording")
@@ -816,22 +832,32 @@ async def api_active_mission():
 
 @app.post("/api/missions")
 async def api_start_mission(payload: dict | None = None):
-    """Open a new mission. Rejects if another is already active."""
+    """Open a new mission. Rejects if another is already active.
+    Also flips the orchestrator's scanning gate on — scan loops only
+    run during an active mission. Baseline scans are unaffected; they
+    bypass the orchestrator and remain available regardless."""
     payload = payload or {}
     name = (payload.get("name") or "").strip() or "Mission"
     description = payload.get("description")
     out = await db.create_mission(name, description)
     if isinstance(out, dict) and out.get("error"):
         raise HTTPException(409, out["error"])
+    if orchestrator is not None:
+        orchestrator.set_mission_active(True)
     log.info("Mission started: id=%s name=%s", out.get("id"), out.get("name"))
     return {"mission": out}
 
 
 @app.post("/api/missions/{mission_id}/end")
 async def api_end_mission(mission_id: int):
+    """Close the active mission and gate off the device scan loops.
+    GPS, gps_state alerts, absence checks, and the retention purge
+    continue to run."""
     out = await db.end_mission(mission_id)
     if out is None:
         raise HTTPException(404, "mission not found or already ended")
+    if orchestrator is not None:
+        orchestrator.set_mission_active(False)
     log.info("Mission ended: id=%s", mission_id)
     return {"mission": out}
 

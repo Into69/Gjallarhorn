@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Gjallarhorn</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
-  <link rel="stylesheet" href="/static/style.css?v=20260527a" />
+  <link rel="stylesheet" href="/static/style.css?v=20260601a" />
 </head>
 <body>
   <header>
@@ -309,6 +309,12 @@
 
         <section class="mission-card">
           <h3 class="section-h">Mission lifecycle</h3>
+          <p class="muted small">
+            Scanners only run while a mission is active. The baseline
+            scan (Settings → Whitelist) is exempt and works without a
+            mission so you can capture a "what's normally here" snapshot
+            before going live.
+          </p>
           <div id="mission-active-block">
             <p class="muted small">No mission in progress. Start one to snapshot the DB and tag the report.</p>
           </div>
@@ -1595,6 +1601,6 @@ sudo setcap cap_net_admin,cap_net_raw+eip $(which tshark)</pre>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="/static/app.js?v=20260527a"></script>
+  <script src="/static/app.js?v=20260601a"></script>
 </body>
 </html>

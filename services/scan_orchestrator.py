@@ -88,6 +88,16 @@ class ScanOrchestrator:
         # the Mission tab's "Skip recording" toggle for situations
         # where the operator wants alerting but no DB churn.
         self._recording: bool = True
+        # Master scanning gate: device scan loops (wifi / BLE / classic
+        # / probe / hackrf) only run when a mission is active. Baseline
+        # scans bypass the orchestrator entirely so they remain
+        # available without a mission. GPS, gps_state alerts, absence
+        # checks, and the retention purge are deliberately NOT gated
+        # — they keep running so the operator gets live GPS feedback,
+        # absence transitions still complete for in-flight devices, and
+        # the DB doesn't grow unbounded during long idle periods. Set
+        # at startup from the DB and on every /api/missions start/end.
+        self._mission_active: bool = False
         self.wifi_stats = ScannerStats()
         self.bt_stats = ScannerStats()
         # Bluetooth Classic stats live alongside BLE so the map sidebar
@@ -124,6 +134,26 @@ class ScanOrchestrator:
             "orchestrator recording %s",
             "ON (writing rows)" if recording else "OFF (alerts only, no row writes)",
         )
+
+    @property
+    def mission_active(self) -> bool:
+        return self._mission_active
+
+    def set_mission_active(self, active: bool) -> None:
+        if self._mission_active == active:
+            return
+        self._mission_active = active
+        log.info(
+            "orchestrator mission %s",
+            "ACTIVE (scanners running)" if active
+            else "INACTIVE (scanners gated off)",
+        )
+
+    def _scanning_allowed(self) -> bool:
+        """Master gate for the device scan loops. Scanning runs only
+        when a mission is active AND the orchestrator isn't paused.
+        Baseline scans bypass the orchestrator and are unaffected."""
+        return self._mission_active and not self._paused
 
     async def start(self) -> None:
         self._stop.clear()
@@ -194,7 +224,7 @@ class ScanOrchestrator:
                     iface = await pick_wifi_interface()
                 self.wifi_stats.interface = iface
                 loc_id = location_manager.active_id
-                if not self._paused and iface and loc_id is not None:
+                if self._scanning_allowed() and iface and loc_id is not None:
                     self.wifi_stats.begin(iface)
                     t0 = time.time()
                     try:
@@ -244,7 +274,7 @@ class ScanOrchestrator:
                 s = await settings_store.load()
                 self.bt_stats.interface = s.bluetooth_adapter or None
                 loc_id = location_manager.active_id
-                if not self._paused and loc_id is not None:
+                if self._scanning_allowed() and loc_id is not None:
                     self.bt_stats.begin(s.bluetooth_adapter or None)
                     t0 = time.time()
                     try:
@@ -321,7 +351,7 @@ class ScanOrchestrator:
                     s.bluetooth_adapter or None
                 )
                 loc_id = location_manager.active_id
-                if (not self._paused and s.bluetooth_classic_enabled
+                if (self._scanning_allowed() and s.bluetooth_classic_enabled
                         and loc_id is not None):
                     self.bt_classic_stats.begin(s.bluetooth_adapter or None)
                     t0 = time.time()
@@ -461,7 +491,11 @@ class ScanOrchestrator:
                 want_auto = s.probe_auto_monitor
                 want_channels = parse_channels(s.probe_channels)
                 want_hop_ms = int(getattr(s, "probe_channel_hop_ms", 100) or 100)
-                if want_iface:
+                # Gate the subprocess on the master scanning flag too —
+                # probe capture spawns tshark / scapy with monitor-mode
+                # privileges, so leaving it running outside a mission
+                # would burn CPU and risk-noise for nothing.
+                if want_iface and self._scanning_allowed():
                     cur = (
                         probe_scanner.interface,
                         probe_scanner.backend,
@@ -491,7 +525,11 @@ class ScanOrchestrator:
         into devices and runs alert evaluation. Probed SSIDs accumulate
         in the device's details so we can see which networks a client is
         chasing."""
-        if self._paused:
+        # Master scanning gate — handles both pause and 'no mission
+        # active'. The probe loop stops the subprocess when scanning
+        # isn't allowed, but a callback queued just before the stop
+        # could still race here.
+        if not self._scanning_allowed():
             return
         s = await settings_store.load()
         loc_id = location_manager.active_id
@@ -602,7 +640,12 @@ class ScanOrchestrator:
             try:
                 s = await settings_store.load()
                 want_enabled = bool(getattr(s, "hackrf_ble_enabled", False))
-                if want_enabled and btle_rx_available():
+                # Same mission gate the probe loop uses — btle_rx is a
+                # subprocess holding the HackRF radio, running it
+                # outside a mission burns battery and locks the device
+                # from anything else (hackrf_info, baseline scans on a
+                # second box, etc).
+                if want_enabled and btle_rx_available() and self._scanning_allowed():
                     serial = (getattr(s, "hackrf_ble_serial", None) or "") or None
                     gain = int(getattr(s, "hackrf_ble_gain", 40) or 40)
                     min_rssi = int(getattr(s, "hackrf_ble_min_rssi", -90) or -90)
@@ -647,7 +690,8 @@ class ScanOrchestrator:
         sightings into one row, and applies the same address-type
         based handling bleak's path uses (random-MAC filter, public-vs-
         random label, cross-MAC signature linking)."""
-        if self._paused:
+        # Master scanning gate — see _on_probe for rationale.
+        if not self._scanning_allowed():
             return
         s = await settings_store.load()
         loc_id = location_manager.active_id
